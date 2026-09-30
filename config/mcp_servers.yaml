@@ -1,0 +1,6 @@
+servers: {}
+# Example:
+# servers:
+#   n8n:
+#     url: http://127.0.0.1:3000/mcp
+#     headers: {}

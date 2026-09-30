@@ -1,0 +1,45 @@
+services:
+  hassmind:
+    build: .
+    image: hassmind-v1:latest
+    container_name: hassmind-v1
+    restart: unless-stopped
+    network_mode: host
+    env_file: [.env]
+    environment:
+      HA_TOKEN_FILE: /run/secrets/ha_token
+      OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
+      API_TOKEN_FILE: /run/secrets/hassmind_api_token
+      TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram_bot_token
+      CAMERA_TTS_API_KEY_FILE: /run/secrets/camera_tts_api_key
+      ZALO_PASSWORD_FILE: /run/secrets/zalo_password
+      ZALO_WEBHOOK_SECRET_FILE: /run/secrets/zalo_webhook_secret
+    secrets: [ha_token, openai_api_key, hassmind_api_token, telegram_bot_token, camera_tts_api_key, zalo_password, zalo_webhook_secret]
+    volumes:
+      - ./data:/data
+      - ./knowledge:/knowledge:ro
+      - ./config:/app/config:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+
+secrets:
+  ha_token:
+    file: ./secrets/ha_token.txt
+  openai_api_key:
+    file: ./secrets/openai_api_key.txt
+  hassmind_api_token:
+    file: ./secrets/hassmind_api_token.txt
+  telegram_bot_token:
+    file: ./secrets/telegram_bot_token.txt
+  camera_tts_api_key:
+    file: ./secrets/camera_tts_api_key.txt
+  zalo_password:
+    file: ./secrets/zalo_password.txt
+  zalo_webhook_secret:
+    file: ./secrets/zalo_webhook_secret.txt

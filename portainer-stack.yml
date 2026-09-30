@@ -1,0 +1,93 @@
+services:
+  hassmind:
+    # Build hassmind-v1:latest first, OR deploy this stack from a Git repository
+    # and replace image-only mode with build: . if your Portainer supports it.
+    image: hassmind-v1:latest
+    container_name: hassmind-v1
+    restart: unless-stopped
+    network_mode: host
+
+    environment:
+      HA_URL: ${HA_URL:-http://127.0.0.1:8123}
+      HA_TOKEN: ${HA_TOKEN}
+      HA_NOTIFY_SERVICE: ${HA_NOTIFY_SERVICE}
+
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_MODEL: ${OPENAI_MODEL}
+
+      API_TOKEN: ${HASSMIND_API_TOKEN}
+      AGENT_NAME: HassMind
+      DB_PATH: /data/hassmind.db
+      HOST: 0.0.0.0
+      PORT: 8090
+      TIMEZONE: ${TIMEZONE:-Asia/Bangkok}
+
+      ALLOW_SERVICE_DOMAINS: ${ALLOW_SERVICE_DOMAINS:-light,switch,fan,climate,media_player,scene,input_boolean,input_number,input_select,number,select}
+      DENY_SERVICE_DOMAINS: ${DENY_SERVICE_DOMAINS:-shell_command,hassio,homeassistant,lock,alarm_control_panel,cover,update,button}
+      APPROVAL_TTL_MINUTES: ${APPROVAL_TTL_MINUTES:-120}
+      AUTO_APPLY_AFTER_APPROVAL: ${AUTO_APPLY_AFTER_APPROVAL:-true}
+
+      SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-true}
+      EVENT_AGENT_ENABLED: ${EVENT_AGENT_ENABLED:-true}
+      EVENT_RETENTION: ${EVENT_RETENTION:-5000}
+
+      SEARXNG_URL: ${SEARXNG_URL:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_ALLOWED_CHAT_IDS: ${TELEGRAM_ALLOWED_CHAT_IDS:-}
+
+      KNOWLEDGE_DIR: /knowledge
+      SKILLS_DIR: /app/config/skills
+      MCP_CONFIG: /app/config/mcp_servers.yaml
+
+      INTEGRATION_HTTP_TIMEOUT: ${INTEGRATION_HTTP_TIMEOUT:-15}
+      INTEGRATION_HEALTH_TIMEOUT: ${INTEGRATION_HEALTH_TIMEOUT:-3}
+
+      CAMERA_TTS_ENABLED: ${CAMERA_TTS_ENABLED:-false}
+      CAMERA_TTS_URL: ${CAMERA_TTS_URL:-http://127.0.0.1:8124}
+      CAMERA_TTS_API_KEY: ${CAMERA_TTS_API_KEY:-}
+      CAMERA_TTS_ALLOW_ACTIONS: ${CAMERA_TTS_ALLOW_ACTIONS:-true}
+
+      FACEDETECT_ENABLED: ${FACEDETECT_ENABLED:-false}
+      FACEDETECT_URL: ${FACEDETECT_URL:-http://127.0.0.1:8080}
+
+      ZALO_ENABLED: ${ZALO_ENABLED:-false}
+      ZALO_URL: ${ZALO_URL:-http://127.0.0.1:3000}
+      ZALO_USERNAME: ${ZALO_USERNAME:-admin}
+      ZALO_PASSWORD: ${ZALO_PASSWORD:-}
+      ZALO_DEFAULT_ACCOUNT: ${ZALO_DEFAULT_ACCOUNT:-}
+      ZALO_ALLOW_SEND: ${ZALO_ALLOW_SEND:-false}
+      ZALO_WEBHOOK_ENABLED: ${ZALO_WEBHOOK_ENABLED:-false}
+      ZALO_WEBHOOK_SECRET: ${ZALO_WEBHOOK_SECRET:-}
+      ZALO_AUTO_REGISTER_WEBHOOK: ${ZALO_AUTO_REGISTER_WEBHOOK:-false}
+      ZALO_WEBHOOK_CALLBACK_BASE: ${ZALO_WEBHOOK_CALLBACK_BASE:-http://127.0.0.1:8090}
+      ZALO_AGENT_REPLY_ENABLED: ${ZALO_AGENT_REPLY_ENABLED:-false}
+      ZALO_AGENT_ALLOWED_THREAD_IDS: ${ZALO_AGENT_ALLOWED_THREAD_IDS:-}
+
+      WYOMING_ENABLED: ${WYOMING_ENABLED:-false}
+      WYOMING_HOST: ${WYOMING_HOST:-127.0.0.1}
+      WYOMING_PORT: ${WYOMING_PORT:-10300}
+      WYOMING_ALLOW_TTS: ${WYOMING_ALLOW_TTS:-true}
+
+      HA_CUSTOM_INTEGRATIONS_ENABLED: ${HA_CUSTOM_INTEGRATIONS_ENABLED:-true}
+      SHOPPING_ALLOW_MUTATIONS: ${SHOPPING_ALLOW_MUTATIONS:-false}
+      SHOPPING_ALLOW_DELETE: ${SHOPPING_ALLOW_DELETE:-false}
+      YTDLP_ALLOW_PLAYBACK: ${YTDLP_ALLOW_PLAYBACK:-true}
+      YTDLP_ALLOW_DOWNLOADS: ${YTDLP_ALLOW_DOWNLOADS:-false}
+
+    volumes:
+      - ./data:/data
+      - ./knowledge:/knowledge:ro
+      - ./config:/app/config:ro
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

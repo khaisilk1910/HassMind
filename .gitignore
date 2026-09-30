@@ -1,0 +1,7 @@
+.env
+secrets/*.txt
+!secrets/README.txt
+data/*
+!data/.gitkeep
+__pycache__/
+*.pyc

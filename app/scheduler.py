@@ -1,0 +1,70 @@
+import asyncio
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+from typing import Awaitable, Callable
+
+from .db import conn, utcnow
+from .settings import settings
+
+RunPrompt = Callable[[str, str, bool], Awaitable[str]]
+
+
+def _next_run(schedule_type: str, value: str, now: datetime | None = None) -> datetime:
+    now = now or datetime.now(timezone.utc)
+    if schedule_type == "interval":
+        seconds = max(60, int(value))
+        return now + timedelta(seconds=seconds)
+    if schedule_type == "daily":
+        hh, mm = [int(x) for x in value.split(":", 1)]
+        tz = ZoneInfo(settings.timezone)
+        local = now.astimezone(tz)
+        candidate = local.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if candidate <= local:
+            candidate += timedelta(days=1)
+        return candidate.astimezone(timezone.utc)
+    raise ValueError("schedule_type must be interval or daily")
+
+
+def create_job(name: str, prompt: str, schedule_type: str, schedule_value: str, notify: bool = True) -> dict:
+    nr = _next_run(schedule_type, schedule_value).isoformat()
+    with conn() as c:
+        cur = c.execute("INSERT INTO jobs(name,prompt,schedule_type,schedule_value,enabled,notify,next_run,created_at) VALUES(?,?,?,?,0,?,?,?)",
+                        (name, prompt, schedule_type, schedule_value, 1 if notify else 0, nr, utcnow()))
+        jid = int(cur.lastrowid)
+    return {"id": jid, "enabled": False, "next_run": nr, "message": "Created disabled; enable it from the dashboard/API after review."}
+
+
+def set_job_enabled(job_id: int, enabled: bool):
+    with conn() as c:
+        row = c.execute("SELECT schedule_type,schedule_value FROM jobs WHERE id=?", (job_id,)).fetchone()
+        if not row:
+            raise KeyError(job_id)
+        nr = _next_run(row["schedule_type"], row["schedule_value"]).isoformat() if enabled else None
+        c.execute("UPDATE jobs SET enabled=?,next_run=? WHERE id=?", (1 if enabled else 0, nr, job_id))
+
+
+async def scheduler_loop(stop: asyncio.Event, run_prompt: RunPrompt):
+    while not stop.is_set():
+        try:
+            if not settings.scheduler_enabled:
+                await asyncio.sleep(10)
+                continue
+            now = datetime.now(timezone.utc)
+            with conn() as c:
+                rows = c.execute("SELECT * FROM jobs WHERE enabled=1 AND next_run IS NOT NULL AND next_run<=? ORDER BY next_run LIMIT 10", (now.isoformat(),)).fetchall()
+                jobs = [dict(r) for r in rows]
+                for job in jobs:
+                    nr = _next_run(job["schedule_type"], job["schedule_value"], now).isoformat()
+                    c.execute("UPDATE jobs SET next_run=?,last_run=? WHERE id=?", (nr, utcnow(), job["id"]))
+            for job in jobs:
+                try:
+                    result = await run_prompt(f"job:{job['id']}", job["prompt"], bool(job["notify"]))
+                except Exception as e:
+                    result = f"ERROR: {type(e).__name__}: {e}"
+                with conn() as c:
+                    c.execute("UPDATE jobs SET last_result=? WHERE id=?", (result[-8000:], job["id"]))
+        finally:
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=10)
+            except asyncio.TimeoutError:
+                pass
