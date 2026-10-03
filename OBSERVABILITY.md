@@ -1,50 +1,69 @@
-# HassMind v1.2.0 - Observability / Debugging
+# HassMind v1.2.0 — Observability / Debugging
 
-Bản này thêm structured logging và giao diện chẩn đoán để truy vết lỗi theo `request_id`, `session_id`, component và thời gian xử lý.
+HassMind dùng structured logging để truy vết lỗi theo `request_id`, `session_id`, component và latency mà không cần đưa secret vào log.
 
 ## Log destinations
 
-- stdout/stderr của container: dùng `docker logs hassmind`.
+- stdout/stderr của container: `docker logs hassmind-v1`.
 - rotating file: `/data/logs/hassmind.log`.
-- in-memory ring buffer: hiển thị trong tab **Logs** và API `GET /api/logs`.
-- tool audit vẫn lưu riêng trong SQLite và hiển thị ở tab **Tool audit**.
+- in-memory ring buffer: tab **Logs** và `GET /api/logs`.
+- tool audit: SQLite + tab **Tool audit**.
+- event buffer: SQLite + tab **HA events**.
 
-## Các trường log chính
+## Trường log chính
 
 - `ts`: UTC timestamp tới milliseconds.
 - `level`: DEBUG/INFO/WARNING/ERROR/CRITICAL.
 - `component`: api, agent, home_assistant, integration_http, scheduler, telegram, mcp...
-- `event`: mã sự kiện ổn định để tìm kiếm.
-- `request_id`: liên kết một HTTP request từ browser tới backend.
-- `session_id`: liên kết toàn bộ một phiên chat/job/event/Zalo.
-- `duration_ms`: latency của HTTP/LLM/tool/integration.
-- `exception.type`, `exception.message`, `exception.traceback`: traceback đầy đủ khi có exception.
+- `event`: mã sự kiện ổn định.
+- `request_id`: correlation ID của HTTP request.
+- `session_id`: correlation ID của chat/job/event/Zalo.
+- `duration_ms`: latency.
+- `exception.type`, `exception.message`, `exception.traceback`: exception đã qua redaction.
 
 ## Bảo vệ secret
 
-Logger tự động che các key chứa token, password, secret, API key, Authorization, cookie và access token. Zalo webhook secret trong URL cũng bị che.
+Logger redacts cả theo tên field, pattern trong free-form text và exact value của secret đang cấu hình. Các nhóm chính: password, recovery key, API key, token, Bearer/Authorization, cookie, JWT, webhook secret và credential của integration.
 
-`LOG_INCLUDE_CONTENT=false` là mặc định. Khi cần debug sâu, tạm bật:
+Mặc định:
 
 ```dotenv
-LOG_LEVEL=DEBUG
-LOG_INCLUDE_CONTENT=true
+LOG_LEVEL=INFO
+LOG_INCLUDE_CONTENT=false
+LOG_SCRUB_EXISTING_ON_START=true
+AUDIT_SCRUB_EXISTING_ON_START=true
 ```
 
-Sau khi sửa lỗi nên đưa `LOG_INCLUDE_CONTENT=false` trở lại vì prompt/result có thể chứa dữ liệu nhà riêng.
+`LOG_INCLUDE_CONTENT=true` chỉ nên bật tạm thời vì prompt/result dù đã redact secret vẫn có thể chứa dữ liệu riêng tư của ngôi nhà.
 
-## API chẩn đoán
+Khi startup, HassMind best-effort sanitize các file log rotation cũ và event/tool-audit cũ. Với dữ liệu lịch sử từ phiên bản trước, nếu từng có khả năng ghi credential thô thì cách an toàn nhất vẫn là rotate credential và xóa/archive mã hóa log cũ sau khi điều tra.
 
-- `GET /health`: health không cần token.
-- `GET /api/status`: trạng thái ngắn.
-- `GET /api/diagnostics`: runtime/database/log configuration an toàn.
-- `GET /api/logs?limit=250&level=ERROR&component=agent&q=request-id`: lọc log.
-- `GET /api/logs/export`: tải NDJSON.
-- `GET /api/audit`: tool audit SQLite.
-- `POST /api/client-log`: frontend tự gửi JavaScript exception/unhandled rejection về backend log.
+## API chẩn đoán và authentication
 
-Tất cả endpoint `/api/*` ở trên yêu cầu `X-HassMind-Token` như các API hiện có.
+- `GET /health`: public, chỉ trả `{ok:true}` để Docker healthcheck hoạt động mà không lộ cấu hình.
+- `GET /api/status`
+- `GET /api/diagnostics`
+- `GET /api/logs?limit=250&level=ERROR&component=agent&q=request-id`
+- `GET /api/logs/export`
+- `GET /api/audit`
+- `POST /api/client-log`
+
+Dashboard gọi `/api/*` bằng admin session + CSRF. Client ngoài có thể dùng:
+
+```text
+X-HassMind-Token: <api-token>
+```
+
+API token không còn được nhập ở top bar và không được browser lưu làm thông tin đăng nhập.
 
 ## Debug theo Request ID
 
-Khi giao diện báo lỗi API, UI hiển thị `Request ID`. Mở tab **Logs**, dán Request ID vào ô tìm kiếm. Bạn sẽ thấy lần lượt request, agent, LLM, tool và integration có cùng correlation context.
+Khi UI báo lỗi API, lấy `Request ID`, mở tab **Logs** và tìm đúng ID đó. Các log request/backend/tool/integration có cùng correlation context sẽ giúp xác định điểm lỗi.
+
+Ví dụ:
+
+```text
+Request ID: a9f0...
+```
+
+Tại tab Logs, nhập `a9f0...` vào ô tìm kiếm và lọc `ERROR` nếu cần.

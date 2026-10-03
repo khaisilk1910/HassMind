@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -13,12 +14,31 @@ from typing import Any
 
 import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .agent import Agent
 from .approvals import apply_approval, decide_by_action, decide_by_web, get_approval
-from .db import add_event, conn, get_messages, init_db, list_approvals, list_event_rules, list_jobs, recent_events, recent_tool_audit
+from .auth import (
+    change_password,
+    change_username,
+    cleanup_sessions,
+    client_ip,
+    client_ip_allowed,
+    ensure_bootstrap_admin,
+    list_sessions,
+    list_auth_audit,
+    login as admin_login,
+    logout as admin_logout,
+    reset_password,
+    revoke_other_sessions,
+    record_admin_audit,
+    verify_password,
+    session_from_request,
+    require_session,
+)
+from .db import add_event, conn, get_messages, init_db, list_approvals, list_event_rules, list_jobs, recent_events, recent_tool_audit, scrub_sensitive_audit_history
 from .event_engine import handle_state_event, set_rule_enabled
 from .ha import HomeAssistantClient
 from .ha_integrations import HAIntegrationBridge
@@ -33,6 +53,7 @@ from .observability import (
     log_file_info,
     recent_logs,
     sanitize_url,
+    register_secret,
     setup_logging,
     uptime_seconds,
     warning,
@@ -44,7 +65,11 @@ from .skills import list_skills
 from .telegram import telegram_loop
 from .tools import ToolRuntime
 
+os.umask(0o077)
+
 APP_VERSION = "1.2.0"
+BASE_DIR = Path(__file__).resolve().parent.parent
+STATIC_DIR = BASE_DIR / "static"
 setup_logging()
 logger = get_logger("main")
 
@@ -56,11 +81,45 @@ integrations: IntegrationHub | None = None
 webhook_tasks: set[asyncio.Task] = set()
 
 
-async def require_token(x_hassmind_token: str = Header(default="")):
-    expected = settings.read_api_token()
-    if not secrets.compare_digest(x_hassmind_token, expected):
-        warning(logger, "api_auth_failed", message="Invalid HassMind API token", request_id=current_request_id(), component="api")
-        raise HTTPException(401, "Invalid X-HassMind-Token")
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+def _api_token_valid(value: str) -> bool:
+    if not value:
+        return False
+    try:
+        expected = settings.read_api_token()
+    except RuntimeError:
+        return False
+    return secrets.compare_digest(value, expected)
+
+
+async def require_access(
+    request: Request,
+    x_hassmind_token: str = Header(default=""),
+    x_csrf_token: str = Header(default=""),
+):
+    if _api_token_valid(x_hassmind_token):
+        request.state.auth_kind = "api_token"
+        return {"kind": "api_token"}
+    try:
+        session = require_session(request, csrf_token=x_csrf_token, require_csrf=request.method.upper() not in SAFE_METHODS)
+        request.state.auth_kind = "admin_session"
+        request.state.admin_session = session
+        return session
+    except HTTPException as exc:
+        warning(logger, "api_auth_failed", message="API token or admin session required", request_id=current_request_id(), component="api", status_code=exc.status_code)
+        raise
+
+
+async def require_admin(
+    request: Request,
+    x_csrf_token: str = Header(default=""),
+):
+    session = require_session(request, csrf_token=x_csrf_token, require_csrf=request.method.upper() not in SAFE_METHODS)
+    request.state.auth_kind = "admin_session"
+    request.state.admin_session = session
+    return session
 
 
 async def run_prompt(session_id: str, prompt: str, notify: bool) -> str:
@@ -258,6 +317,12 @@ async def lifespan(app: FastAPI):
     )
     try:
         init_db()
+        scrub_sensitive_audit_history()
+        ensure_bootstrap_admin()
+        cleanup_sessions()
+        recovery = settings.read_admin_recovery_key()
+        if recovery:
+            register_secret(recovery)
         info(logger, "database_initialized", db_path=str(db_path), exists=db_path.exists(), size_bytes=db_path.stat().st_size if db_path.exists() else 0)
         stop_event.clear()
         ha = HomeAssistantClient()
@@ -302,41 +367,67 @@ async def lifespan(app: FastAPI):
         info(logger, "application_stopped", duration_ms=round((perf_counter() - shutdown_started) * 1000, 2))
 
 
-app = FastAPI(title="HassMind", version=APP_VERSION, lifespan=lifespan)
+app = FastAPI(
+    title="HassMind",
+    version=APP_VERSION,
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 @app.middleware("http")
 async def request_observability(request: Request, call_next):
     request_id = (request.headers.get("x-request-id") or uuid.uuid4().hex)[:64]
     started = perf_counter()
-    client_ip = request.client.host if request.client else None
+    remote_ip = request.client.host if request.client else None
     safe_url = sanitize_url(str(request.url)) if settings.log_include_content else sanitize_url(request.url.path)
     query_keys = list(request.query_params.keys())
+    path = request.url.path
+    admin_surface = path == "/" or path == "/login" or path == "/favicon.svg" or path.startswith("/static/") or path.startswith("/api/")
     with log_context(request_id=request_id, source="http", component="api"):
-        info(
-            logger,
-            "http_request_started",
-            method=request.method,
-            url=safe_url,
-            query_keys=query_keys,
-            client_ip=client_ip,
-            user_agent=(request.headers.get("user-agent") or "")[:500],
-            component="api",
-        )
-        try:
-            response = await call_next(request)
-        except Exception:
-            exception(
+        if admin_surface and not client_ip_allowed(request):
+            warning(logger, "admin_network_denied", client_ip=remote_ip, path=path)
+            response = JSONResponse(status_code=403, content={"detail": "Access from this network is not allowed", "request_id": request_id})
+        else:
+            info(
                 logger,
-                "http_request_unhandled_exception",
-                message="Unhandled exception while processing HTTP request",
+                "http_request_started",
                 method=request.method,
                 url=safe_url,
-                client_ip=client_ip,
-                duration_ms=round((perf_counter() - started) * 1000, 2),
+                query_keys=query_keys,
+                client_ip=remote_ip,
+                user_agent=(request.headers.get("user-agent") or "")[:500],
+                component="api",
             )
-            raise
+            try:
+                response = await call_next(request)
+            except Exception:
+                exception(
+                    logger,
+                    "http_request_unhandled_exception",
+                    message="Unhandled exception while processing HTTP request",
+                    method=request.method,
+                    url=safe_url,
+                    client_ip=remote_ip,
+                    duration_ms=round((perf_counter() - started) * 1000, 2),
+                )
+                raise
         response.headers["X-Request-ID"] = request_id
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+        if request.url.scheme == "https":
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        if path in {"/", "/login"} or path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Pragma"] = "no-cache"
         info(
             logger,
             "http_request_completed",
@@ -344,7 +435,7 @@ async def request_observability(request: Request, call_next):
             url=safe_url,
             status_code=response.status_code,
             duration_ms=round((perf_counter() - started) * 1000, 2),
-            client_ip=client_ip,
+            client_ip=remote_ip,
             component="api",
         )
         return response
@@ -365,7 +456,6 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         status_code=500,
         content={
             "detail": "Internal server error",
-            "error_type": type(exc).__name__,
             "request_id": rid,
         },
         headers={"X-Request-ID": rid},
@@ -373,8 +463,8 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 
 class ChatIn(BaseModel):
-    message: str
-    session_id: str | None = None
+    message: str = Field(min_length=1, max_length=20000)
+    session_id: str | None = Field(default=None, max_length=128)
 
 
 class ToggleIn(BaseModel):
@@ -386,36 +476,69 @@ class DecisionIn(BaseModel):
 
 
 class JobIn(BaseModel):
-    name: str
-    prompt: str
-    schedule_type: str
-    schedule_value: str
+    name: str = Field(min_length=1, max_length=200)
+    prompt: str = Field(min_length=1, max_length=20000)
+    schedule_type: str = Field(min_length=1, max_length=32)
+    schedule_value: str = Field(min_length=1, max_length=128)
     notify: bool = True
 
 
 class RuleIn(BaseModel):
-    name: str
-    entity_id: str
-    to_state: str | None = None
-    prompt: str
-    cooldown_seconds: int = 300
+    name: str = Field(min_length=1, max_length=200)
+    entity_id: str = Field(min_length=1, max_length=255)
+    to_state: str | None = Field(default=None, max_length=255)
+    prompt: str = Field(min_length=1, max_length=20000)
+    cooldown_seconds: int = Field(default=300, ge=0, le=86400)
     notify: bool = True
 
 
 class ClientLogIn(BaseModel):
-    level: str = "ERROR"
-    event: str = "browser_error"
-    message: str
-    stack: str = ""
-    url: str = ""
-    session_id: str = ""
+    level: str = Field(default="ERROR", max_length=16)
+    event: str = Field(default="browser_error", max_length=128)
+    message: str = Field(max_length=12000)
+    stack: str = Field(default="", max_length=30000)
+    url: str = Field(default="", max_length=2048)
+    session_id: str = Field(default="", max_length=128)
     details: dict[str, Any] = Field(default_factory=dict)
 
 
+class LoginIn(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class PasswordChangeIn(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=1, max_length=256)
+
+
+class UsernameChangeIn(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_username: str = Field(min_length=1, max_length=64)
+
+
+class PasswordResetIn(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    recovery_key: str = Field(min_length=1, max_length=512)
+    new_password: str = Field(min_length=1, max_length=256)
+
+
+class ApiTokenRotateIn(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    token: str = Field(default="", max_length=4096)
+    generate: bool = False
+
+
+class RecoveryKeyRotateIn(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+
+
 @app.get("/")
-async def root():
+async def root(request: Request):
+    if not session_from_request(request, touch=False):
+        return RedirectResponse("/login", status_code=303)
     return FileResponse(
-        "/app/static/index.html",
+        str(STATIC_DIR / "index.html"),
         headers={
             "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
             "Pragma": "no-cache",
@@ -424,18 +547,194 @@ async def root():
     )
 
 
+@app.get("/login")
+async def login_page(request: Request):
+    if session_from_request(request, touch=False):
+        return RedirectResponse("/", status_code=303)
+    return FileResponse(str(STATIC_DIR / "login.html"), headers={"Cache-Control": "no-store"})
+
+
+@app.get("/favicon.svg")
+async def favicon():
+    return FileResponse(str(STATIC_DIR / "favicon.svg"), media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=86400"})
+
+
 @app.get("/health")
 async def health():
+    return {"ok": True}
+
+
+@app.post("/api/auth/login")
+async def auth_login(body: LoginIn, request: Request):
+    user, raw_session, raw_csrf = admin_login(body.username, body.password, request)
+    response = JSONResponse({"ok": True, "user": user, "csrf_token": raw_csrf})
+    max_age = settings.admin_session_ttl_minutes * 60
+    response.set_cookie(
+        settings.admin_session_cookie,
+        raw_session,
+        max_age=max_age,
+        httponly=True,
+        secure=settings.admin_cookie_secure,
+        samesite="strict",
+        path="/",
+    )
+    response.set_cookie(
+        settings.admin_csrf_cookie,
+        raw_csrf,
+        max_age=max_age,
+        httponly=False,
+        secure=settings.admin_cookie_secure,
+        samesite="strict",
+        path="/",
+    )
+    return response
+
+
+@app.post("/api/auth/logout", dependencies=[Depends(require_admin)])
+async def auth_logout(request: Request):
+    admin_logout(request)
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(settings.admin_session_cookie, path="/")
+    response.delete_cookie(settings.admin_csrf_cookie, path="/")
+    return response
+
+
+@app.get("/api/auth/me", dependencies=[Depends(require_admin)])
+async def auth_me(request: Request):
+    session = request.state.admin_session
     return {
-        "ok": True,
-        "name": settings.agent_name,
-        "version": APP_VERSION,
-        "ha_url": settings.ha_url,
-        "uptime_seconds": uptime_seconds(),
+        "authenticated": True,
+        "user": {
+            "id": session["user_id"],
+            "username": session["username"],
+            "last_login_at": session.get("last_login_at"),
+            "password_changed_at": session.get("password_changed_at"),
+        },
+        "csrf_token": request.cookies.get(settings.admin_csrf_cookie, ""),
+        "session": {
+            "created_at": session["created_at"],
+            "last_seen_at": session["last_seen_at"],
+            "expires_at": session["expires_at"],
+        },
     }
 
 
-@app.get("/api/status", dependencies=[Depends(require_token)])
+@app.post("/api/auth/change-password", dependencies=[Depends(require_admin)])
+async def auth_change_password(body: PasswordChangeIn, request: Request):
+    session = request.state.admin_session
+    change_password(session["user_id"], body.current_password, body.new_password, request)
+    return {"ok": True}
+
+
+@app.post("/api/auth/change-username", dependencies=[Depends(require_admin)])
+async def auth_change_username(body: UsernameChangeIn, request: Request):
+    session = request.state.admin_session
+    username = change_username(session["user_id"], body.current_password, body.new_username, request)
+    return {"ok": True, "username": username}
+
+
+@app.post("/api/auth/reset-password")
+async def auth_reset_password(body: PasswordResetIn, request: Request):
+    reset_password(body.username, body.recovery_key, body.new_password, request)
+    return {"ok": True}
+
+
+@app.get("/api/auth/sessions", dependencies=[Depends(require_admin)])
+async def auth_sessions(request: Request):
+    session = request.state.admin_session
+    return list_sessions(session["user_id"], request)
+
+
+@app.post("/api/auth/sessions/revoke-others", dependencies=[Depends(require_admin)])
+async def auth_revoke_sessions(request: Request):
+    session = request.state.admin_session
+    return {"ok": True, "revoked": revoke_other_sessions(session["user_id"], request)}
+
+
+@app.get("/api/auth/audit", dependencies=[Depends(require_admin)])
+async def auth_audit(limit: int = 50):
+    return list_auth_audit(limit)
+
+
+@app.get("/api/settings/security", dependencies=[Depends(require_admin)])
+async def security_settings(request: Request):
+    try:
+        token = settings.read_api_token()
+        token_fp = hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
+        token_configured = True
+    except RuntimeError:
+        token_fp = ""
+        token_configured = False
+    return {
+        "api_token": {
+            "configured": token_configured,
+            "source": settings.api_token_source(),
+            "fingerprint": token_fp,
+        },
+        "admin": {
+            "username": request.state.admin_session["username"],
+            "recovery_enabled": bool(settings.read_admin_recovery_key()),
+            "recovery_source": settings.admin_recovery_key_source(),
+            "session_ttl_minutes": settings.admin_session_ttl_minutes,
+            "session_idle_minutes": settings.admin_session_idle_minutes,
+            "cookie_secure": settings.admin_cookie_secure,
+            "allowed_networks": settings.admin_allowed_network_list,
+            "password_min_length": settings.password_min_length,
+        },
+        "logging": {
+            "secret_redaction": True,
+            "content_logging": settings.log_include_content,
+            "file": settings.log_file if settings.log_file_enabled else "disabled",
+            "scrub_existing_logs_on_start": settings.log_scrub_existing_on_start,
+            "scrub_existing_audit_on_start": settings.audit_scrub_existing_on_start,
+        },
+    }
+
+
+@app.post("/api/settings/api-token", dependencies=[Depends(require_admin)])
+async def rotate_api_token(body: ApiTokenRotateIn, request: Request):
+    session = request.state.admin_session
+    with conn() as c:
+        row = c.execute("SELECT password_hash FROM admin_users WHERE id=?", (session["user_id"],)).fetchone()
+    if not row or not verify_password(row["password_hash"], body.current_password):
+        raise HTTPException(400, "Mật khẩu quản trị hiện tại không đúng.")
+    if body.generate:
+        token = secrets.token_urlsafe(48)
+    else:
+        token = body.token.strip()
+        if len(token) < 32:
+            raise HTTPException(400, "API token phải có ít nhất 32 ký tự.")
+    settings.write_runtime_secret(settings.runtime_api_token_name, token)
+    register_secret(token)
+    info(logger, "api_token_rotated", by=session["username"], source="runtime_file")
+    record_admin_audit("api_token_rotated", request, user_id=session["user_id"], username=session["username"], details="source=runtime_file")
+    result = {
+        "ok": True,
+        "source": "runtime_file",
+        "fingerprint": hashlib.sha256(token.encode("utf-8")).hexdigest()[:12],
+    }
+    if body.generate:
+        result["token"] = token
+    return result
+
+
+@app.post("/api/settings/recovery-key", dependencies=[Depends(require_admin)])
+async def rotate_recovery_key(body: RecoveryKeyRotateIn, request: Request):
+    session = request.state.admin_session
+    with conn() as c:
+        row = c.execute("SELECT password_hash FROM admin_users WHERE id=?", (session["user_id"],)).fetchone()
+    if not row or not verify_password(row["password_hash"], body.current_password):
+        raise HTTPException(400, "Mật khẩu quản trị hiện tại không đúng.")
+    recovery_key = secrets.token_urlsafe(48)
+    settings.write_runtime_secret(settings.runtime_recovery_key_name, recovery_key)
+    register_secret(body.current_password)
+    register_secret(recovery_key)
+    record_admin_audit("recovery_key_rotated", request, user_id=session["user_id"], username=session["username"], details="source=runtime_file")
+    info(logger, "admin_recovery_key_rotated", by=session["username"], source="runtime_file")
+    return {"ok": True, "source": "runtime_file", "recovery_key": recovery_key}
+
+
+@app.get("/api/status", dependencies=[Depends(require_access)])
 async def status():
     ha_ok = False
     ha_version = None
@@ -463,7 +762,7 @@ async def status():
     }
 
 
-@app.get("/api/diagnostics", dependencies=[Depends(require_token)])
+@app.get("/api/diagnostics", dependencies=[Depends(require_access)])
 async def diagnostics():
     db_path = Path(settings.db_path)
     task_info = []
@@ -509,7 +808,7 @@ async def diagnostics():
     }
 
 
-@app.get("/api/logs", dependencies=[Depends(require_token)])
+@app.get("/api/logs", dependencies=[Depends(require_access)])
 async def logs_api(
     limit: int = Query(default=250, ge=1, le=2000),
     level: str = "",
@@ -519,7 +818,7 @@ async def logs_api(
     return recent_logs(limit=limit, level=level, component=component, query=q)
 
 
-@app.get("/api/logs/export", dependencies=[Depends(require_token)])
+@app.get("/api/logs/export", dependencies=[Depends(require_access)])
 async def logs_export(
     limit: int = Query(default=2000, ge=1, le=2000),
     level: str = "",
@@ -535,7 +834,7 @@ async def logs_export(
     )
 
 
-@app.post("/api/client-log", dependencies=[Depends(require_token)])
+@app.post("/api/client-log", dependencies=[Depends(require_access)])
 async def client_log(body: ClientLogIn):
     level_name = body.level.upper()
     level = {
@@ -560,7 +859,7 @@ async def client_log(body: ClientLogIn):
     return {"ok": True, "request_id": current_request_id()}
 
 
-@app.get("/api/integrations", dependencies=[Depends(require_token)])
+@app.get("/api/integrations", dependencies=[Depends(require_access)])
 async def integration_status():
     if ha is None or integrations is None:
         raise HTTPException(503, "Integrations are starting")
@@ -617,7 +916,7 @@ async def zalo_webhook(secret: str, payload: dict[str, Any]):
     return {"accepted": True, "agent_reply_scheduled": can_reply}
 
 
-@app.post("/api/chat", dependencies=[Depends(require_token)])
+@app.post("/api/chat", dependencies=[Depends(require_access)])
 async def chat(body: ChatIn):
     if agent is None:
         raise HTTPException(503, "Agent is starting")
@@ -629,27 +928,27 @@ async def chat(body: ChatIn):
     return {"session_id": sid, "answer": answer, "request_id": current_request_id()}
 
 
-@app.get("/api/messages/{session_id}", dependencies=[Depends(require_token)])
+@app.get("/api/messages/{session_id}", dependencies=[Depends(require_access)])
 async def messages(session_id: str):
     return get_messages(session_id, 100)
 
 
-@app.get("/api/events", dependencies=[Depends(require_token)])
+@app.get("/api/events", dependencies=[Depends(require_access)])
 async def events(limit: int = 50):
     return recent_events(min(max(limit, 1), 200))
 
 
-@app.get("/api/audit", dependencies=[Depends(require_token)])
+@app.get("/api/audit", dependencies=[Depends(require_access)])
 async def audit(limit: int = 100):
     return recent_tool_audit(min(max(limit, 1), 500))
 
 
-@app.get("/api/approvals", dependencies=[Depends(require_token)])
+@app.get("/api/approvals", dependencies=[Depends(require_access)])
 async def approvals():
     return list_approvals()
 
 
-@app.get("/api/approvals/{aid}", dependencies=[Depends(require_token)])
+@app.get("/api/approvals/{aid}", dependencies=[Depends(require_access)])
 async def approval(aid: str):
     row = get_approval(aid)
     if not row:
@@ -657,7 +956,7 @@ async def approval(aid: str):
     return row
 
 
-@app.post("/api/approvals/{aid}/decision", dependencies=[Depends(require_token)])
+@app.post("/api/approvals/{aid}/decision", dependencies=[Depends(require_access)])
 async def approval_decision(aid: str, body: DecisionIn):
     if ha is None:
         raise HTTPException(503, "HA client unavailable")
@@ -668,24 +967,24 @@ async def approval_decision(aid: str, body: DecisionIn):
     return d
 
 
-@app.get("/api/jobs", dependencies=[Depends(require_token)])
+@app.get("/api/jobs", dependencies=[Depends(require_access)])
 async def jobs():
     return list_jobs()
 
 
-@app.post("/api/jobs", dependencies=[Depends(require_token)])
+@app.post("/api/jobs", dependencies=[Depends(require_access)])
 async def create_job_api(body: JobIn):
     from .scheduler import create_job
     return create_job(body.name, body.prompt, body.schedule_type, body.schedule_value, body.notify)
 
 
-@app.patch("/api/jobs/{job_id}", dependencies=[Depends(require_token)])
+@app.patch("/api/jobs/{job_id}", dependencies=[Depends(require_access)])
 async def toggle_job(job_id: int, body: ToggleIn):
     set_job_enabled(job_id, body.enabled)
     return {"id": job_id, "enabled": body.enabled}
 
 
-@app.delete("/api/jobs/{job_id}", dependencies=[Depends(require_token)])
+@app.delete("/api/jobs/{job_id}", dependencies=[Depends(require_access)])
 async def delete_job(job_id: int):
     with conn() as c:
         c.execute("DELETE FROM jobs WHERE id=?", (job_id,))
@@ -693,24 +992,24 @@ async def delete_job(job_id: int):
     return {"ok": True}
 
 
-@app.get("/api/event-rules", dependencies=[Depends(require_token)])
+@app.get("/api/event-rules", dependencies=[Depends(require_access)])
 async def rules():
     return list_event_rules()
 
 
-@app.post("/api/event-rules", dependencies=[Depends(require_token)])
+@app.post("/api/event-rules", dependencies=[Depends(require_access)])
 async def create_rule_api(body: RuleIn):
     from .event_engine import create_event_rule
     return create_event_rule(body.name, body.entity_id, body.to_state, body.prompt, body.cooldown_seconds, body.notify)
 
 
-@app.patch("/api/event-rules/{rule_id}", dependencies=[Depends(require_token)])
+@app.patch("/api/event-rules/{rule_id}", dependencies=[Depends(require_access)])
 async def toggle_rule(rule_id: int, body: ToggleIn):
     set_rule_enabled(rule_id, body.enabled)
     return {"id": rule_id, "enabled": body.enabled}
 
 
-@app.delete("/api/event-rules/{rule_id}", dependencies=[Depends(require_token)])
+@app.delete("/api/event-rules/{rule_id}", dependencies=[Depends(require_access)])
 async def delete_rule(rule_id: int):
     with conn() as c:
         c.execute("DELETE FROM event_rules WHERE id=?", (rule_id,))
@@ -718,19 +1017,19 @@ async def delete_rule(rule_id: int):
     return {"ok": True}
 
 
-@app.post("/api/knowledge/reindex", dependencies=[Depends(require_token)])
+@app.post("/api/knowledge/reindex", dependencies=[Depends(require_access)])
 async def reindex():
     result = reindex_knowledge()
     info(logger, "knowledge_reindexed", result=result)
     return result
 
 
-@app.get("/api/knowledge/search", dependencies=[Depends(require_token)])
+@app.get("/api/knowledge/search", dependencies=[Depends(require_access)])
 async def knowledge_search(q: str, limit: int = 8):
     return search_knowledge(q, min(max(limit, 1), 20))
 
 
-@app.get("/api/skills", dependencies=[Depends(require_token)])
+@app.get("/api/skills", dependencies=[Depends(require_access)])
 async def skills():
     return list_skills()
 
@@ -743,4 +1042,5 @@ if __name__ == "__main__":
         reload=False,
         access_log=False,
         log_config=None,
+        server_header=False,
     )

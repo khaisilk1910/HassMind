@@ -1,6 +1,6 @@
 # HassMind v1.2.0 — AI Agent riêng cho Home Assistant
 
-HassMind v1 chạy **độc lập** với stack Home Assistant hiện có. Container HassMind chỉ kết nối tới HA qua REST/WebSocket và không yêu cầu ghép/chỉnh stack Home Assistant.
+HassMind chạy **độc lập** với stack Home Assistant hiện có. Container kết nối HA qua REST/WebSocket, có dashboard quản trị riêng tại port `8090` và không cần ghép vào stack Home Assistant.
 
 ## Chức năng v1
 
@@ -8,58 +8,69 @@ HassMind v1 chạy **độc lập** với stack Home Assistant hiện có. Conta
 - Home Assistant REST + WebSocket realtime gateway.
 - Đọc state, history, entity registry và event gần đây.
 - Direct-action allowlist cho các domain ít nhạy cảm.
-- Sửa automation/script bằng proposal -> mobile/web approval -> apply -> verify -> audit.
-- Optimistic locking: từ chối apply nếu config đã đổi từ lúc proposal.
-- Auto rollback nếu apply xong nhưng verify không khớp.
-- Rollback proposal có approval riêng.
-- SQLite chat memory, audit, events, jobs, event rules.
+- Sửa automation/script theo luồng proposal -> approval -> apply -> verify -> audit; có optimistic locking và rollback.
+- SQLite cho chat memory, audit, events, jobs, event rules và phiên quản trị.
 - Local RAG bằng SQLite FTS từ thư mục `knowledge/`.
 - Skill registry từ `config/skills/*.md`.
-- Scheduler: job do AI/người dùng tạo luôn ở trạng thái disabled; người dùng bật trên dashboard.
-- Event-triggered agent: rule do AI/người dùng tạo luôn disabled; người dùng bật trên dashboard.
-- External MCP client.
-- Optional SearXNG web search.
-- Optional Telegram gateway với allowlist chat ID.
-- Web dashboard/chat tại port 8090, bảo vệ bằng `X-HassMind-Token`.
-
+- Scheduler và event rule mới luôn ở trạng thái disabled cho tới khi operator bật.
+- External MCP client, SearXNG tùy chọn, Telegram gateway và các typed integration adapters.
+- Web admin có đăng nhập bắt buộc, CSRF protection, session timeout, lockout, password recovery và quản lý phiên.
 
 ## Mới trong v1.2.0
 
-- Structured logging chi tiết theo `request_id`, `session_id`, component và latency.
-- Traceback đầy đủ cho lỗi backend/LLM/tool/integration, nhưng tự động redact token/password/secret/API key.
-- Rotating log file tại `/data/logs/hassmind.log` và in-memory log buffer.
-- API chẩn đoán `/api/diagnostics`, `/api/logs`, `/api/logs/export`, `/api/client-log`.
-- Frontend tự gửi JavaScript exception/unhandled rejection về backend log khi đã có API token.
-- Dashboard responsive mới: Tổng quan, Chat, Integrations, Logs, Tool audit, Events, Approvals, Scheduler, Event rules, Knowledge.
-- Khi API lỗi, giao diện hiển thị `Request ID` để dán trực tiếp vào tab Logs và truy vết chính xác.
+- Khi truy cập `http://IP_SERVER:8090/`, dashboard bắt buộc đăng nhập bằng **tài khoản admin**; HassMind API token không còn dùng làm mật khẩu web.
+- Tab **Settings** quản lý username, đổi mật khẩu, khôi phục mật khẩu bằng Recovery Key, phiên đăng nhập và xoay HassMind API token.
+- API token được lưu ở server (`/data/secrets/hassmind_api_token` khi đổi từ UI); browser không lưu token trong `localStorage`.
+- Argon2id cho mật khẩu, session token ngẫu nhiên chỉ lưu dạng SHA-256 trong SQLite, CSRF token gắn với phiên, SameSite=Strict, lockout/rate-limit và network allowlist.
+- Security headers/CSP, tắt OpenAPI docs, không cache API/admin response và tắt Uvicorn server header.
+- Log structured theo `request_id`, `session_id`, component và latency; tự động redact password/token/API key/Authorization/cookie/JWT và các secret đang cấu hình.
+- Khi khởi động có best-effort scrub log xoay vòng và các bản ghi event/tool-audit cũ để giảm rủi ro secret còn sót từ phiên bản trước.
+- Container chạy non-root UID `10001`, root filesystem read-only, `cap_drop: ALL`, `no-new-privileges`, tmpfs `/tmp`, PID limit và log rotation Docker.
+- Tab **Giới thiệu** diễn giải từng tính năng; mỗi tab có hướng dẫn ngắn, cách dùng và ví dụ.
+- Favicon/logo HassMind mới dùng cho browser tab và tiêu đề dashboard.
 
-Xem chi tiết tại [`OBSERVABILITY.md`](OBSERVABILITY.md).
+Xem chi tiết logging tại [`OBSERVABILITY.md`](OBSERVABILITY.md) và hardening tại [`SECURITY.md`](SECURITY.md).
 
 ## 1. Điều kiện
 
-- Home Assistant đã chạy trên cùng Linux server và truy cập được từ host tại `http://127.0.0.1:8123`.
-- Docker + Docker Compose/Portainer.
-- Home Assistant Long-Lived Access Token. Để dùng Config API cho automation/script, tài khoản tạo token phải có quyền admin.
+- Home Assistant đã chạy và host HassMind truy cập được, ví dụ `http://127.0.0.1:8123` khi dùng `network_mode: host`.
+- Docker + Docker Compose hoặc Portainer.
+- Home Assistant Long-Lived Access Token. Nếu dùng Config API cho automation/script, tài khoản tạo token cần quyền phù hợp (thường là admin).
 - API key của LLM OpenAI-compatible.
 
-Nếu HA không listen trên host port 8123, đổi `HA_URL` trong `.env` thành địa chỉ HA mà container HassMind có thể truy cập.
+Không publish port `8090` trực tiếp ra Internet. Nếu cần truy cập ngoài LAN, dùng VPN hoặc reverse proxy HTTPS và đặt `ADMIN_COOKIE_SECURE=true`.
 
-## 2. Chuẩn bị
+## 2. Chuẩn bị an toàn
+
+Khuyến nghị dùng helper vì script tạo secret bằng nguồn ngẫu nhiên mật mã, đặt quyền file và chuẩn bị thư mục đúng UID:
 
 ```bash
-cp .env.example .env
-mkdir -p data knowledge secrets
+chmod +x setup.sh
+sudo ./setup.sh
 ```
 
-Tạo secret:
+Sau đó điền hai secret bắt buộc:
 
 ```bash
-printf '%s' 'HOME_ASSISTANT_LONG_LIVED_TOKEN' > secrets/ha_token.txt
-printf '%s' 'YOUR_LLM_API_KEY' > secrets/openai_api_key.txt
-openssl rand -hex 32 > secrets/hassmind_api_token.txt
-# Telegram không dùng thì vẫn tạo file rỗng:
-: > secrets/telegram_bot_token.txt
-chmod 600 secrets/*.txt
+printf '%s' 'HOME_ASSISTANT_LONG_LIVED_TOKEN' | sudo tee secrets/ha_token.txt >/dev/null
+printf '%s' 'YOUR_LLM_API_KEY' | sudo tee secrets/openai_api_key.txt >/dev/null
+sudo chmod 600 secrets/*.txt
+```
+
+`setup.sh` tự tạo nếu chưa tồn tại:
+
+```text
+secrets/hassmind_api_token.txt
+secrets/admin_password.txt
+secrets/admin_recovery_key.txt
+secrets/zalo_webhook_secret.txt
+```
+
+Đọc mật khẩu admin khởi tạo và cất Recovery Key ở nơi offline/an toàn:
+
+```bash
+cat secrets/admin_password.txt
+cat secrets/admin_recovery_key.txt
 ```
 
 Sửa `.env` tối thiểu:
@@ -71,7 +82,7 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_MODEL=your_model
 ```
 
-`OPENAI_MODEL` cần là model mà provider của bạn thực sự hỗ trợ tool/function calling.
+`OPENAI_MODEL` phải là model/provider thực sự hỗ trợ tool/function calling.
 
 ## 3. Deploy stack riêng
 
@@ -81,43 +92,58 @@ OPENAI_MODEL=your_model
 docker compose -f docker-stack.yml up -d --build
 ```
 
+Kiểm tra:
+
+```bash
+docker compose -f docker-stack.yml ps
+docker logs --tail 100 hassmind-v1
+```
+
 ### Portainer
 
-Cách thuận tiện nhất là đặt project vào Git repository rồi trong Portainer chọn **Stacks -> Add stack -> Repository**, trỏ tới `docker-stack.yml`. Stack có `build: .`, nên Portainer cần lấy được toàn bộ repository chứ không chỉ mỗi YAML.
-
-Nếu dùng Web editor của Portainer mà không có source build context, hãy build image trước trên server:
+Khuyến nghị deploy từ Git repository để Portainer lấy được toàn bộ build context. Nếu chỉ dùng Web editor, build image trước:
 
 ```bash
 docker build -t hassmind-v1:latest .
 ```
 
-sau đó bỏ block `build:` khỏi stack và giữ:
+rồi deploy `portainer-stack.yml`.
 
-```yaml
-image: hassmind-v1:latest
-```
+**Lưu ý bảo mật:** `docker-stack.yml`/`docker-compose.yml` dùng Docker secrets là lựa chọn ưu tiên. `portainer-stack.yml` nhận secret qua environment variables để thuận tiện nhưng secret có thể xuất hiện trong metadata của container cho người có quyền Docker/Portainer.
 
-## 4. Truy cập
+## 4. Đăng nhập web và API token
+
+Mở:
 
 ```text
-http://IP_SERVER:8090
+http://IP_SERVER:8090/
 ```
 
-Lấy token đăng nhập dashboard:
+Bạn sẽ được chuyển tới `/login`. Mặc định username là:
+
+```text
+admin
+```
+
+Mật khẩu ban đầu là nội dung `secrets/admin_password.txt`. Sau lần đăng nhập đầu tiên, vào **Settings -> Tài khoản admin** để đổi mật khẩu.
+
+Nếu quên mật khẩu, chọn **Quên mật khẩu?** trên trang login và dùng Recovery Key. Ban đầu khóa nằm trong `secrets/admin_recovery_key.txt`; nếu đã xoay tại **Settings -> Recovery Key** thì khóa runtime mới trong `/data/secrets/admin_recovery_key` có ưu tiên cao hơn. Khôi phục thành công sẽ thu hồi toàn bộ phiên cũ.
+
+Trong **Settings -> Recovery Key**, admin có thể tạo khóa mới sau khi xác nhận mật khẩu hiện tại. Khóa mới chỉ hiển thị một lần; hãy lưu ngay ở nơi offline/password manager. Khóa cũ bị vô hiệu ngay sau khi xoay.
+
+HassMind API token dành cho API/integration ngoài dashboard. Xem/xoay cấu hình tại **Settings -> HassMind API token**. Khi chọn **Tạo token ngẫu nhiên**, token mới chỉ hiện một lần; lưu ngay nếu client ngoài cần dùng. Ví dụ gọi API:
 
 ```bash
-cat secrets/hassmind_api_token.txt
+curl -H "X-HassMind-Token: $(cat secrets/hassmind_api_token.txt)" http://IP_SERVER:8090/api/status
 ```
 
-Paste token vào ô góc phải và bấm **Lưu token**.
+Nếu bạn đã xoay token trong Settings, token runtime tại `/data/secrets/hassmind_api_token` có ưu tiên cao hơn Docker secret ban đầu.
 
-Health endpoint không cần token:
+Health endpoint không yêu cầu đăng nhập:
 
 ```text
 http://IP_SERVER:8090/health
 ```
-
-Không forward port 8090 trực tiếp ra Internet. Nếu cần truy cập ngoài LAN, đặt reverse proxy + TLS + authentication/VPN ở phía trước.
 
 ## 5. Approval automation/script
 
@@ -266,7 +292,17 @@ knowledge/
 .env
 ```
 
-Không đưa thư mục `secrets/` vào Git/backup không mã hóa.
+Secret nên backup **mã hóa** và tách khỏi source code. Đặc biệt phải giữ `admin_recovery_key`; nếu mất cả mật khẩu admin và Recovery Key thì cơ chế khôi phục web không thể xác minh bạn.
+
+Không commit các mục sau vào Git:
+
+```text
+.env
+secrets/*.txt
+data/
+```
+
+`.gitignore` và `.dockerignore` đã chặn các đường dẫn này, nhưng vẫn cần kiểm tra repository trước khi push.
 
 ## 15. Lệnh vận hành
 
@@ -305,25 +341,38 @@ sudo ./setup.sh
 
 ## 18. Portainer Stack độc lập
 
-Có thêm `portainer-stack.yml`. File này không ghép với HA stack và giả định image `hassmind-v1:latest` đã được build trên server:
+Có `portainer-stack.yml` và `portainer-stack-opt.yml`. Hai file giữ container non-root, read-only root filesystem, drop capabilities, `no-new-privileges`, PID limit và `/tmp` tmpfs.
+
+Nếu dùng `portainer-stack.yml`, build image trước:
 
 ```bash
 docker build -t hassmind-v1:latest .
 ```
 
-Trong Portainer -> Stacks -> Add stack, dùng `portainer-stack.yml` và khai báo Environment variables:
+Các biến bắt buộc/quan trọng trong Portainer:
 
 ```text
-HA_URL=http://127.0.0.1:8123
 HA_TOKEN=...
-HA_NOTIFY_SERVICE=notify.mobile_app_...
 OPENAI_API_KEY=...
-OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_MODEL=...
-HASSMIND_API_TOKEN=<random 64 hex chars>
+HASSMIND_API_TOKEN=<random >= 32 chars>
+ADMIN_BOOTSTRAP_PASSWORD=<strong password >= 14 chars>
+ADMIN_RECOVERY_KEY=<random recovery key>
 ```
 
-Cách Portainer này dùng environment variables để thuận tiện triển khai. Nếu ưu tiên secret-at-rest tốt hơn, dùng `docker-stack.yml` + `secrets/*.txt` trên filesystem.
+Dùng HTTP LAN trực tiếp thì giữ:
+
+```text
+ADMIN_COOKIE_SECURE=false
+```
+
+Khi reverse proxy đã phục vụ HTTPS đúng cách, chuyển thành:
+
+```text
+ADMIN_COOKIE_SECURE=true
+```
+
+Portainer environment variables thuận tiện nhưng không mạnh bằng Docker secrets về secret-at-rest. Nếu mục tiêu là hardening tối đa, ưu tiên `docker-stack.yml`/`docker-compose.yml` với `secrets/*.txt`.
 
 ## 19. Tool audit
 
@@ -558,11 +607,13 @@ Khuyến nghị: lần deploy đầu để các cờ gửi/xóa/download/auto-re
 
 ## 22. Quy trình nâng cấp từ HassMind v1 cũ
 
-1. Backup `data/hassmind.db`, `.env`, `config/`, `knowledge/` và secrets.
-2. Thay code bằng bản v1.1.0 này nhưng giữ `data/` cũ.
-3. Chạy `./setup.sh` để tạo thêm ba secret file mới mà không ghi đè secret cũ.
-4. Merge các biến integration trong `.env.example` vào `.env` đang dùng.
-5. Nếu dùng Gemini local, đổi `OPENAI_BASE_URL` sang `http://127.0.0.1:8000/v1` và dùng API key/model đúng của Gemini server.
-6. Deploy lại HassMind; không cần redeploy Home Assistant hay các companion stack nếu port/API của chúng không đổi.
-7. Mở tab **Integrations** và kiểm tra trạng thái từng module trước khi bật side-effect policy.
+1. Backup `data/hassmind.db`, `.env`, `config/`, `knowledge/` và secrets hiện có.
+2. Thay code bằng bản v1.2.0 này nhưng giữ `data/` cũ.
+3. Chạy `sudo ./setup.sh`. Script chỉ tạo secret còn thiếu, không ghi đè secret đang có. Bản này cần thêm `admin_password.txt` và `admin_recovery_key.txt`.
+4. Merge các biến mới từ `.env.example` vào `.env`, đặc biệt nhóm `ADMIN_*`, `RUNTIME_SECRET_DIR`, `LOG_SCRUB_EXISTING_ON_START` và `AUDIT_SCRUB_EXISTING_ON_START`.
+5. Deploy lại HassMind. Lần startup đầu sẽ tạo bảng admin/session mới, bootstrap tài khoản admin và best-effort scrub event/tool-audit + log file cũ.
+6. Truy cập `/`, đăng nhập bằng password trong `secrets/admin_password.txt`, sau đó đổi mật khẩu ở **Settings**.
+7. Mở **Settings** kiểm tra `Allowed networks`, `Cookie Secure`, trạng thái redaction, API token và Recovery Key source. Nếu muốn loại bỏ dependence vào Recovery Key bootstrap, xoay Recovery Key một lần và lưu khóa mới an toàn.
+8. Mở **Integrations** và kiểm tra từng module trước khi bật side-effect policy.
 
+**Quan trọng khi nâng cấp từ bản logging cũ:** cơ chế scrub có thể che các secret còn nhận dạng được hoặc vẫn đang cấu hình, nhưng không thể chứng minh đã nhận ra mọi secret tùy ý từng xuất hiện trong log cũ. Nếu trước đây từng bật log nội dung hoặc nghi ngờ token bị ghi thô, hãy archive mã hóa để điều tra hoặc xóa `data/logs/hassmind.log*` sau khi đã lấy thông tin cần thiết, rồi xoay các credential liên quan.

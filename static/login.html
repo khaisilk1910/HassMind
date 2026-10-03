@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>Đăng nhập · HassMind</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/login.css">
+  <script src="/static/login.js" defer></script>
+</head>
+<body>
+  <main class="shell">
+    <div class="brand"><img src="/favicon.svg" alt="HassMind"><div><div class="brand-title">HassMind</div><div class="brand-sub">v1.2.0 · Secure Admin</div></div></div>
+    <section id="loginCard" class="card">
+      <h1>Đăng nhập quản trị</h1>
+      <p>Dashboard chỉ mở sau khi xác thực tài khoản admin. Phiên đăng nhập dùng cookie HttpOnly và tự hết hạn.</p>
+      <form id="loginForm">
+        <div class="field"><label for="username">Tên đăng nhập</label><input id="username" class="input" autocomplete="username" required maxlength="64" value="admin"></div>
+        <div class="field"><label for="password">Mật khẩu</label><input id="password" class="input" type="password" autocomplete="current-password" required></div>
+        <button id="loginBtn" class="btn" type="submit">Đăng nhập</button>
+      </form>
+      <div class="row"><span></span><button id="showReset" class="link-btn" type="button">Quên mật khẩu?</button></div>
+      <div id="loginMessage" class="message hidden" role="alert"></div>
+      <div class="security">Ví dụ: tài khoản mặc định là <strong>admin</strong>. Mật khẩu khởi tạo nằm trong Docker secret <code>admin_password</code>; không dùng HassMind API token để đăng nhập web.</div>
+    </section>
+
+    <section id="resetCard" class="card hidden">
+      <h1>Khôi phục mật khẩu</h1>
+      <p>Nhập Recovery Key được lưu trong Docker secret <code>admin_recovery_key</code>. Khôi phục thành công sẽ đăng xuất toàn bộ phiên đang hoạt động.</p>
+      <form id="resetForm">
+        <div class="field"><label for="resetUsername">Tên đăng nhập</label><input id="resetUsername" class="input" autocomplete="username" required maxlength="64" value="admin"></div>
+        <div class="field"><label for="recoveryKey">Recovery Key</label><input id="recoveryKey" class="input" type="password" autocomplete="off" required></div>
+        <div class="field"><label for="newPassword">Mật khẩu mới</label><input id="newPassword" class="input" type="password" autocomplete="new-password" required></div>
+        <div class="field"><label for="confirmPassword">Nhập lại mật khẩu mới</label><input id="confirmPassword" class="input" type="password" autocomplete="new-password" required></div>
+        <button id="resetBtn" class="btn" type="submit">Đặt lại mật khẩu</button>
+      </form>
+      <div class="row"><button id="backLogin" class="link-btn" type="button">← Quay lại đăng nhập</button><span></span></div>
+      <div id="resetMessage" class="message hidden" role="alert"></div>
+      <div class="security">Mật khẩu tối thiểu 14 ký tự. Nếu dưới 20 ký tự, nên có ít nhất 3 nhóm: chữ thường, chữ hoa, số, ký tự đặc biệt.</div>
+    </section>
+  </main>
+</body>
+</html>

@@ -1,4 +1,6 @@
+import os
 from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,8 +13,7 @@ class Settings(BaseSettings):
     ha_token: str = ""
     ha_notify_service: str = ""
 
-    # OpenAI-compatible LLM. The uploaded Gemini FastAPI service is compatible
-    # with this interface when OPENAI_BASE_URL points at its /v1 endpoint.
+    # OpenAI-compatible LLM
     openai_api_key_file: str = "/run/secrets/openai_api_key"
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
@@ -26,7 +27,26 @@ class Settings(BaseSettings):
     port: int = 8090
     api_token_file: str = "/run/secrets/hassmind_api_token"
     api_token: str = ""
+    runtime_secret_dir: str = "/data/secrets"
+    runtime_api_token_name: str = "hassmind_api_token"
+    runtime_recovery_key_name: str = "admin_recovery_key"
     timezone: str = "Asia/Ho_Chi_Minh"
+
+    # Web admin authentication/security
+    admin_username: str = "admin"
+    admin_bootstrap_password_file: str = "/run/secrets/admin_password"
+    admin_bootstrap_password: str = ""
+    admin_recovery_key_file: str = "/run/secrets/admin_recovery_key"
+    admin_recovery_key: str = ""
+    admin_session_cookie: str = "hassmind_admin_session"
+    admin_csrf_cookie: str = "hassmind_csrf"
+    admin_session_ttl_minutes: int = 720
+    admin_session_idle_minutes: int = 30
+    admin_cookie_secure: bool = False
+    admin_allowed_networks: str = "127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    login_max_failures: int = 5
+    login_lock_minutes: int = 15
+    password_min_length: int = 14
 
     # Observability / diagnostics
     log_level: str = "INFO"
@@ -37,6 +57,8 @@ class Settings(BaseSettings):
     log_backup_count: int = 5
     log_ring_size: int = 2000
     log_include_content: bool = False
+    log_scrub_existing_on_start: bool = True
+    audit_scrub_existing_on_start: bool = True
 
     # Core safety policy
     allow_service_domains: str = "light,switch,fan,climate,media_player,scene,input_boolean,input_number,input_select,number,select"
@@ -57,9 +79,7 @@ class Settings(BaseSettings):
     skills_dir: str = "/app/config/skills"
     mcp_config: str = "/app/config/mcp_servers.yaml"
 
-    # Integration adapter defaults. All companion containers can remain in
-    # their own stacks. With network_mode=host these localhost URLs work even
-    # when the other stacks use published ports or host networking.
+    # Integration adapter defaults
     integration_http_timeout: float = 15.0
     integration_health_timeout: float = 3.0
 
@@ -92,7 +112,7 @@ class Settings(BaseSettings):
     wyoming_port: int = 10300
     wyoming_allow_tts: bool = True
 
-    # Home Assistant custom-component adapters found in the uploaded projects.
+    # Home Assistant custom-component adapters
     ha_custom_integrations_enabled: bool = True
     shopping_allow_mutations: bool = False
     shopping_allow_delete: bool = False
@@ -101,10 +121,45 @@ class Settings(BaseSettings):
 
     @staticmethod
     def _read_optional(path: str) -> str:
+        if not path:
+            return ""
         p = Path(path)
-        if p.exists():
-            return p.read_text(encoding="utf-8").strip()
+        try:
+            if p.exists() and p.is_file():
+                return p.read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
         return ""
+
+    def _runtime_secret_path(self, name: str) -> Path:
+        return Path(self.runtime_secret_dir) / name
+
+    def read_runtime_secret(self, name: str) -> str:
+        return self._read_optional(str(self._runtime_secret_path(name)))
+
+    def write_runtime_secret(self, name: str, value: str) -> Path:
+        value = value.strip()
+        if not value:
+            raise ValueError("Secret value must not be empty")
+        root = Path(self.runtime_secret_dir)
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            os.chmod(root, 0o700)
+        except OSError:
+            pass
+        target = self._runtime_secret_path(name)
+        tmp = target.with_suffix(".tmp")
+        tmp.write_text(value, encoding="utf-8")
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        os.replace(tmp, target)
+        try:
+            os.chmod(target, 0o600)
+        except OSError:
+            pass
+        return target
 
     def read_ha_token(self) -> str:
         token = self._read_optional(self.ha_token_file) or self.ha_token
@@ -116,10 +171,42 @@ class Settings(BaseSettings):
         return self._read_optional(self.openai_api_key_file) or self.openai_api_key
 
     def read_api_token(self) -> str:
-        token = self._read_optional(self.api_token_file) or self.api_token
+        token = (
+            self.read_runtime_secret(self.runtime_api_token_name)
+            or self._read_optional(self.api_token_file)
+            or self.api_token
+        )
         if not token:
-            raise RuntimeError(f"HassMind API token not found: {self.api_token_file}")
+            raise RuntimeError("HassMind API token is not configured")
         return token
+
+    def api_token_source(self) -> str:
+        if self.read_runtime_secret(self.runtime_api_token_name):
+            return "runtime_file"
+        if self._read_optional(self.api_token_file):
+            return "docker_secret"
+        if self.api_token:
+            return "environment"
+        return "missing"
+
+    def read_admin_bootstrap_password(self) -> str:
+        return self._read_optional(self.admin_bootstrap_password_file) or self.admin_bootstrap_password
+
+    def read_admin_recovery_key(self) -> str:
+        return (
+            self.read_runtime_secret(self.runtime_recovery_key_name)
+            or self._read_optional(self.admin_recovery_key_file)
+            or self.admin_recovery_key
+        )
+
+    def admin_recovery_key_source(self) -> str:
+        if self.read_runtime_secret(self.runtime_recovery_key_name):
+            return "runtime_file"
+        if self._read_optional(self.admin_recovery_key_file):
+            return "docker_secret"
+        if self.admin_recovery_key:
+            return "environment"
+        return "missing"
 
     def read_telegram_token(self) -> str:
         return self._read_optional(self.telegram_bot_token_file) or self.telegram_bot_token
@@ -132,6 +219,20 @@ class Settings(BaseSettings):
 
     def read_zalo_webhook_secret(self) -> str:
         return self._read_optional(self.zalo_webhook_secret_file) or self.zalo_webhook_secret
+
+    def configured_secret_values(self) -> list[str]:
+        values = [
+            self._read_optional(self.ha_token_file), self.ha_token,
+            self._read_optional(self.openai_api_key_file), self.openai_api_key,
+            self.read_runtime_secret(self.runtime_api_token_name), self._read_optional(self.api_token_file), self.api_token,
+            self._read_optional(self.telegram_bot_token_file), self.telegram_bot_token,
+            self._read_optional(self.camera_tts_api_key_file), self.camera_tts_api_key,
+            self._read_optional(self.zalo_password_file), self.zalo_password,
+            self._read_optional(self.zalo_webhook_secret_file), self.zalo_webhook_secret,
+            self._read_optional(self.admin_bootstrap_password_file), self.admin_bootstrap_password,
+            self.read_runtime_secret(self.runtime_recovery_key_name), self._read_optional(self.admin_recovery_key_file), self.admin_recovery_key,
+        ]
+        return [v for v in values if isinstance(v, str) and len(v) >= 8]
 
     @property
     def allowed_domains(self) -> set[str]:
@@ -148,6 +249,10 @@ class Settings(BaseSettings):
     @property
     def zalo_allowed_thread_ids(self) -> set[str]:
         return {x.strip().removeprefix("zalo:") for x in self.zalo_agent_allowed_thread_ids.split(",") if x.strip()}
+
+    @property
+    def admin_allowed_network_list(self) -> list[str]:
+        return [x.strip() for x in self.admin_allowed_networks.split(",") if x.strip()]
 
 
 settings = Settings()

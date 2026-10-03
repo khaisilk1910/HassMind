@@ -8,6 +8,7 @@ services:
     init: true
     stop_grace_period: 30s
     network_mode: host
+    user: "10001:10001"
 
     environment:
       TZ: ${TZ:-Asia/Ho_Chi_Minh}
@@ -28,6 +29,18 @@ services:
       API_TOKEN: ${HASSMIND_API_TOKEN}
       DB_PATH: /data/hassmind.db
 
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_BOOTSTRAP_PASSWORD: ${ADMIN_BOOTSTRAP_PASSWORD}
+      ADMIN_RECOVERY_KEY: ${ADMIN_RECOVERY_KEY}
+      ADMIN_SESSION_TTL_MINUTES: ${ADMIN_SESSION_TTL_MINUTES:-720}
+      ADMIN_SESSION_IDLE_MINUTES: ${ADMIN_SESSION_IDLE_MINUTES:-30}
+      ADMIN_COOKIE_SECURE: ${ADMIN_COOKIE_SECURE:-false}
+      ADMIN_ALLOWED_NETWORKS: ${ADMIN_ALLOWED_NETWORKS:-127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
+      LOGIN_MAX_FAILURES: ${LOGIN_MAX_FAILURES:-5}
+      LOGIN_LOCK_MINUTES: ${LOGIN_LOCK_MINUTES:-15}
+      PASSWORD_MIN_LENGTH: ${PASSWORD_MIN_LENGTH:-14}
+      RUNTIME_SECRET_DIR: /data/secrets
+
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-json}
       LOG_FILE_ENABLED: ${LOG_FILE_ENABLED:-true}
@@ -36,6 +49,8 @@ services:
       LOG_BACKUP_COUNT: ${LOG_BACKUP_COUNT:-5}
       LOG_RING_SIZE: ${LOG_RING_SIZE:-2000}
       LOG_INCLUDE_CONTENT: ${LOG_INCLUDE_CONTENT:-false}
+      LOG_SCRUB_EXISTING_ON_START: ${LOG_SCRUB_EXISTING_ON_START:-true}
+      AUDIT_SCRUB_EXISTING_ON_START: ${AUDIT_SCRUB_EXISTING_ON_START:-true}
 
       ALLOW_SERVICE_DOMAINS: ${ALLOW_SERVICE_DOMAINS:-light,switch,fan,climate,media_player,scene,input_boolean,input_number,input_select,number,select}
       DENY_SERVICE_DOMAINS: ${DENY_SERVICE_DOMAINS:-shell_command,hassio,homeassistant,lock,alarm_control_panel,cover,update,button}
@@ -91,7 +106,12 @@ services:
 
     volumes:
       - /opt/hassmind/data:/data
-      - /opt/hassmind/knowledge:/knowledge
+      - /opt/hassmind/knowledge:/knowledge:ro
+
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    pids_limit: 256
 
     healthcheck:
       test:

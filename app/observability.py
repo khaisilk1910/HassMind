@@ -29,6 +29,45 @@ SENSITIVE_KEY_RE = re.compile(
 )
 BEARER_RE = re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]+")
 ZALO_WEBHOOK_RE = re.compile(r"(/webhooks/zalo/)[^/?#]+")
+GENERIC_SECRET_ASSIGN_RE = re.compile(
+    r"(?i)(\b(?:token|password|passwd|secret|api[_-]?key|authorization|cookie|access[_-]?token|refresh[_-]?token|credential)\b\s*[:=]\s*)([^\s,;]+)"
+)
+JSON_SECRET_RE = re.compile(
+    r'(?i)(["\'](?:token|password|passwd|secret|api[_-]?key|authorization|cookie|access[_-]?token|refresh[_-]?token|credential)["\']\s*:\s*["\'])(.*?)(["\'])'
+)
+JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")
+OPENAI_KEY_RE = re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}\b")
+GITHUB_KEY_RE = re.compile(r"\bgh[opusr]_[A-Za-z0-9]{20,}\b", re.IGNORECASE)
+TELEGRAM_BOT_RE = re.compile(r"\b\d{6,12}:[A-Za-z0-9_-]{20,}\b")
+_known_secrets: set[str] = set()
+
+
+def _is_sensitive_key(key: str) -> bool:
+    raw = str(key).lower()
+    compact = re.sub(r"[^a-z0-9]", "", raw)
+    sensitive = (
+        "password", "passwd", "secret", "apikey", "authorization", "cookie",
+        "accesstoken", "refreshtoken", "authtoken", "credential", "clientsecret",
+        "webhooksecret", "recoverykey", "privatekey",
+    )
+    if any(term in compact for term in sensitive):
+        return True
+    # Plain token keys are sensitive, but keep correlation fields such as session_id/request_id visible.
+    if compact == "token" or compact.endswith("token") or compact.startswith("token"):
+        return True
+    return bool(SENSITIVE_KEY_RE.search(raw))
+
+
+def register_secret(value: str | None) -> None:
+    if isinstance(value, str):
+        value = value.strip()
+        if len(value) >= 8:
+            _known_secrets.add(value)
+
+
+def _register_configured_secrets() -> None:
+    for value in settings.configured_secret_values():
+        register_secret(value)
 
 
 def _utc_iso() -> str:
@@ -43,7 +82,7 @@ def sanitize_url(value: str) -> str:
             host = f"{host}:{parts.port}"
         query = []
         for key, val in parse_qsl(parts.query, keep_blank_values=True):
-            query.append((key, "[REDACTED]" if SENSITIVE_KEY_RE.search(key) else val))
+            query.append((key, "[REDACTED]" if _is_sensitive_key(key) else val))
         path = ZALO_WEBHOOK_RE.sub(r"\1[REDACTED]", parts.path)
         return urlunsplit((parts.scheme, host, path, urlencode(query), ""))
     except Exception:
@@ -53,13 +92,22 @@ def sanitize_url(value: str) -> str:
 def _sanitize_string(value: str, max_chars: int = 12000) -> str:
     value = BEARER_RE.sub("Bearer [REDACTED]", value)
     value = ZALO_WEBHOOK_RE.sub(r"\1[REDACTED]", value)
+    value = OPENAI_KEY_RE.sub("[REDACTED_API_KEY]", value)
+    value = GITHUB_KEY_RE.sub("[REDACTED_API_KEY]", value)
+    value = TELEGRAM_BOT_RE.sub("[REDACTED_TOKEN]", value)
+    value = JWT_RE.sub("[REDACTED_TOKEN]", value)
+    value = JSON_SECRET_RE.sub(r"\1[REDACTED]\3", value)
+    value = GENERIC_SECRET_ASSIGN_RE.sub(r"\1[REDACTED]", value)
+    for secret in sorted(_known_secrets, key=len, reverse=True):
+        if secret and secret in value:
+            value = value.replace(secret, "[REDACTED]")
     if len(value) > max_chars:
         return value[:max_chars] + f"…[truncated {len(value) - max_chars} chars]"
     return value
 
 
 def redact(value: Any, key: str | None = None, depth: int = 0) -> Any:
-    if key and SENSITIVE_KEY_RE.search(str(key)):
+    if key and _is_sensitive_key(str(key)):
         return "[REDACTED]"
     if depth > 8:
         return "[MAX_DEPTH]"
@@ -78,6 +126,52 @@ def redact(value: Any, key: str | None = None, depth: int = 0) -> Any:
             out.append(f"[TRUNCATED {len(seq) - 250} ITEMS]")
         return out
     return _sanitize_string(str(value))
+
+
+
+
+def _scrub_log_line(line: str) -> str:
+    raw = line.rstrip("\n")
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return _sanitize_string(raw, max_chars=max(12000, len(raw)))
+    return json.dumps(redact(parsed), ensure_ascii=False, separators=(",", ":"), default=str)
+
+
+def scrub_existing_log_files() -> int:
+    """Best-effort in-place sanitization of current rotating log files before opening them."""
+    if not settings.log_scrub_existing_on_start or not settings.log_file_enabled:
+        return 0
+    base = Path(settings.log_file)
+    candidates = [base, *[Path(f"{base}.{i}") for i in range(1, max(1, settings.log_backup_count) + 1)]]
+    scrubbed = 0
+    for path in candidates:
+        try:
+            if not path.exists() or not path.is_file() or path.is_symlink():
+                continue
+            tmp = path.with_name(path.name + ".scrub.tmp")
+            with path.open("r", encoding="utf-8", errors="replace") as src, tmp.open("w", encoding="utf-8", newline="\n") as dst:
+                for line in src:
+                    dst.write(_scrub_log_line(line) + "\n")
+            try:
+                os.chmod(tmp, 0o600)
+            except OSError:
+                pass
+            os.replace(tmp, path)
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
+            scrubbed += 1
+        except Exception:
+            try:
+                tmp = path.with_name(path.name + ".scrub.tmp")
+                if tmp.exists():
+                    tmp.unlink()
+            except Exception:
+                pass
+    return scrubbed
 
 
 def preview(value: Any, max_chars: int = 2000) -> Any:
@@ -209,6 +303,8 @@ def setup_logging() -> None:
     if _configured:
         return
     _configured = True
+    _register_configured_secrets()
+    scrubbed_files = scrub_existing_log_files()
 
     root = logging.getLogger()
     root.setLevel(getattr(logging, settings.log_level.upper(), logging.INFO))
@@ -226,7 +322,13 @@ def setup_logging() -> None:
     if settings.log_file_enabled:
         path = Path(settings.log_file)
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            if path.is_symlink():
+                raise RuntimeError("Refusing to write logs through a symbolic link")
+            try:
+                os.chmod(path.parent, 0o700)
+            except OSError:
+                pass
             file_handler = logging.handlers.RotatingFileHandler(
                 path,
                 maxBytes=max(1024 * 1024, settings.log_max_bytes),
@@ -235,6 +337,10 @@ def setup_logging() -> None:
             )
             file_handler.setFormatter(formatter)
             root.addHandler(file_handler)
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
         except Exception as exc:
             root.error(
                 "Unable to initialize log file; continuing with stdout and in-memory logs",
@@ -243,6 +349,12 @@ def setup_logging() -> None:
 
     for noisy in ("httpcore", "httpx", "websockets.client"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+
+    if scrubbed_files:
+        logging.getLogger("hassmind.observability").info(
+            "Sanitized existing log files",
+            extra={"hassmind": {"event": "existing_logs_scrubbed", "files": scrubbed_files}},
+        )
 
 
 def get_logger(component: str) -> logging.Logger:

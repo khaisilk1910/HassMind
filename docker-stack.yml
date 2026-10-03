@@ -1,54 +1,57 @@
 services:
   hassmind:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    build: .
     image: hassmind-v1:latest
     container_name: hassmind-v1
     restart: unless-stopped
-
-    # Standalone stack. Home Assistant is already running on this Linux host.
-    # With host networking HassMind reaches it at http://127.0.0.1:8123.
+    init: true
+    stop_grace_period: 30s
     network_mode: host
-
-    env_file:
-      - .env
-
+    user: "10001:10001"
+    env_file: [.env]
     environment:
       HA_TOKEN_FILE: /run/secrets/ha_token
       OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
       API_TOKEN_FILE: /run/secrets/hassmind_api_token
+      ADMIN_BOOTSTRAP_PASSWORD_FILE: /run/secrets/admin_password
+      ADMIN_RECOVERY_KEY_FILE: /run/secrets/admin_recovery_key
       TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram_bot_token
       CAMERA_TTS_API_KEY_FILE: /run/secrets/camera_tts_api_key
       ZALO_PASSWORD_FILE: /run/secrets/zalo_password
       ZALO_WEBHOOK_SECRET_FILE: /run/secrets/zalo_webhook_secret
-
     secrets:
       - ha_token
       - openai_api_key
       - hassmind_api_token
+      - admin_password
+      - admin_recovery_key
       - telegram_bot_token
       - camera_tts_api_key
       - zalo_password
       - zalo_webhook_secret
-
     volumes:
-      - ./data:/data
+      - ./data:/data:rw
       - ./knowledge:/knowledge:ro
       - ./config:/app/config:ro
-
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=3).read()"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 30s
-
-    security_opt:
-      - no-new-privileges:true
-
-    cap_drop:
-      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
 
 secrets:
   ha_token:
@@ -57,6 +60,10 @@ secrets:
     file: ./secrets/openai_api_key.txt
   hassmind_api_token:
     file: ./secrets/hassmind_api_token.txt
+  admin_password:
+    file: ./secrets/admin_password.txt
+  admin_recovery_key:
+    file: ./secrets/admin_recovery_key.txt
   telegram_bot_token:
     file: ./secrets/telegram_bot_token.txt
   camera_tts_api_key:

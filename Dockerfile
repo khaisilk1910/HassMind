@@ -2,7 +2,9 @@ FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    HOME=/tmp \
+    UMASK=077
 
 WORKDIR /app
 
@@ -16,7 +18,7 @@ COPY config /app/config
 COPY static /app/static
 COPY VERSION /app/VERSION
 
-RUN mkdir -p /data /knowledge && chown -R hassmind:hassmind /app /data /knowledge
+RUN mkdir -p /data /data/secrets /knowledge /tmp && chown -R hassmind:hassmind /app /data /knowledge /tmp && chmod 700 /data/secrets
 
 USER hassmind
 EXPOSE 8090
