@@ -1,4 +1,4 @@
-# HassMind v1 — AI Agent riêng cho Home Assistant
+# HassMind v1.2.0 — AI Agent riêng cho Home Assistant
 
 HassMind v1 chạy **độc lập** với stack Home Assistant hiện có. Container HassMind chỉ kết nối tới HA qua REST/WebSocket và không yêu cầu ghép/chỉnh stack Home Assistant.
 
@@ -21,6 +21,19 @@ HassMind v1 chạy **độc lập** với stack Home Assistant hiện có. Conta
 - Optional SearXNG web search.
 - Optional Telegram gateway với allowlist chat ID.
 - Web dashboard/chat tại port 8090, bảo vệ bằng `X-HassMind-Token`.
+
+
+## Mới trong v1.2.0
+
+- Structured logging chi tiết theo `request_id`, `session_id`, component và latency.
+- Traceback đầy đủ cho lỗi backend/LLM/tool/integration, nhưng tự động redact token/password/secret/API key.
+- Rotating log file tại `/data/logs/hassmind.log` và in-memory log buffer.
+- API chẩn đoán `/api/diagnostics`, `/api/logs`, `/api/logs/export`, `/api/client-log`.
+- Frontend tự gửi JavaScript exception/unhandled rejection về backend log khi đã có API token.
+- Dashboard responsive mới: Tổng quan, Chat, Integrations, Logs, Tool audit, Events, Approvals, Scheduler, Event rules, Knowledge.
+- Khi API lỗi, giao diện hiển thị `Request ID` để dán trực tiếp vào tab Logs và truy vết chính xác.
+
+Xem chi tiết tại [`OBSERVABILITY.md`](OBSERVABILITY.md).
 
 ## 1. Điều kiện
 

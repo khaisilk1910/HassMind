@@ -1,11 +1,15 @@
 import json
 import sqlite3
+import os
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from .settings import settings
+from .observability import exception, get_logger, info
+
+logger = get_logger("database")
 
 
 def utcnow() -> str:
@@ -14,19 +18,38 @@ def utcnow() -> str:
 
 @contextmanager
 def conn():
-    Path(settings.db_path).parent.mkdir(parents=True, exist_ok=True)
-    c = sqlite3.connect(settings.db_path, timeout=30)
+    db_path = Path(settings.db_path)
+    parent = db_path.parent
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+        c = sqlite3.connect(settings.db_path, timeout=30)
+    except Exception:
+        exception(
+            logger,
+            "database_open_failed",
+            message="Unable to open SQLite database",
+            db_path=str(db_path),
+            parent=str(parent),
+            parent_exists=parent.exists(),
+            parent_writable=os.access(parent, os.W_OK) if parent.exists() else False,
+        )
+        raise
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA journal_mode=WAL")
     c.execute("PRAGMA foreign_keys=ON")
     try:
         yield c
         c.commit()
+    except Exception:
+        c.rollback()
+        exception(logger, "database_transaction_failed", db_path=str(db_path))
+        raise
     finally:
         c.close()
 
 
 def init_db():
+    info(logger, "database_init_started", db_path=settings.db_path)
     with conn() as c:
         c.executescript(
             """
@@ -131,6 +154,7 @@ def init_db():
             c.execute("CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(fact_id UNINDEXED, text, tags)")
         except sqlite3.OperationalError:
             pass
+    info(logger, "database_init_completed", db_path=settings.db_path)
 
 
 def add_message(session_id: str, role: str, content: str, source: str = "web"):

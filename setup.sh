@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-mkdir -p data knowledge secrets
+mkdir -p data/logs knowledge secrets
 [ -f .env ] || cp .env.example .env
 [ -f secrets/ha_token.txt ] || : > secrets/ha_token.txt
 [ -f secrets/openai_api_key.txt ] || : > secrets/openai_api_key.txt

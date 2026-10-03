@@ -26,7 +26,17 @@ class Settings(BaseSettings):
     port: int = 8090
     api_token_file: str = "/run/secrets/hassmind_api_token"
     api_token: str = ""
-    timezone: str = "Asia/Bangkok"
+    timezone: str = "Asia/Ho_Chi_Minh"
+
+    # Observability / diagnostics
+    log_level: str = "INFO"
+    log_format: str = "json"
+    log_file_enabled: bool = True
+    log_file: str = "/data/logs/hassmind.log"
+    log_max_bytes: int = 10 * 1024 * 1024
+    log_backup_count: int = 5
+    log_ring_size: int = 2000
+    log_include_content: bool = False
 
     # Core safety policy
     allow_service_domains: str = "light,switch,fan,climate,media_player,scene,input_boolean,input_number,input_select,number,select"
@@ -60,10 +70,10 @@ class Settings(BaseSettings):
     camera_tts_allow_actions: bool = True
 
     facedetect_enabled: bool = False
-    facedetect_url: str = "http://127.0.0.1:8080"
+    facedetect_url: str = "http://127.0.0.1:8181"
 
     zalo_enabled: bool = False
-    zalo_url: str = "http://127.0.0.1:3000"
+    zalo_url: str = "http://127.0.0.1:3100"
     zalo_username: str = "admin"
     zalo_password_file: str = "/run/secrets/zalo_password"
     zalo_password: str = ""

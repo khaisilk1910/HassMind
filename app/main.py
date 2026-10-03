@@ -1,27 +1,52 @@
 import asyncio
+import json
+import logging
+import os
+import platform
 import secrets
+import sys
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import uvicorn
-from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from pydantic import BaseModel, Field
 
 from .agent import Agent
 from .approvals import apply_approval, decide_by_action, decide_by_web, get_approval
-from .db import add_event, conn, get_messages, init_db, list_approvals, list_event_rules, list_jobs, recent_events, recent_tool_audit, utcnow
+from .db import add_event, conn, get_messages, init_db, list_approvals, list_event_rules, list_jobs, recent_events, recent_tool_audit
 from .event_engine import handle_state_event, set_rule_enabled
 from .ha import HomeAssistantClient
 from .ha_integrations import HAIntegrationBridge
 from .integrations import IntegrationHub
+from .observability import (
+    current_request_id,
+    exception,
+    get_logger,
+    info,
+    log,
+    log_context,
+    log_file_info,
+    recent_logs,
+    sanitize_url,
+    setup_logging,
+    uptime_seconds,
+    warning,
+)
 from .rag import reindex_knowledge, search_knowledge
 from .scheduler import scheduler_loop, set_job_enabled
 from .settings import settings
 from .skills import list_skills
 from .telegram import telegram_loop
 from .tools import ToolRuntime
+
+APP_VERSION = "1.2.0"
+setup_logging()
+logger = get_logger("main")
 
 ha: HomeAssistantClient | None = None
 agent: Agent | None = None
@@ -34,16 +59,20 @@ webhook_tasks: set[asyncio.Task] = set()
 async def require_token(x_hassmind_token: str = Header(default="")):
     expected = settings.read_api_token()
     if not secrets.compare_digest(x_hassmind_token, expected):
+        warning(logger, "api_auth_failed", message="Invalid HassMind API token", request_id=current_request_id(), component="api")
         raise HTTPException(401, "Invalid X-HassMind-Token")
 
 
 async def run_prompt(session_id: str, prompt: str, notify: bool) -> str:
     if agent is None or ha is None:
         raise RuntimeError("HassMind is starting")
-    result = await agent.chat(session_id, prompt, source="system")
-    if notify:
-        await ha.notify(result[:3500], title=f"HassMind · {session_id}")
-    return result
+    with log_context(session_id=session_id, source="system"):
+        info(logger, "system_prompt_started", notify=notify, prompt_chars=len(prompt))
+        result = await agent.chat(session_id, prompt, source="system")
+        if notify:
+            await ha.notify(result[:3500], title=f"HassMind · {session_id}")
+        info(logger, "system_prompt_completed", result_chars=len(result), notify=notify)
+        return result
 
 
 async def event_callback(event: dict[str, Any]):
@@ -56,6 +85,7 @@ async def event_callback(event: dict[str, Any]):
 
     if et == "mobile_app_notification_action":
         action = data.get("action") or ""
+        info(logger, "mobile_notification_action", action=action)
         decision = decide_by_action(action)
         if decision:
             aid, status = decision
@@ -63,10 +93,13 @@ async def event_callback(event: dict[str, Any]):
                 try:
                     result = await apply_approval(ha, aid)
                     await ha.notify(f"Đã áp dụng {aid}: {result['status']}", title="HassMind")
-                except Exception as e:
-                    await ha.notify(f"Không thể áp dụng {aid}: {e}", title="HassMind")
+                    info(logger, "approval_applied_from_mobile", approval_id=aid, status=result.get("status"))
+                except Exception:
+                    exception(logger, "approval_mobile_apply_failed", message="Could not apply approval from mobile action", approval_id=aid)
+                    await ha.notify(f"Không thể áp dụng {aid}", title="HassMind")
             elif status == "rejected":
                 await ha.notify(f"Đã từ chối {aid}", title="HassMind")
+                info(logger, "approval_rejected_from_mobile", approval_id=aid)
         return
 
     if et == "state_changed" and agent is not None:
@@ -74,8 +107,10 @@ async def event_callback(event: dict[str, Any]):
             try:
                 await handle_state_event(event, run_prompt)
             except Exception:
-                pass
-        asyncio.create_task(_run_rule())
+                exception(logger, "event_rule_processing_failed", entity_id=entity_id)
+
+        task = asyncio.create_task(_run_rule(), name=f"event-rule:{entity_id or 'unknown'}")
+        _remember_webhook_task(task)
 
 
 def _extract_zalo_text(payload: dict[str, Any]) -> str:
@@ -102,22 +137,46 @@ def _extract_zalo_text(payload: dict[str, Any]) -> str:
 
 def _remember_webhook_task(task: asyncio.Task) -> None:
     webhook_tasks.add(task)
-    task.add_done_callback(webhook_tasks.discard)
+
+    def _done(done: asyncio.Task) -> None:
+        webhook_tasks.discard(done)
+        if done.cancelled():
+            return
+        try:
+            exc = done.exception()
+        except asyncio.CancelledError:
+            return
+        if exc:
+            log(
+                logger,
+                logging.ERROR,
+                "background_task_failed",
+                message="Background task failed",
+                task_name=done.get_name(),
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+
+    task.add_done_callback(_done)
 
 
 async def _process_zalo_message(payload: dict[str, Any]) -> None:
     if agent is None or integrations is None or integrations.zalo is None:
+        warning(logger, "zalo_message_skipped", reason="agent or Zalo integration unavailable")
         return
     if not settings.zalo_agent_reply_enabled or not settings.zalo_allow_send:
+        info(logger, "zalo_message_skipped", reason="agent reply or send policy disabled")
         return
 
     text = _extract_zalo_text(payload)
     thread_id = str(payload.get("threadId") or payload.get("thread_id") or "").removeprefix("zalo:")
     if not text or not thread_id:
+        warning(logger, "zalo_message_skipped", reason="missing text or thread_id")
         return
 
     allowed = settings.zalo_allowed_thread_ids
     if not allowed or (thread_id not in allowed and "*" not in allowed):
+        info(logger, "zalo_message_skipped", reason="thread not allowed", thread_id=thread_id)
         return
 
     try:
@@ -127,26 +186,30 @@ async def _process_zalo_message(payload: dict[str, Any]) -> None:
     account = str(payload.get("_accountId") or settings.zalo_default_account or "")
     session_id = f"zalo:{account or 'default'}:{thread_id}"
 
-    try:
-        answer = await agent.chat(session_id, text, source="zalo")
-        await integrations.zalo.send_message(
-            thread_id=thread_id,
-            message=answer[:4000],
-            thread_type=thread_type,
-            account_selection=account,
-        )
-    except Exception as exc:
-        add_event("zalo_agent_error", thread_id, {"error": f"{type(exc).__name__}: {exc}"})
+    with log_context(session_id=session_id, source="zalo", component="zalo"):
+        try:
+            info(logger, "zalo_agent_reply_started", thread_id=thread_id, account=account or "default", text_chars=len(text))
+            answer = await agent.chat(session_id, text, source="zalo")
+            await integrations.zalo.send_message(
+                thread_id=thread_id,
+                message=answer[:4000],
+                thread_type=thread_type,
+                account_selection=account,
+            )
+            info(logger, "zalo_agent_reply_completed", thread_id=thread_id, answer_chars=len(answer))
+        except Exception as exc:
+            add_event("zalo_agent_error", thread_id, {"error": f"{type(exc).__name__}: {exc}"})
+            exception(logger, "zalo_agent_reply_failed", thread_id=thread_id, error_type=type(exc).__name__)
 
 
 async def _zalo_webhook_registration_loop() -> None:
-    """Keep the HassMind message webhook present, including accounts that login later."""
     if integrations is None or integrations.zalo is None:
         return
     secret = settings.read_zalo_webhook_secret()
     base = settings.zalo_webhook_callback_base.rstrip("/")
     if not secret or not base:
         add_event("zalo_webhook_registration", None, {"status": "skipped", "reason": "missing callback base or webhook secret"})
+        warning(logger, "zalo_webhook_registration_skipped", reason="missing callback base or webhook secret")
         return
 
     callback = f"{base}/webhooks/zalo/{secret}"
@@ -156,8 +219,8 @@ async def _zalo_webhook_registration_loop() -> None:
             result = await integrations.zalo.ensure_hassmind_webhooks(callback)
             if last_status != "ok":
                 add_event("zalo_webhook_registration", None, {"status": "ok", "result": result})
+                info(logger, "zalo_webhook_registration_ok", callback=sanitize_url(callback))
             last_status = "ok"
-            # Reconcile periodically so accounts logged in after startup are picked up.
             delay = 3600
         except asyncio.CancelledError:
             raise
@@ -165,6 +228,7 @@ async def _zalo_webhook_registration_loop() -> None:
             current = f"{type(exc).__name__}: {exc}"
             if current != last_status:
                 add_event("zalo_webhook_registration", None, {"status": "error", "error": current})
+                exception(logger, "zalo_webhook_registration_failed", callback=sanitize_url(callback), retry_in_seconds=60)
             last_status = current
             delay = 60
 
@@ -177,33 +241,135 @@ async def _zalo_webhook_registration_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global ha, agent, tasks, integrations
-    init_db()
-    stop_event.clear()
-    ha = HomeAssistantClient()
-    integrations = IntegrationHub()
-    agent = Agent(ToolRuntime(ha, integrations))
-    tasks = [
-        asyncio.create_task(ha.listen_events(event_callback, stop_event), name="ha-events"),
-        asyncio.create_task(scheduler_loop(stop_event, run_prompt), name="scheduler"),
-        asyncio.create_task(telegram_loop(stop_event, lambda sid, text, src: agent.chat(sid, text, src)), name="telegram"),
-    ]
-    if settings.zalo_enabled and settings.zalo_webhook_enabled and settings.zalo_auto_register_webhook:
-        registration = asyncio.create_task(_zalo_webhook_registration_loop(), name="zalo-webhook-register")
-        tasks.append(registration)
-    yield
-    stop_event.set()
-    for t in tasks:
-        t.cancel()
-    for t in list(webhook_tasks):
-        t.cancel()
-    await asyncio.gather(*tasks, *list(webhook_tasks), return_exceptions=True)
-    if integrations:
-        await integrations.close()
-    if ha:
-        await ha.close()
+    startup_started = perf_counter()
+    db_path = Path(settings.db_path)
+    info(
+        logger,
+        "application_starting",
+        version=APP_VERSION,
+        python=sys.version.split()[0],
+        pid=os.getpid(),
+        uid=os.getuid() if hasattr(os, "getuid") else None,
+        cwd=os.getcwd(),
+        db_path=str(db_path),
+        db_parent_exists=db_path.parent.exists(),
+        db_parent_writable=os.access(db_path.parent, os.W_OK) if db_path.parent.exists() else False,
+        log=log_file_info(),
+    )
+    try:
+        init_db()
+        info(logger, "database_initialized", db_path=str(db_path), exists=db_path.exists(), size_bytes=db_path.stat().st_size if db_path.exists() else 0)
+        stop_event.clear()
+        ha = HomeAssistantClient()
+        integrations = IntegrationHub()
+        agent = Agent(ToolRuntime(ha, integrations))
+        tasks = [
+            asyncio.create_task(ha.listen_events(event_callback, stop_event), name="ha-events"),
+            asyncio.create_task(scheduler_loop(stop_event, run_prompt), name="scheduler"),
+            asyncio.create_task(telegram_loop(stop_event, lambda sid, text, src: agent.chat(sid, text, src)), name="telegram"),
+        ]
+        if settings.zalo_enabled and settings.zalo_webhook_enabled and settings.zalo_auto_register_webhook:
+            tasks.append(asyncio.create_task(_zalo_webhook_registration_loop(), name="zalo-webhook-register"))
+        info(
+            logger,
+            "application_started",
+            version=APP_VERSION,
+            duration_ms=round((perf_counter() - startup_started) * 1000, 2),
+            background_tasks=[t.get_name() for t in tasks],
+        )
+        yield
+    except Exception:
+        exception(
+            logger,
+            "application_startup_failed",
+            message="HassMind startup failed",
+            duration_ms=round((perf_counter() - startup_started) * 1000, 2),
+        )
+        raise
+    finally:
+        shutdown_started = perf_counter()
+        info(logger, "application_stopping", task_count=len(tasks), webhook_task_count=len(webhook_tasks))
+        stop_event.set()
+        for t in tasks:
+            t.cancel()
+        for t in list(webhook_tasks):
+            t.cancel()
+        await asyncio.gather(*tasks, *list(webhook_tasks), return_exceptions=True)
+        if integrations:
+            await integrations.close()
+        if ha:
+            await ha.close()
+        info(logger, "application_stopped", duration_ms=round((perf_counter() - shutdown_started) * 1000, 2))
 
 
-app = FastAPI(title="HassMind v1", version="1.1.0", lifespan=lifespan)
+app = FastAPI(title="HassMind", version=APP_VERSION, lifespan=lifespan)
+
+
+@app.middleware("http")
+async def request_observability(request: Request, call_next):
+    request_id = (request.headers.get("x-request-id") or uuid.uuid4().hex)[:64]
+    started = perf_counter()
+    client_ip = request.client.host if request.client else None
+    safe_url = sanitize_url(str(request.url)) if settings.log_include_content else sanitize_url(request.url.path)
+    query_keys = list(request.query_params.keys())
+    with log_context(request_id=request_id, source="http", component="api"):
+        info(
+            logger,
+            "http_request_started",
+            method=request.method,
+            url=safe_url,
+            query_keys=query_keys,
+            client_ip=client_ip,
+            user_agent=(request.headers.get("user-agent") or "")[:500],
+            component="api",
+        )
+        try:
+            response = await call_next(request)
+        except Exception:
+            exception(
+                logger,
+                "http_request_unhandled_exception",
+                message="Unhandled exception while processing HTTP request",
+                method=request.method,
+                url=safe_url,
+                client_ip=client_ip,
+                duration_ms=round((perf_counter() - started) * 1000, 2),
+            )
+            raise
+        response.headers["X-Request-ID"] = request_id
+        info(
+            logger,
+            "http_request_completed",
+            method=request.method,
+            url=safe_url,
+            status_code=response.status_code,
+            duration_ms=round((perf_counter() - started) * 1000, 2),
+            client_ip=client_ip,
+            component="api",
+        )
+        return response
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    rid = current_request_id() or uuid.uuid4().hex
+    exception(
+        logger,
+        "api_unhandled_exception",
+        message="Unhandled API exception",
+        method=request.method,
+        url=sanitize_url(str(request.url)),
+        error_type=type(exc).__name__,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Internal server error",
+            "error_type": type(exc).__name__,
+            "request_id": rid,
+        },
+        headers={"X-Request-ID": rid},
+    )
 
 
 class ChatIn(BaseModel):
@@ -236,28 +402,162 @@ class RuleIn(BaseModel):
     notify: bool = True
 
 
+class ClientLogIn(BaseModel):
+    level: str = "ERROR"
+    event: str = "browser_error"
+    message: str
+    stack: str = ""
+    url: str = ""
+    session_id: str = ""
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
 @app.get("/")
 async def root():
-    return FileResponse("/app/static/index.html")
+    return FileResponse(
+        "/app/static/index.html",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 @app.get("/health")
 async def health():
-    return {"ok": True, "name": settings.agent_name, "version": "1.1.0", "ha_url": settings.ha_url}
+    return {
+        "ok": True,
+        "name": settings.agent_name,
+        "version": APP_VERSION,
+        "ha_url": settings.ha_url,
+        "uptime_seconds": uptime_seconds(),
+    }
 
 
 @app.get("/api/status", dependencies=[Depends(require_token)])
 async def status():
     ha_ok = False
     ha_version = None
+    ha_error = None
     if ha:
         try:
             cfg = await ha._get("/api/config")
             ha_ok = True
             ha_version = cfg.get("version")
-        except Exception:
-            pass
-    return {"ok": True, "ha_connected": ha_ok, "ha_version": ha_version, "model": settings.openai_model, "scheduler": settings.scheduler_enabled, "event_agent": settings.event_agent_enabled}
+        except Exception as exc:
+            ha_error = f"{type(exc).__name__}: {exc}"
+            warning(logger, "status_ha_check_failed", error=ha_error)
+    return {
+        "ok": True,
+        "version": APP_VERSION,
+        "uptime_seconds": uptime_seconds(),
+        "ha_connected": ha_ok,
+        "ha_version": ha_version,
+        "ha_error": ha_error,
+        "model": settings.openai_model,
+        "scheduler": settings.scheduler_enabled,
+        "event_agent": settings.event_agent_enabled,
+        "log_level": settings.log_level.upper(),
+        "log_file": settings.log_file if settings.log_file_enabled else "disabled",
+    }
+
+
+@app.get("/api/diagnostics", dependencies=[Depends(require_token)])
+async def diagnostics():
+    db_path = Path(settings.db_path)
+    task_info = []
+    for task in tasks:
+        task_info.append({"name": task.get_name(), "done": task.done(), "cancelled": task.cancelled()})
+    return {
+        "app": {
+            "name": settings.agent_name,
+            "version": APP_VERSION,
+            "uptime_seconds": uptime_seconds(),
+            "pid": os.getpid(),
+            "python": sys.version,
+            "platform": platform.platform(),
+        },
+        "database": {
+            "path": str(db_path),
+            "exists": db_path.exists(),
+            "size_bytes": db_path.stat().st_size if db_path.exists() else 0,
+            "parent_exists": db_path.parent.exists(),
+            "parent_writable": os.access(db_path.parent, os.W_OK) if db_path.parent.exists() else False,
+        },
+        "logging": log_file_info(),
+        "runtime": {
+            "background_tasks": task_info,
+            "webhook_tasks": len(webhook_tasks),
+        },
+        "configuration": {
+            "ha_url": settings.ha_url,
+            "openai_base_url": settings.openai_base_url,
+            "openai_model": settings.openai_model,
+            "searxng_url": settings.searxng_url,
+            "camera_tts_enabled": settings.camera_tts_enabled,
+            "camera_tts_url": settings.camera_tts_url,
+            "facedetect_enabled": settings.facedetect_enabled,
+            "facedetect_url": settings.facedetect_url,
+            "zalo_enabled": settings.zalo_enabled,
+            "zalo_url": settings.zalo_url,
+            "wyoming_enabled": settings.wyoming_enabled,
+            "wyoming_host": settings.wyoming_host,
+            "wyoming_port": settings.wyoming_port,
+            "ha_custom_integrations_enabled": settings.ha_custom_integrations_enabled,
+        },
+    }
+
+
+@app.get("/api/logs", dependencies=[Depends(require_token)])
+async def logs_api(
+    limit: int = Query(default=250, ge=1, le=2000),
+    level: str = "",
+    component: str = "",
+    q: str = "",
+):
+    return recent_logs(limit=limit, level=level, component=component, query=q)
+
+
+@app.get("/api/logs/export", dependencies=[Depends(require_token)])
+async def logs_export(
+    limit: int = Query(default=2000, ge=1, le=2000),
+    level: str = "",
+    component: str = "",
+    q: str = "",
+):
+    rows = list(reversed(recent_logs(limit=limit, level=level, component=component, query=q)))
+    text = "\n".join(json.dumps(row, ensure_ascii=False, default=str) for row in rows)
+    return PlainTextResponse(
+        text,
+        media_type="application/x-ndjson",
+        headers={"Content-Disposition": f'attachment; filename="hassmind-logs-{APP_VERSION}.ndjson"'},
+    )
+
+
+@app.post("/api/client-log", dependencies=[Depends(require_token)])
+async def client_log(body: ClientLogIn):
+    level_name = body.level.upper()
+    level = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "WARN": logging.WARNING,
+        "ERROR": logging.ERROR,
+        "CRITICAL": logging.CRITICAL,
+    }.get(level_name, logging.ERROR)
+    with log_context(session_id=body.session_id or None, source="browser", component="frontend"):
+        log(
+            logger,
+            level,
+            f"browser_{body.event}",
+            message=body.message,
+            stack=body.stack[:20000],
+            url=sanitize_url(body.url) if body.url else "",
+            details=body.details,
+            component="frontend",
+        )
+    return {"ok": True, "request_id": current_request_id()}
 
 
 @app.get("/api/integrations", dependencies=[Depends(require_token)])
@@ -288,6 +588,7 @@ async def zalo_webhook(secret: str, payload: dict[str, Any]):
         raise HTTPException(404, "Webhook disabled")
     expected = settings.read_zalo_webhook_secret()
     if not expected or not secrets.compare_digest(secret, expected):
+        warning(logger, "zalo_webhook_auth_failed")
         raise HTTPException(404, "Webhook not found")
 
     thread_id = str(payload.get("threadId") or payload.get("thread_id") or "")
@@ -304,6 +605,13 @@ async def zalo_webhook(secret: str, payload: dict[str, Any]):
         and bool(allowed)
         and (normalized_thread in allowed or "*" in allowed)
     )
+    info(
+        logger,
+        "zalo_webhook_received",
+        thread_id=normalized_thread,
+        text_chars=len(text),
+        reply_scheduled=can_reply,
+    )
     if can_reply:
         _remember_webhook_task(asyncio.create_task(_process_zalo_message(payload), name=f"zalo:{normalized_thread}"))
     return {"accepted": True, "agent_reply_scheduled": can_reply}
@@ -314,8 +622,11 @@ async def chat(body: ChatIn):
     if agent is None:
         raise HTTPException(503, "Agent is starting")
     sid = body.session_id or uuid.uuid4().hex
-    answer = await agent.chat(sid, body.message, source="web")
-    return {"session_id": sid, "answer": answer}
+    with log_context(session_id=sid, source="web", component="chat_api"):
+        info(logger, "chat_api_request", message_chars=len(body.message), component="chat_api")
+        answer = await agent.chat(sid, body.message, source="web")
+        info(logger, "chat_api_response", answer_chars=len(answer), component="chat_api")
+    return {"session_id": sid, "answer": answer, "request_id": current_request_id()}
 
 
 @app.get("/api/messages/{session_id}", dependencies=[Depends(require_token)])
@@ -350,6 +661,7 @@ async def approval(aid: str):
 async def approval_decision(aid: str, body: DecisionIn):
     if ha is None:
         raise HTTPException(503, "HA client unavailable")
+    info(logger, "approval_decision", approval_id=aid, approve=body.approve)
     d = decide_by_web(aid, body.approve)
     if body.approve and settings.auto_apply_after_approval:
         d["apply"] = await apply_approval(ha, aid)
@@ -377,6 +689,7 @@ async def toggle_job(job_id: int, body: ToggleIn):
 async def delete_job(job_id: int):
     with conn() as c:
         c.execute("DELETE FROM jobs WHERE id=?", (job_id,))
+    info(logger, "job_deleted", job_id=job_id)
     return {"ok": True}
 
 
@@ -401,12 +714,15 @@ async def toggle_rule(rule_id: int, body: ToggleIn):
 async def delete_rule(rule_id: int):
     with conn() as c:
         c.execute("DELETE FROM event_rules WHERE id=?", (rule_id,))
+    info(logger, "event_rule_deleted", rule_id=rule_id)
     return {"ok": True}
 
 
 @app.post("/api/knowledge/reindex", dependencies=[Depends(require_token)])
 async def reindex():
-    return reindex_knowledge()
+    result = reindex_knowledge()
+    info(logger, "knowledge_reindexed", result=result)
+    return result
 
 
 @app.get("/api/knowledge/search", dependencies=[Depends(require_token)])
@@ -420,4 +736,11 @@ async def skills():
 
 
 if __name__ == "__main__":
-    uvicorn.run("app.main:app", host=settings.host, port=settings.port, reload=False)
+    uvicorn.run(
+        "app.main:app",
+        host=settings.host,
+        port=settings.port,
+        reload=False,
+        access_log=False,
+        log_config=None,
+    )

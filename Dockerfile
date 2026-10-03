@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY app /app/app
 COPY config /app/config
 COPY static /app/static
+COPY VERSION /app/VERSION
 
 RUN mkdir -p /data /knowledge && chown -R hassmind:hassmind /app /data /knowledge
 
