@@ -1,4 +1,10 @@
-# HassMind v1.2.0 — AI Agent riêng cho Home Assistant
+# HassMind v1.2.1 — AI Agent riêng cho Home Assistant
+
+## Mới trong v1.2.1
+
+- Sửa lỗi đổi/reset mật khẩu trả `Internal server error` khi mật khẩu mới không đạt policy.
+- API giờ trả HTTP 400 kèm lý do cụ thể để UI hiển thị trực tiếp.
+- Settings hiển thị rõ policy mật khẩu và kiểm tra độ dài tối thiểu ngay trên trình duyệt.
 
 HassMind chạy **độc lập** với stack Home Assistant hiện có. Container kết nối HA qua REST/WebSocket, có dashboard quản trị riêng tại port `8090` và không cần ghép vào stack Home Assistant.
 
@@ -608,7 +614,7 @@ Khuyến nghị: lần deploy đầu để các cờ gửi/xóa/download/auto-re
 ## 22. Quy trình nâng cấp từ HassMind v1 cũ
 
 1. Backup `data/hassmind.db`, `.env`, `config/`, `knowledge/` và secrets hiện có.
-2. Thay code bằng bản v1.2.0 này nhưng giữ `data/` cũ.
+2. Thay code bằng bản v1.2.1 này nhưng giữ `data/` cũ.
 3. Chạy `sudo ./setup.sh`. Script chỉ tạo secret còn thiếu, không ghi đè secret đang có. Bản này cần thêm `admin_password.txt` và `admin_recovery_key.txt`.
 4. Merge các biến mới từ `.env.example` vào `.env`, đặc biệt nhóm `ADMIN_*`, `RUNTIME_SECRET_DIR`, `LOG_SCRUB_EXISTING_ON_START` và `AUDIT_SCRUB_EXISTING_ON_START`.
 5. Deploy lại HassMind. Lần startup đầu sẽ tạo bảng admin/session mới, bootstrap tài khoản admin và best-effort scrub event/tool-audit + log file cũ.

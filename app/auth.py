@@ -284,7 +284,18 @@ def change_password(user_id: int, current_password: str, new_password: str, requ
     if not row or not verify_password(row["password_hash"], current_password):
         _audit("password_change_failed", username=row["username"] if row else "", user_id=user_id, ip=client_ip(request), success=False)
         raise HTTPException(400, "Mật khẩu hiện tại không đúng.")
-    validate_password(new_password, row["username"])
+    try:
+        validate_password(new_password, row["username"])
+    except ValueError as exc:
+        _audit(
+            "password_change_failed",
+            username=row["username"],
+            user_id=user_id,
+            ip=client_ip(request),
+            success=False,
+            details="password_policy_rejected",
+        )
+        raise HTTPException(400, str(exc)) from exc
     register_secret(current_password)
     register_secret(new_password)
     now = utcnow()
@@ -298,7 +309,10 @@ def change_password(user_id: int, current_password: str, new_password: str, requ
 
 def change_username(user_id: int, current_password: str, new_username: str, request: Request) -> str:
     new_username = _clean_username(new_username)
-    validate_username(new_username)
+    try:
+        validate_username(new_username)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     with conn() as c:
         row = c.execute("SELECT * FROM admin_users WHERE id=?", (user_id,)).fetchone()
         if not row or not verify_password(row["password_hash"], current_password):
@@ -333,7 +347,18 @@ def reset_password(username: str, recovery_key: str, new_password: str, request:
         _audit("password_reset_failed", username=username, ip=ip, success=False)
         raise HTTPException(400, "Thông tin khôi phục không hợp lệ.")
     _clear_rate_failures(rate_key)
-    validate_password(new_password, row["username"])
+    try:
+        validate_password(new_password, row["username"])
+    except ValueError as exc:
+        _audit(
+            "password_reset_failed",
+            username=row["username"],
+            user_id=row["id"],
+            ip=ip,
+            success=False,
+            details="password_policy_rejected",
+        )
+        raise HTTPException(400, str(exc)) from exc
     register_secret(new_password)
     now = utcnow()
     with conn() as c:

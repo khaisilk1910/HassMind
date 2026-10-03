@@ -67,7 +67,7 @@ from .tools import ToolRuntime
 
 os.umask(0o077)
 
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 setup_logging()
