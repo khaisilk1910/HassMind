@@ -72,6 +72,7 @@ services:
 
       KNOWLEDGE_DIR: /knowledge
       SKILLS_DIR: /app/config/skills
+      USER_SKILLS_DIR: /data/skills
       MCP_CONFIG: /app/config/mcp_servers.yaml
 
       # Integration adapters are configured in Web Admin and persisted under /data.

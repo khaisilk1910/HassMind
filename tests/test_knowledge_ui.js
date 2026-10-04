@@ -13,7 +13,7 @@ const script=fs.readFileSync(path.join(root,'static','app.js'),'utf8').replace(/
 
 function harness(){
   const nodes=new Map(),calls=[];
-  const element=()=>({innerHTML:'',textContent:'',value:'',checked:false,disabled:false,dataset:{},style:{},classList:{add(){},remove(){},toggle(){}},appendChild(){},remove(){},addEventListener(){},querySelector(){return null},querySelectorAll(){return []},reset(){}});
+  const element=()=>({innerHTML:'',textContent:'',value:'',checked:false,disabled:false,dataset:{},style:{},classList:{add(){},remove(){},toggle(){}},appendChild(){},remove(){},addEventListener(){},querySelector(){return null},querySelectorAll(){return []},reset(){},scrollIntoView(){},focus(){}});
   for(const match of html.matchAll(/id="([^"]+)"/g))nodes.set(match[1],element());
   // This node is inserted into proposal details by the renderer.
   nodes.set('knowledgeDryRunResult',element());
@@ -182,4 +182,24 @@ test('Time formatter preserves the server timezone offset instead of browser-loc
   const h=harness();
   assert.equal(h.run("fmtTime('2026-10-04T18:27:57.027022+07:00')"),'04/10/2026 18:27:57 +07:00');
   assert.equal(h.run("fmtTime('2026-10-04T11:27:57Z')"),'04/10/2026 11:27:57 +00:00');
+});
+
+
+test('Skills manager exposes create edit test enable delete version and rollback controls',()=>{
+  for(const id of ['skillMetrics','skillsManageBox','skillForm','skillName','skillDescription','skillBody','skillEnabled','skillValidationBox','skillHistoryBox'])assert.match(html,new RegExp('id="'+id+'"'));
+  for(const action of ['skill-new','skills-refresh','skill-edit','skill-test','skill-toggle','skill-delete','skill-versions','skill-rollback','skill-validate'])assert.match(script,new RegExp(action));
+  assert.match(css,/\.skills-scroll\s*\{[^}]*overflow-y:auto/s);
+  assert.match(script,/skills:loadSkills/);
+});
+
+test('Skills manager loads disabled skills, renders source/version, and validates draft with CSRF',async()=>{
+  const h=harness();h.run("uiState.csrf='csrf-skill'");
+  h.respond(async(url,opt)=>{
+    if(url==='/api/skills?include_disabled=true')return {body:[{name:'lighting-optimizer',description:'Optimize lights',source:'builtin',path:'/app/config/skills/lighting-optimizer.md',enabled:true,valid:true,version:1,bytes:200,override:false},{name:'custom-home',description:'Custom',source:'user',path:'/data/skills/custom-home.md',enabled:false,valid:true,version:3,bytes:300,override:false}]};
+    if(url==='/api/skills/validate')return {body:{ok:true,errors:[],warnings:[]}};
+    throw new Error('unexpected '+url);
+  });
+  await h.run('loadSkills()');assert.match(h.nodes.get('skillsManageBox').innerHTML,/lighting-optimizer/);assert.match(h.nodes.get('skillsManageBox').innerHTML,/v1/);assert.match(h.nodes.get('skillsManageBox').innerHTML,/custom-home/);assert.match(h.nodes.get('skillsManageBox').innerHTML,/disabled/);
+  h.nodes.get('skillName').value='new-skill';h.nodes.get('skillDescription').value='Mô tả đủ dài cho routing chính xác của skill mới.';h.nodes.get('skillBody').value='# Objective\nMục tiêu.\n\n# Workflow\n1. Kiểm tra state trước khi action.';h.nodes.get('skillEnabled').checked=true;
+  await h.run('validateSkillDraft()');const call=h.calls.find(x=>x.url==='/api/skills/validate');assert.ok(call);assert.equal(call.opt.method,'POST');assert.equal(call.opt.headers['X-CSRF-Token'],'csrf-skill');assert.equal(JSON.parse(call.opt.body).name,'new-skill');assert.match(h.nodes.get('skillValidationBox').innerHTML,/Validation OK/);
 });

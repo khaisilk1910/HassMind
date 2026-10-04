@@ -27,7 +27,7 @@ migrate_legacy_integration_secret() {
   fi
 }
 
-mkdir -p data/logs data/secrets knowledge secrets
+mkdir -p data/logs data/secrets data/skills knowledge secrets
 [ -f .env ] || cp .env.example .env
 [ -f secrets/ha_token.txt ] || : > secrets/ha_token.txt
 [ -f secrets/openai_api_key.txt ] || : > secrets/openai_api_key.txt
@@ -46,7 +46,7 @@ migrate_legacy_integration_secret secrets/zalo_webhook_secret.txt data/secrets/i
 
 chmod 600 secrets/*.txt 2>/dev/null || true
 chmod 600 data/secrets/* 2>/dev/null || true
-chmod 700 data data/logs data/secrets 2>/dev/null || true
+chmod 700 data data/logs data/secrets data/skills 2>/dev/null || true
 if [ "$(id -u)" = "0" ]; then
   chown -R 10001:10001 data
 else

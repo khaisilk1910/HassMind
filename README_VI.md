@@ -1,13 +1,21 @@
-# HassMind v1.3.6 — AI Agent riêng cho Home Assistant
+# HassMind v1.3.7 — AI Agent riêng cho Home Assistant
+
+## Mới trong v1.3.7
+
+- Thêm **Skills Manager** trong Web Admin: tạo mới, sửa, kiểm tra, bật/tắt, xóa và xem lịch sử/rollback từng skill. Các thao tác ghi chỉ dành cho Admin và tiếp tục dùng CSRF/audit hiện có.
+- Tách skill thành hai lớp an toàn: `/app/config/skills` là **built-in read-only**, còn `/data/skills` là **user-managed read-write**. Khi cùng tên, bản trong `/data/skills` override built-in; xóa override sẽ tự trở về bản mặc định.
+- Thêm validation trước khi lưu/test: slug tên skill, YAML frontmatter `name` + `description`, kích thước tối đa, body không rỗng, cảnh báo cấu trúc; skill invalid/disabled không được agent sử dụng.
+- Thêm **version history + rollback** với snapshot trước thay đổi, ghi file atomic và quyền file/thư mục hạn chế. File skill dạng symbolic link bị từ chối để tránh đọc file ngoài thư mục quản lý.
+- Cài sẵn **21 skill Home Assistant** cho routing, presence, lighting, climate, device health, automation, Knowledge, notification, security, energy, battery, night mode, arrival/departure, air quality, leak response, integration, report, self-maintenance và incident diagnosis.
+- System prompt được nối với `skill_list`/`skill_read`: workflow lặp lại sẽ ưu tiên skill đang enabled và valid, trong khi state Home Assistant realtime vẫn luôn được đọc từ tool thay vì Knowledge/skill tĩnh.
+
+Đọc [changelog 1.3.7](CHANGELOG_V1.3.7.md) và [QA 1.3.7](QA_V1.3.7.md).
 
 ## Mới trong v1.3.6
 
-- Chuẩn hóa kết quả **Luôn gửi kết quả**: loại bỏ wrapper lỗi kiểu `*(Theo đúng yêu*(...)\*`, bỏ câu meta thừa và làm sạch trước cả khi gửi lẫn khi lưu `last_result`. Kết quả không có việc cần xử lý được trình bày tự nhiên, ví dụ `✅ Không phát hiện thiết bị nào cần xử lý.`
-- Scheduler và Event rules đều có **Khi nào gửi**: `Luôn gửi kết quả` hoặc `Chỉ gửi khi có nội dung cần báo`; rule cũ tự migrate với `notify_mode=always`.
-- Tool audit có bộ chọn 20/50/100/200/500 bản ghi và vùng cuộn riêng, không kéo dài toàn trang.
-- Scheduler/Event rules mặc định thu gọn chỉ còn tiêu đề; mở từng mục để xem nội dung. API/UI phân trang cố định **20 job/rule mỗi trang**.
-- Menu trái chuyển nhóm **Chẩn đoán** xuống sau **Tự động hóa**.
-- Tiếp tục dùng một pipeline notification tập trung: Điện thoại nhận plain text sạch Markdown với emoji/bullet; Zalo dùng rich-text compiler như phản hồi chat Zalo và hỗ trợ `thread_id`/fallback cấu hình hiện có.
+- Chuẩn hóa kết quả **Luôn gửi kết quả**: loại bỏ wrapper lỗi kiểu `*(Theo đúng yêu*(...)*`, bỏ câu meta thừa và làm sạch trước cả khi gửi lẫn khi lưu `last_result`.
+- Scheduler và Event rules đều có **Khi nào gửi**; Tool audit có bộ chọn số lượng + vùng cuộn; Scheduler/Event rules thu gọn và phân trang 20 mục/trang.
+- Menu trái chuyển **Chẩn đoán** xuống sau **Tự động hóa** và tiếp tục dùng pipeline notification chung cho Điện thoại/Zalo.
 
 Đọc [changelog 1.3.6](CHANGELOG_V1.3.6.md) và [QA 1.3.6](QA_V1.3.6.md).
 
@@ -364,15 +372,34 @@ Không lưu password/token trong knowledge.
 
 ## 10. Skills
 
-Built-in skills:
+HassMind v1.3.7 có trang **Skills** trong Web Admin để tạo, sửa, test, bật/tắt, xóa user skill, xem version và rollback.
 
-- `daily-home-report`
-- `energy-optimization`
-- `automation-review`
-- `troubleshoot-device`
-- `self-maintenance`
+- Built-in skills nằm trong `/app/config/skills` và được xem là read-only.
+- Khi sửa built-in, HassMind tạo override trong `/data/skills`.
+- User skill mới cũng lưu trong `/data/skills`; metadata/history nằm trong các thư mục ẩn bên dưới `/data/skills`.
+- Xóa một override sẽ tự quay về bản built-in tương ứng.
+- Built-in nguyên bản không bị xóa; hãy tắt nếu không muốn agent sử dụng.
+- Skill invalid hoặc disabled không xuất hiện qua `skill_list` của agent.
 
-Thêm skill bằng file Markdown trong `config/skills/`.
+Bộ skill Home Assistant cài sẵn gồm router, presence, lighting, climate, device health, automation review/designer, Knowledge curator, notification, security, energy, battery, night mode, arrival/departure, air quality, water leak, integration orchestration, daily report, self-maintenance và incident diagnosis.
+
+Skill dùng YAML frontmatter tối thiểu:
+
+```markdown
+---
+name: presence-aware-control
+description: Điều khiển thiết bị theo hiện diện và ngữ cảnh phòng.
+---
+
+# Objective
+...
+
+# Workflow
+...
+
+# Safety rules
+...
+```
 
 ## 11. MCP
 

@@ -1,4 +1,4 @@
-# HassMind v1.2.0 — Security hardening
+# HassMind v1.3.7 — Security hardening
 
 Tài liệu này mô tả security boundary của Web Admin, secret, log và Docker. Mục tiêu là giảm tối đa khả năng lộ credential và giới hạn blast radius khi dashboard hoặc một integration gặp lỗi.
 
@@ -94,11 +94,19 @@ Hai cờ scrub thực hiện best-effort sanitization log rotation và event/too
 
 ## 5. File permissions
 
-- `/data`, `/data/logs`, `/data/secrets`: mode `0700` khi ứng dụng có thể đặt quyền.
+- `/data`, `/data/logs`, `/data/secrets`, `/data/skills`: mode `0700` khi ứng dụng có thể đặt quyền.
 - SQLite và runtime secret: mode `0600`.
 - `setup.sh` đặt `umask 077` và `secrets/*.txt` mode `0600`.
 - Runtime secret được ghi qua temporary file rồi `os.replace()` để tránh ghi dở dang.
 - Logger từ chối ghi qua symbolic link ở đường dẫn log chính.
+
+### Managed Skills
+
+- Built-in skill ở `/app/config/skills` tiếp tục nằm trên mount read-only; Web Admin không sửa trực tiếp nguồn mặc định.
+- User skill/override nằm trong `/data/skills`, file ghi mode `0600` và dùng atomic replace.
+- Tên skill chỉ chấp nhận slug chữ thường/số/dấu gạch ngang để chặn path traversal.
+- Loader từ chối `.md` là symbolic link; skill invalid/disabled không được đưa cho agent qua `skill_list`/`skill_read`.
+- CRUD/enable/rollback skill là admin-only, đi qua CSRF và admin audit như các mutation Web Admin khác.
 
 ## 6. Docker hardening
 

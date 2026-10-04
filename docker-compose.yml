@@ -12,6 +12,7 @@ services:
     environment:
       TZ: ${TZ:-Asia/Ho_Chi_Minh}
       TIMEZONE: ${TIMEZONE:-Asia/Ho_Chi_Minh}
+      USER_SKILLS_DIR: /data/skills
       HA_TOKEN_FILE: /run/secrets/ha_token
       OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
       API_TOKEN_FILE: /run/secrets/hassmind_api_token

@@ -67,14 +67,17 @@ from . import knowledge_governance as knowledge
 from .scheduler import scheduler_loop, set_job_enabled, update_job
 from .settings import settings
 from .time_utils import configure_process_timezone, timezone_name
-from .skills import list_skills
+from .skills import (
+    create_skill, delete_skill, list_skill_versions, list_skills, read_skill,
+    rollback_skill, set_skill_enabled, test_skill, update_skill, validate_skill_content, compose_skill,
+)
 from .telegram import telegram_supervisor
 from .tools import ToolRuntime
 
 os.umask(0o077)
 configure_process_timezone()
 
-APP_VERSION = "1.3.6"
+APP_VERSION = "1.3.7"
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 setup_logging()
@@ -605,6 +608,27 @@ class NotificationPreferenceIn(BaseModel):
     enabled: bool = True
     channel: str = Field(default="mobile", pattern="^(mobile|zalo)$")
     zalo_thread_id: str = Field(default="", max_length=255)
+
+
+class SkillIn(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    description: str = Field(min_length=1, max_length=1000)
+    body: str = Field(min_length=1, max_length=128 * 1024)
+    enabled: bool = True
+
+
+class SkillUpdateIn(BaseModel):
+    description: str = Field(min_length=1, max_length=1000)
+    body: str = Field(min_length=1, max_length=128 * 1024)
+    enabled: bool = True
+
+
+class SkillToggleIn(BaseModel):
+    enabled: bool
+
+
+class SkillRollbackIn(BaseModel):
+    version: int = Field(ge=1)
 
 
 class ClientLogIn(BaseModel):
@@ -1463,8 +1487,144 @@ async def knowledge_audit(limit: int = 100):
 
 
 @app.get("/api/skills", dependencies=[Depends(require_access)])
-async def skills():
-    return list_skills()
+async def skills(include_disabled: bool = True):
+    return list_skills(include_disabled=include_disabled)
+
+
+@app.get("/api/skills/{name}", dependencies=[Depends(require_admin)])
+async def skill_get(name: str):
+    try:
+        return read_skill(name, include_disabled=True)
+    except (KeyError, ValueError):
+        raise HTTPException(404, "Skill not found")
+
+
+@app.post("/api/skills/validate", dependencies=[Depends(require_admin)])
+async def skill_validate(body: SkillIn):
+    try:
+        raw = compose_skill(body.name, body.description, body.body)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return validate_skill_content(raw, expected_name=body.name)
+
+
+@app.post("/api/skills", dependencies=[Depends(require_admin)])
+async def skill_create(body: SkillIn, request: Request):
+    try:
+        result = create_skill(body.name, body.description, body.body, body.enabled)
+    except FileExistsError:
+        raise HTTPException(409, "Skill already exists")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc))
+    record_admin_audit(
+        "skill_created", request,
+        user_id=request.state.admin_session["user_id"],
+        username=request.state.admin_session["username"],
+        details=f"skill={body.name}",
+    )
+    info(logger, "skill_created", skill=body.name, version=result.get("version"), component="skills")
+    return result
+
+
+@app.put("/api/skills/{name}", dependencies=[Depends(require_admin)])
+async def skill_update(name: str, body: SkillUpdateIn, request: Request):
+    try:
+        result = update_skill(name, body.description, body.body, body.enabled)
+    except KeyError:
+        raise HTTPException(404, "Skill not found")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc))
+    record_admin_audit(
+        "skill_updated", request,
+        user_id=request.state.admin_session["user_id"],
+        username=request.state.admin_session["username"],
+        details=f"skill={name};version={result.get('version')}",
+    )
+    info(logger, "skill_updated", skill=name, version=result.get("version"), component="skills")
+    return result
+
+
+@app.patch("/api/skills/{name}", dependencies=[Depends(require_admin)])
+async def skill_toggle(name: str, body: SkillToggleIn, request: Request):
+    try:
+        result = set_skill_enabled(name, body.enabled)
+    except (KeyError, ValueError):
+        raise HTTPException(404, "Skill not found")
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc))
+    record_admin_audit(
+        "skill_toggled", request,
+        user_id=request.state.admin_session["user_id"],
+        username=request.state.admin_session["username"],
+        details=f"skill={name};enabled={str(body.enabled).lower()}",
+    )
+    info(logger, "skill_toggled", skill=name, enabled=body.enabled, component="skills")
+    return result
+
+
+@app.delete("/api/skills/{name}", dependencies=[Depends(require_admin)])
+async def skill_delete(name: str, request: Request):
+    try:
+        result = delete_skill(name)
+    except KeyError:
+        raise HTTPException(404, "Skill not found")
+    except PermissionError as exc:
+        raise HTTPException(409, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc))
+    record_admin_audit(
+        "skill_deleted", request,
+        user_id=request.state.admin_session["user_id"],
+        username=request.state.admin_session["username"],
+        details=f"skill={name};kind={result.get('deleted')}",
+    )
+    info(logger, "skill_deleted", skill=name, kind=result.get("deleted"), component="skills")
+    return result
+
+
+@app.post("/api/skills/{name}/test", dependencies=[Depends(require_admin)])
+async def skill_test(name: str):
+    try:
+        return test_skill(name)
+    except (KeyError, ValueError):
+        raise HTTPException(404, "Skill not found")
+
+
+@app.get("/api/skills/{name}/versions", dependencies=[Depends(require_admin)])
+async def skill_versions(name: str):
+    try:
+        read_skill(name, include_disabled=True)
+    except (KeyError, ValueError):
+        # Deleted custom skills can still have rollback history, but they are not
+        # exposed through the normal UI once deleted.
+        raise HTTPException(404, "Skill not found")
+    return list_skill_versions(name)
+
+
+@app.post("/api/skills/{name}/rollback", dependencies=[Depends(require_admin)])
+async def skill_rollback(name: str, body: SkillRollbackIn, request: Request):
+    try:
+        result = rollback_skill(name, body.version)
+    except KeyError:
+        raise HTTPException(404, "Skill version not found")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc))
+    record_admin_audit(
+        "skill_rollback", request,
+        user_id=request.state.admin_session["user_id"],
+        username=request.state.admin_session["username"],
+        details=f"skill={name};from_version={body.version};new_version={result.get('version')}",
+    )
+    info(logger, "skill_rollback", skill=name, from_version=body.version, version=result.get("version"), component="skills")
+    return result
 
 
 if __name__ == "__main__":

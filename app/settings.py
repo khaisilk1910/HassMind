@@ -90,6 +90,7 @@ class Settings(BaseSettings):
     knowledge_notify_enabled: bool = True
     knowledge_max_file_bytes: int = Field(default=2 * 1024 * 1024, ge=1024, le=16 * 1024 * 1024)
     skills_dir: str = "/app/config/skills"
+    user_skills_dir: str = "/data/skills"
     mcp_config: str = "/app/config/mcp_servers.yaml"
 
     # Integration adapter defaults
