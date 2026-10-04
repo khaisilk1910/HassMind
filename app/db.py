@@ -110,6 +110,8 @@ def init_db():
               schedule_value TEXT NOT NULL,
               enabled INTEGER NOT NULL DEFAULT 0,
               notify INTEGER NOT NULL DEFAULT 1,
+              notify_channel TEXT NOT NULL DEFAULT 'mobile',
+              zalo_thread_id TEXT NOT NULL DEFAULT '',
               next_run TEXT,
               last_run TEXT,
               last_result TEXT,
@@ -125,6 +127,8 @@ def init_db():
               cooldown_seconds INTEGER NOT NULL DEFAULT 300,
               enabled INTEGER NOT NULL DEFAULT 0,
               notify INTEGER NOT NULL DEFAULT 1,
+              notify_channel TEXT NOT NULL DEFAULT 'mobile',
+              zalo_thread_id TEXT NOT NULL DEFAULT '',
               last_triggered TEXT,
               created_at TEXT NOT NULL
             );
@@ -215,8 +219,26 @@ def init_db():
               updated_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_custom_integrations_name ON custom_integrations(name);
+
+            CREATE TABLE IF NOT EXISTS notification_preferences (
+              feature TEXT PRIMARY KEY,
+              enabled INTEGER NOT NULL DEFAULT 1,
+              channel TEXT NOT NULL DEFAULT 'mobile',
+              zalo_thread_id TEXT NOT NULL DEFAULT '',
+              updated_at TEXT NOT NULL
+            );
             """
         )
+        job_columns = {row["name"] for row in c.execute("PRAGMA table_info(jobs)").fetchall()}
+        if "notify_channel" not in job_columns:
+            c.execute("ALTER TABLE jobs ADD COLUMN notify_channel TEXT NOT NULL DEFAULT 'mobile'")
+        if "zalo_thread_id" not in job_columns:
+            c.execute("ALTER TABLE jobs ADD COLUMN zalo_thread_id TEXT NOT NULL DEFAULT ''")
+        rule_columns = {row["name"] for row in c.execute("PRAGMA table_info(event_rules)").fetchall()}
+        if "notify_channel" not in rule_columns:
+            c.execute("ALTER TABLE event_rules ADD COLUMN notify_channel TEXT NOT NULL DEFAULT 'mobile'")
+        if "zalo_thread_id" not in rule_columns:
+            c.execute("ALTER TABLE event_rules ADD COLUMN zalo_thread_id TEXT NOT NULL DEFAULT ''")
         custom_columns = {row["name"] for row in c.execute("PRAGMA table_info(custom_integrations)").fetchall()}
         if "actions_json" not in custom_columns:
             c.execute("ALTER TABLE custom_integrations ADD COLUMN actions_json TEXT NOT NULL DEFAULT '[]'")

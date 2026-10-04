@@ -40,12 +40,13 @@ from .auth import (
     require_session,
 )
 from .db import add_event, conn, get_messages, init_db, list_approvals, list_event_rules, list_jobs, recent_events, recent_tool_audit, scrub_sensitive_audit_history
-from .event_engine import handle_state_event, set_rule_enabled
+from .event_engine import handle_state_event, set_rule_enabled, update_event_rule
 from .ha import HomeAssistantClient
 from .ha_integrations import HAIntegrationBridge
 from .integration_config import integration_config_view, load_runtime_integration_overrides, reset_integration_config, save_integration_config
 from .integrations import IntegrationHub
 from .message_format import split_zalo_message
+from .notifications import get_notification_preference, normalize_notification_channel, save_notification_preference, send_notification
 from .observability import (
     current_request_id,
     exception,
@@ -63,7 +64,7 @@ from .observability import (
 )
 from .rag import reindex_knowledge, search_knowledge
 from . import knowledge_governance as knowledge
-from .scheduler import scheduler_loop, set_job_enabled
+from .scheduler import scheduler_loop, set_job_enabled, update_job
 from .settings import settings
 from .skills import list_skills
 from .telegram import telegram_supervisor
@@ -71,7 +72,7 @@ from .tools import ToolRuntime
 
 os.umask(0o077)
 
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.3.2"
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 setup_logging()
@@ -126,15 +127,23 @@ async def require_admin(
     return session
 
 
-async def run_prompt(session_id: str, prompt: str, notify: bool) -> str:
+async def run_prompt(session_id: str, prompt: str, notify: bool, notify_channel: str = "mobile", zalo_thread_id: str = "") -> str:
     if agent is None or ha is None:
         raise RuntimeError("HassMind is starting")
+    channel = normalize_notification_channel(notify_channel)
     with log_context(session_id=session_id, source="system"):
-        info(logger, "system_prompt_started", notify=notify, prompt_chars=len(prompt))
+        info(logger, "system_prompt_started", notify=notify, notify_channel=channel, prompt_chars=len(prompt))
         result = await agent.chat(session_id, prompt, source="system")
         if notify:
-            await ha.notify(result[:3500], title=f"HassMind · {session_id}")
-        info(logger, "system_prompt_completed", result_chars=len(result), notify=notify)
+            await send_notification(
+                ha,
+                integrations,
+                result[:12000],
+                title=f"HassMind · {session_id}",
+                channel=channel,
+                zalo_thread_id=zalo_thread_id,
+            )
+        info(logger, "system_prompt_completed", result_chars=len(result), notify=notify, notify_channel=channel)
         return result
 
 
@@ -155,13 +164,13 @@ async def event_callback(event: dict[str, Any]):
             if status == "approved" and settings.auto_apply_after_approval:
                 try:
                     result = await apply_approval(ha, aid)
-                    await ha.notify(f"Đã áp dụng {aid}: {result['status']}", title="HassMind")
+                    await send_notification(ha, integrations, f"✅ Đã áp dụng {aid}: {result['status']}", title="HassMind", channel="mobile")
                     info(logger, "approval_applied_from_mobile", approval_id=aid, status=result.get("status"))
                 except Exception:
                     exception(logger, "approval_mobile_apply_failed", message="Could not apply approval from mobile action", approval_id=aid)
-                    await ha.notify(f"Không thể áp dụng {aid}", title="HassMind")
+                    await send_notification(ha, integrations, f"❌ Không thể áp dụng {aid}", title="HassMind", channel="mobile")
             elif status == "rejected":
-                await ha.notify(f"Đã từ chối {aid}", title="HassMind")
+                await send_notification(ha, integrations, f"🚫 Đã từ chối {aid}", title="HassMind", channel="mobile")
                 info(logger, "approval_rejected_from_mobile", approval_id=aid)
         return
 
@@ -370,7 +379,7 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(ha.listen_events(event_callback, stop_event), name="ha-events"),
             asyncio.create_task(scheduler_loop(stop_event, run_prompt), name="scheduler"),
             asyncio.create_task(telegram_supervisor(stop_event, lambda sid, text, src: agent.chat(sid, text, src)), name="telegram-supervisor"),
-            asyncio.create_task(knowledge.monitor_loop(stop_event, ha), name="knowledge-monitor"),
+            asyncio.create_task(knowledge.monitor_loop(stop_event, ha, integrations), name="knowledge-monitor"),
         ]
         await _sync_zalo_webhook_registration_task()
         info(
@@ -519,6 +528,8 @@ class JobIn(BaseModel):
     schedule_type: str = Field(min_length=1, max_length=32)
     schedule_value: str = Field(min_length=1, max_length=128)
     notify: bool = True
+    notify_channel: str = Field(default="mobile", pattern="^(mobile|zalo)$")
+    zalo_thread_id: str = Field(default="", max_length=255)
 
 
 class RuleIn(BaseModel):
@@ -528,6 +539,14 @@ class RuleIn(BaseModel):
     prompt: str = Field(min_length=1, max_length=20000)
     cooldown_seconds: int = Field(default=300, ge=0, le=86400)
     notify: bool = True
+    notify_channel: str = Field(default="mobile", pattern="^(mobile|zalo)$")
+    zalo_thread_id: str = Field(default="", max_length=255)
+
+
+class NotificationPreferenceIn(BaseModel):
+    enabled: bool = True
+    channel: str = Field(default="mobile", pattern="^(mobile|zalo)$")
+    zalo_thread_id: str = Field(default="", max_length=255)
 
 
 class ClientLogIn(BaseModel):
@@ -1140,6 +1159,25 @@ async def approval_decision(aid: str, body: DecisionIn):
     return d
 
 
+@app.get("/api/notification-preferences/{feature}", dependencies=[Depends(require_access)])
+async def notification_preference(feature: str):
+    if feature not in {"approvals"}:
+        raise HTTPException(404, "Notification feature not found")
+    return get_notification_preference(feature)
+
+
+@app.put("/api/notification-preferences/{feature}", dependencies=[Depends(require_admin)])
+async def notification_preference_save(feature: str, body: NotificationPreferenceIn):
+    if feature not in {"approvals"}:
+        raise HTTPException(404, "Notification feature not found")
+    return save_notification_preference(
+        feature,
+        enabled=body.enabled,
+        channel=body.channel,
+        zalo_thread_id=body.zalo_thread_id,
+    )
+
+
 @app.get("/api/jobs", dependencies=[Depends(require_access)])
 async def jobs():
     return list_jobs()
@@ -1148,7 +1186,26 @@ async def jobs():
 @app.post("/api/jobs", dependencies=[Depends(require_access)])
 async def create_job_api(body: JobIn):
     from .scheduler import create_job
-    return create_job(body.name, body.prompt, body.schedule_type, body.schedule_value, body.notify)
+    return create_job(body.name, body.prompt, body.schedule_type, body.schedule_value, body.notify, body.notify_channel, body.zalo_thread_id)
+
+
+@app.put("/api/jobs/{job_id}", dependencies=[Depends(require_access)])
+async def update_job_api(job_id: int, body: JobIn):
+    try:
+        return update_job(
+            job_id,
+            name=body.name,
+            prompt=body.prompt,
+            schedule_type=body.schedule_type,
+            schedule_value=body.schedule_value,
+            notify=body.notify,
+            notify_channel=body.notify_channel,
+            zalo_thread_id=body.zalo_thread_id,
+        )
+    except KeyError:
+        raise HTTPException(404, "Job not found")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 
 @app.patch("/api/jobs/{job_id}", dependencies=[Depends(require_access)])
@@ -1173,7 +1230,27 @@ async def rules():
 @app.post("/api/event-rules", dependencies=[Depends(require_access)])
 async def create_rule_api(body: RuleIn):
     from .event_engine import create_event_rule
-    return create_event_rule(body.name, body.entity_id, body.to_state, body.prompt, body.cooldown_seconds, body.notify)
+    return create_event_rule(body.name, body.entity_id, body.to_state, body.prompt, body.cooldown_seconds, body.notify, body.notify_channel, body.zalo_thread_id)
+
+
+@app.put("/api/event-rules/{rule_id}", dependencies=[Depends(require_access)])
+async def update_rule_api(rule_id: int, body: RuleIn):
+    try:
+        return update_event_rule(
+            rule_id,
+            name=body.name,
+            entity_id=body.entity_id,
+            to_state=body.to_state,
+            prompt=body.prompt,
+            cooldown_seconds=body.cooldown_seconds,
+            notify=body.notify,
+            notify_channel=body.notify_channel,
+            zalo_thread_id=body.zalo_thread_id,
+        )
+    except KeyError:
+        raise HTTPException(404, "Event rule not found")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 
 @app.patch("/api/event-rules/{rule_id}", dependencies=[Depends(require_access)])
@@ -1207,6 +1284,8 @@ class KnowledgeConfigIn(BaseModel):
     enabled: bool | None = None
     scan_interval_seconds: int | None = Field(default=None, ge=30, le=86400)
     notify_enabled: bool | None = None
+    notify_channel: str | None = Field(default=None, pattern="^(mobile|zalo)$")
+    zalo_thread_id: str | None = Field(default=None, max_length=255)
 
 
 class KnowledgeChangeIn(BaseModel):
@@ -1268,7 +1347,7 @@ async def knowledge_config(body: KnowledgeConfigIn, request: Request):
 
 @app.post("/api/knowledge/scan", dependencies=[Depends(require_access)])
 async def knowledge_scan():
-    return await knowledge.scan_knowledge(ha, actor="manual")
+    return await knowledge.scan_knowledge(ha, integrations, actor="manual")
 
 
 @app.get("/api/knowledge/proposals", dependencies=[Depends(require_access)])

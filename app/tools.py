@@ -85,8 +85,8 @@ def schemas() -> list[dict]:
         }, ["query"]),
         _fn("skill_list", "List installed HassMind operating skills.", {}),
         _fn("skill_read", "Read one installed skill workflow.", {"name": {"type": "string"}}, ["name"]),
-        _fn("schedule_propose", "Create a recurring agent job in DISABLED state. Human must enable it in dashboard/API.", {"name": {"type": "string"}, "prompt": {"type": "string"}, "schedule_type": {"type": "string", "enum": ["interval", "daily"]}, "schedule_value": {"type": "string", "description": "interval seconds or daily HH:MM"}, "notify": {"type": "boolean"}}, ["name", "prompt", "schedule_type", "schedule_value"]),
-        _fn("event_rule_propose", "Create a Home Assistant state-event agent rule in DISABLED state. Human must enable it in dashboard/API.", {"name": {"type": "string"}, "entity_id": {"type": "string"}, "to_state": {"type": "string"}, "prompt": {"type": "string"}, "cooldown_seconds": {"type": "integer"}, "notify": {"type": "boolean"}}, ["name", "entity_id", "prompt"]),
+        _fn("schedule_propose", "Create a recurring agent job in DISABLED state. Human must enable it in dashboard/API.", {"name": {"type": "string"}, "prompt": {"type": "string"}, "schedule_type": {"type": "string", "enum": ["interval", "daily"]}, "schedule_value": {"type": "string", "description": "interval seconds or daily HH:MM"}, "notify": {"type": "boolean"}, "notify_channel": {"type": "string", "enum": ["mobile", "zalo"]}, "zalo_thread_id": {"type": "string"}}, ["name", "prompt", "schedule_type", "schedule_value"]),
+        _fn("event_rule_propose", "Create a Home Assistant state-event agent rule in DISABLED state. Human must enable it in dashboard/API.", {"name": {"type": "string"}, "entity_id": {"type": "string"}, "to_state": {"type": "string"}, "prompt": {"type": "string"}, "cooldown_seconds": {"type": "integer"}, "notify": {"type": "boolean"}, "notify_channel": {"type": "string", "enum": ["mobile", "zalo"]}, "zalo_thread_id": {"type": "string"}}, ["name", "entity_id", "prompt"]),
         _fn("web_search", "Search the web through the optional user-hosted SearXNG instance.", {"query": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 10}}, ["query"]),
         _fn("mcp_servers", "List configured external MCP servers.", {}),
         _fn("mcp_list_tools", "List tools exposed by an external MCP server.", {"server": {"type": "string"}}, ["server"]),
@@ -274,14 +274,14 @@ class ToolRuntime:
         if name == "ha_propose_config_change":
             old = await self.ha.config_get(args["kind"], args["target_id"])
             approval = create_approval(args["kind"], args["target_id"], old, args["new_config"], args["reason"])
-            await notify_approval(self.ha, approval, args["reason"])
+            await notify_approval(self.ha, approval, args["reason"], self.integrations)
             return {"id": approval["id"], "status": "pending", "risk": approval["risk"], "diff": approval["diff"], "message": "Approval notification sent"}
         if name == "ha_get_change":
             return get_approval(args["change_id"]) or {"error": "not found"}
         if name == "ha_apply_approved_change":
             return await apply_approval(self.ha, args["change_id"])
         if name == "ha_propose_rollback":
-            return await propose_rollback(self.ha, args["change_id"], args["reason"])
+            return await propose_rollback(self.ha, args["change_id"], args["reason"], self.integrations)
 
         # Local memory/knowledge/automation helpers
         if name == "memory_add":
@@ -308,9 +308,9 @@ class ToolRuntime:
         if name == "skill_read":
             return read_skill(args["name"])
         if name == "schedule_propose":
-            return create_job(args["name"], args["prompt"], args["schedule_type"], args["schedule_value"], bool(args.get("notify", True)))
+            return create_job(args["name"], args["prompt"], args["schedule_type"], args["schedule_value"], bool(args.get("notify", True)), args.get("notify_channel") or "mobile", args.get("zalo_thread_id") or "")
         if name == "event_rule_propose":
-            return create_event_rule(args["name"], args["entity_id"], args.get("to_state") or None, args["prompt"], int(args.get("cooldown_seconds", 300)), bool(args.get("notify", True)))
+            return create_event_rule(args["name"], args["entity_id"], args.get("to_state") or None, args["prompt"], int(args.get("cooldown_seconds", 300)), bool(args.get("notify", True)), args.get("notify_channel") or "mobile", args.get("zalo_thread_id") or "")
         if name == "web_search":
             return await search_web(args["query"], int(args.get("limit", 5)))
         if name == "mcp_servers":

@@ -73,3 +73,10 @@ details{border:1px solid var(--line);border-radius:10px;background:var(--surface
 #knowledgeProposalDetail>p{line-height:1.5;overflow-wrap:anywhere}#knowledgeProposalDetail .security-note{overflow-wrap:anywhere}#knowledgeScanBox>.row .mono{overflow-wrap:anywhere}
 @media(max-width:1100px){#knowledge .span-8,#knowledge .span-4{grid-column:span 12}}
 @media(max-width:640px){.knowledge-filters{grid-template-columns:1fr}#knowledgeSearchForm>.row{flex-direction:column;align-items:stretch}.knowledge-result-meta{grid-template-columns:90px minmax(0,1fr)}#knowledge .page-head{flex-direction:column;align-items:flex-start}.knowledge-issue{flex-direction:column}.knowledge-diff pre{font-size:11px}}
+
+/* v1.3.2 operational notification/editing improvements */
+#knowledgeProposals{max-height:680px;overflow-y:auto;overscroll-behavior:contain;padding-right:5px;scrollbar-gutter:stable}
+#knowledgeProposals .knowledge-proposal:last-child{margin-bottom:0}
+.notification-grid{align-items:end}.notification-grid>.check{align-self:center}.notification-grid .field{min-width:0}
+#jobsBox .item-head,#rulesBox .item-head{flex-wrap:wrap}
+@media(max-width:720px){#knowledgeProposals{max-height:520px}.notification-grid{grid-template-columns:1fr}.notification-grid>*{grid-column:1/-1}}

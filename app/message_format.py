@@ -493,6 +493,51 @@ def build_zalo_message_content(value: str) -> dict[str, Any]:
     return {"msg": plain, "styles": styles}
 
 
+def format_mobile_notification(value: str) -> str:
+    """Convert model/Markdown-like output into readable plain mobile text.
+
+    Home Assistant mobile notifications do not consistently render Markdown.
+    Preserve structure with Unicode bullets/emojis while removing formatting
+    delimiters so users never see raw `**`, `#`, backticks or pseudo tags.
+    """
+    markup = format_zalo_message(value)
+    if not markup:
+        return ""
+    output: list[str] = []
+    for raw in markup.split("\n"):
+        line = raw.rstrip()
+        if not line.strip():
+            output.append("")
+            continue
+        if line and set(line.strip()) <= {"─", "-", "_", "*"}:
+            continue
+        prefix = ""
+        heading = _HEADING_RE.match(line)
+        unordered = _UNORDERED_RE.match(line)
+        ordered = _ORDERED_RE.match(line)
+        quote = _BLOCKQUOTE_RE.match(line)
+        if heading:
+            prefix = "📌 "
+        elif unordered:
+            prefix = "• "
+        elif ordered:
+            prefix = f"{ordered.group(2)}. "
+        elif quote:
+            prefix = "💡 "
+        plain = build_zalo_message_content(line).get("msg", "").strip()
+        if plain:
+            output.append(prefix + plain)
+    result = "\n".join(output)
+    result = re.sub(r"[ \t]+\n", "\n", result)
+    result = re.sub(r"\n{3,}", "\n\n", result)
+    return result.strip()
+
+
+def format_mobile_notification_title(value: str) -> str:
+    plain = build_zalo_message_content(str(value or "HassMind")).get("msg", "").strip() or "HassMind"
+    return plain if plain.startswith("🤖") else f"🤖 {plain}"
+
+
 def split_zalo_message(value: str, limit: int = 3900) -> list[str]:
     """Format and split a long answer, preferring whole Zalo sections.
 

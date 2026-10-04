@@ -17,6 +17,7 @@ from typing import Any
 import yaml
 
 from .db import conn, utcnow
+from .notifications import normalize_notification_channel, send_notification
 from .observability import exception, get_logger, info
 from .settings import settings
 from . import rag
@@ -77,7 +78,15 @@ def audit_log(limit=100):
 
 def monitor_config():
     ensure_schema()
-    return _get("config", {"enabled": settings.knowledge_monitor_enabled, "scan_interval_seconds": settings.knowledge_scan_interval_seconds, "notify_enabled": settings.knowledge_notify_enabled})
+    defaults = {
+        "enabled": settings.knowledge_monitor_enabled,
+        "scan_interval_seconds": settings.knowledge_scan_interval_seconds,
+        "notify_enabled": settings.knowledge_notify_enabled,
+        "notify_channel": "mobile",
+        "zalo_thread_id": "",
+    }
+    stored = _get("config", {}) or {}
+    return {**defaults, **{k: v for k, v in stored.items() if k in defaults}}
 
 
 def save_monitor_config(value, actor):
@@ -88,6 +97,8 @@ def save_monitor_config(value, actor):
         cfg.update(value)
         if type(cfg["enabled"]) is not bool or type(cfg["notify_enabled"]) is not bool:
             raise ValueError("enabled and notify_enabled must be boolean")
+        cfg["notify_channel"] = normalize_notification_channel(cfg.get("notify_channel"))
+        cfg["zalo_thread_id"] = str(cfg.get("zalo_thread_id") or "").strip().removeprefix("zalo:")[:255]
         interval = cfg["scan_interval_seconds"]
         if type(interval) is not int or not 30 <= interval <= 86400:
             raise ValueError("scan_interval_seconds must be 30..86400")
@@ -131,9 +142,24 @@ def get_proposal(pid):
 
 def list_proposals(limit=100):
     ensure_schema()
+    requested = min(max(int(limit), 1), 200)
+    # The review column is an operational work queue, not an unlimited history
+    # view. Keep all actionable/recent states but expose at most four obsolete
+    # (stale) proposals; the full history remains available in Knowledge audit.
     with conn() as c:
-        rows = c.execute("SELECT * FROM knowledge_proposals ORDER BY created_at DESC LIMIT ?", (min(max(int(limit), 1), 200),)).fetchall()
-    return [_proposal_summary(_proposal_row(r)) for r in rows]
+        rows = c.execute("SELECT * FROM knowledge_proposals ORDER BY created_at DESC LIMIT 500").fetchall()
+    result = []
+    stale_seen = 0
+    for row in rows:
+        proposal = _proposal_summary(_proposal_row(row))
+        if proposal.get("status") == "stale":
+            if stale_seen >= 4:
+                continue
+            stale_seen += 1
+        result.append(proposal)
+        if len(result) >= requested:
+            break
+    return result
 
 
 def create_proposal(changes, reason, *, kind="content", issues=None, fingerprint=None, actor="system"):
@@ -526,7 +552,7 @@ def _scan_store(snapshot, ha_issues, ha_checked, ha_error, actor):
         return scan
 
 
-async def scan_knowledge(ha=None, actor="system"):
+async def scan_knowledge(ha=None, integrations=None, actor="system"):
     async with _scan_lock:
         snapshot = await asyncio.to_thread(rag.inspect_knowledge)
         ha_issues, ha_checked, ha_error = [], False, None
@@ -539,9 +565,16 @@ async def scan_knowledge(ha=None, actor="system"):
                 ha_error = type(exc).__name__ + ": Home Assistant registry check unavailable; unresolved/stale checks deferred"
         scan = await asyncio.to_thread(_scan_store, snapshot, ha_issues, ha_checked, ha_error, actor)
         cfg = monitor_config()
-        if ha is not None and cfg["notify_enabled"] and scan["new_findings"] and (scan["proposals"] or scan["issues"]):
+        if cfg["notify_enabled"] and scan["new_findings"] and (scan["proposals"] or scan["issues"]):
             try:
-                result = await ha.notify(f"Knowledge: {len(scan['issues'])} vấn đề, {len(scan['proposals'])} đề xuất. Mở Web Admin → Knowledge → Review changes để xem diff và Approve/Reject. Chưa thay đổi nội dung.", title="HassMind · Knowledge")
+                result = await send_notification(
+                    ha,
+                    integrations,
+                    f"📚 Knowledge: {len(scan['issues'])} vấn đề, {len(scan['proposals'])} đề xuất.\n\nMở Web Admin → Knowledge → Review changes để xem diff và Approve/Reject. Chưa thay đổi nội dung.",
+                    title="HassMind · Knowledge",
+                    channel=cfg.get("notify_channel") or "mobile",
+                    zalo_thread_id=cfg.get("zalo_thread_id") or "",
+                )
                 audit("notification_skipped" if isinstance(result, dict) and result.get("skipped") else "notification_sent", details={"scan_id": scan["id"]})
             except Exception as exc:
                 scan["notification_error"] = type(exc).__name__
@@ -558,14 +591,14 @@ def knowledge_status():
     return {"index": rag.index_status(), "monitor": monitor_config(), "latest_scan": _get("latest_scan"), "pending_count": pending, "recovery_required": recovery}
 
 
-async def monitor_loop(stop, ha):
+async def monitor_loop(stop, ha, integrations=None):
     next_scan = 0.0
     while not stop.is_set():
         cfg = monitor_config()
         try:
             if cfg["enabled"] and (monotonic() >= next_scan or _wake.is_set()):
                 _wake.clear()
-                await scan_knowledge(ha)
+                await scan_knowledge(ha, integrations)
                 next_scan = monotonic() + cfg["scan_interval_seconds"]
         except asyncio.CancelledError:
             raise

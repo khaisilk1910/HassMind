@@ -119,6 +119,8 @@ class Settings(BaseSettings):
     zalo_webhook_callback_base: str = "http://127.0.0.1:8090"
     zalo_agent_reply_enabled: bool = False
     zalo_agent_allowed_thread_ids: str = ""
+    zalo_notification_thread_id: str = ""
+    zalo_notification_thread_type: int = Field(default=0, ge=0, le=1)
 
     wyoming_enabled: bool = False
     wyoming_host: str = "127.0.0.1"

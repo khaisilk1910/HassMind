@@ -1,11 +1,11 @@
-# Knowledge / local RAG — triển khai và migrate lên 1.3.1
+# Knowledge / local RAG — triển khai và migrate lên 1.3.2
 
 Knowledge là semantic registry và tài liệu tĩnh. Entity/area/scene/script giúp xác định thiết bị; reference/rules/procedures giúp tra cứu. Trạng thái bật/tắt, nhiệt độ hiện tại, pin, công suất và trạng thái media phải đọc từ Home Assistant. Không đưa mật khẩu/token vào Knowledge.
 
 ## Nâng cấp từ 1.2.9
 
 1. Dừng HassMind và backup `data/`, `knowledge/`, `.env`, `config/` và secrets. Backup cả DB trước khi thay đổi schema; nếu DB đang chạy, dùng SQLite backup API hoặc dừng dịch vụ trước khi sao chép để tránh thiếu WAL.
-2. Thay source bằng bản 1.3.1, giữ các thư mục dữ liệu và cấu hình hiện có. Build lại image. Không ghi đè Knowledge của nhà bằng sample.
+2. Thay source bằng bản 1.3.2, giữ các thư mục dữ liệu và cấu hình hiện có. Build lại image. Không ghi đè Knowledge của nhà bằng sample.
 3. Các bảng Knowledge mới tự tạo khi khởi động; các bảng/chunk cũ vẫn đọc được. Mở Knowledge → Scan Knowledge → xem lỗi/đề xuất → Re-index để chuyển sang registry mới. Re-index là thao tác chủ động thay đổi index, không sửa nội dung tài liệu.
 4. `.md/.txt/.yaml/.yml/.json` vẫn hỗ trợ. Văn bản cũ được tìm như reference; catalog có cấu trúc được index từng record. Markdown có YAML frontmatter hỗ trợ `kind`, `name`, `aliases` và metadata. YAML/JSON thuần không thuộc schema registry vẫn được tìm như tài liệu reference.
 5. Kiểm tra các cách gọi thực tế: alias chính xác, tên thiết bị, area + domain và câu nhập nhằng. Thay toàn bộ entity ID mẫu bằng entity thật trong HA trước khi sử dụng.
@@ -103,4 +103,4 @@ HA dùng registry WebSocket command và state/service REST có sẵn trong clien
 
 ## Kiểm thử tại nhà
 
-Sau deploy, kiểm tra với HA thật: scan/notify, ID không còn tồn tại, area kế thừa device, alias trùng, fuzzy, đọc state sau service, mount ro/rw và rollback. Bản QA đi kèm dùng mock cho HA/LLM, không chạy thiết bị thật. Đọc `QA_V1.3.1.md` để biết test đã chạy và giới hạn.
+Sau deploy, kiểm tra với HA thật: scan/notify, ID không còn tồn tại, area kế thừa device, alias trùng, fuzzy, đọc state sau service, mount ro/rw và rollback. Bản QA đi kèm dùng mock cho HA/LLM, không chạy thiết bị thật. Đọc `QA_V1.3.2.md` để biết test đã chạy và giới hạn.

@@ -137,6 +137,34 @@ class KnowledgeAPITests(unittest.TestCase):
         self.assertEqual(approved.status_code,200,approved.text)
         self.assertEqual(approved.json()['status'],'applied')
 
+    def test_notification_preferences_and_edit_routes_round_trip(self):
+        self.login()
+        pref=self.client.put('/api/notification-preferences/approvals',json={'enabled':True,'channel':'zalo','zalo_thread_id':'zalo:notify-1'},headers=self.csrf)
+        self.assertEqual(pref.status_code,200,pref.text)
+        self.assertEqual(pref.json()['channel'],'zalo')
+        self.assertEqual(pref.json()['zalo_thread_id'],'notify-1')
+        read=self.client.get('/api/notification-preferences/approvals',headers=self.csrf)
+        self.assertEqual(read.status_code,200,read.text)
+        self.assertEqual(read.json()['zalo_thread_id'],'notify-1')
+
+        job=self.client.post('/api/jobs',json={'name':'Night','prompt':'Report','schedule_type':'interval','schedule_value':'300','notify':True,'notify_channel':'zalo','zalo_thread_id':'job-thread'},headers=self.token)
+        self.assertEqual(job.status_code,200,job.text)
+        jid=job.json()['id']
+        edited=self.client.put(f'/api/jobs/{jid}',json={'name':'Night edited','prompt':'Report carefully','schedule_type':'daily','schedule_value':'21:00','notify':False,'notify_channel':'mobile','zalo_thread_id':''},headers=self.token)
+        self.assertEqual(edited.status_code,200,edited.text)
+        job_row=next(x for x in self.client.get('/api/jobs',headers=self.token).json() if x['id']==jid)
+        self.assertEqual(job_row['name'],'Night edited')
+        self.assertEqual(job_row['notify_channel'],'mobile')
+
+        rule=self.client.post('/api/event-rules',json={'name':'Door','entity_id':'binary_sensor.door','to_state':'on','prompt':'Check','cooldown_seconds':120,'notify':True,'notify_channel':'zalo','zalo_thread_id':'rule-thread'},headers=self.token)
+        self.assertEqual(rule.status_code,200,rule.text)
+        rid=rule.json()['id']
+        edited=self.client.put(f'/api/event-rules/{rid}',json={'name':'Door edited','entity_id':'binary_sensor.front_door','to_state':'off','prompt':'Check front','cooldown_seconds':60,'notify':True,'notify_channel':'mobile','zalo_thread_id':''},headers=self.token)
+        self.assertEqual(edited.status_code,200,edited.text)
+        rule_row=next(x for x in self.client.get('/api/event-rules',headers=self.token).json() if x['id']==rid)
+        self.assertEqual(rule_row['name'],'Door edited')
+        self.assertEqual(rule_row['notify_channel'],'mobile')
+
     def test_startup_shutdown_smoke_without_external_services(self):
         class HA:
             async def listen_events(self,callback,stop): await stop.wait()

@@ -8,11 +8,12 @@ const vm=require('node:vm');
 const {test}=require('node:test');
 const root=path.resolve(__dirname,'..');
 const html=fs.readFileSync(path.join(root,'static','index.html'),'utf8');
+const css=fs.readFileSync(path.join(root,'static','app.css'),'utf8');
 const script=fs.readFileSync(path.join(root,'static','app.js'),'utf8').replace(/start\(\)\.catch\([^\n]+\);?\s*$/,'');
 
 function harness(){
   const nodes=new Map(),calls=[];
-  const element=()=>({innerHTML:'',textContent:'',value:'',checked:false,disabled:false,dataset:{},style:{},classList:{add(){},remove(){},toggle(){}},appendChild(){},remove(){},addEventListener(){},querySelector(){return null},querySelectorAll(){return []}});
+  const element=()=>({innerHTML:'',textContent:'',value:'',checked:false,disabled:false,dataset:{},style:{},classList:{add(){},remove(){},toggle(){}},appendChild(){},remove(){},addEventListener(){},querySelector(){return null},querySelectorAll(){return []},reset(){}});
   for(const match of html.matchAll(/id="([^"]+)"/g))nodes.set(match[1],element());
   // This node is inserted into proposal details by the renderer.
   nodes.set('knowledgeDryRunResult',element());
@@ -95,7 +96,7 @@ test('Rollback is available only for applied content proposals',()=>{
 test('Monitor rejects invalid intervals and persists valid options with CSRF',async()=>{
   const h=harness();h.nodes.get('knowledgeScanInterval').value='29';await h.run('saveKnowledgeConfig()');assert.equal(h.calls.length,0);
   h.nodes.get('knowledgeScanInterval').value='300';h.nodes.get('knowledgeMonitorEnabled').checked=true;h.nodes.get('knowledgeNotifyEnabled').checked=false;h.run("uiState.csrf='csrf-config'");h.respond(async(url)=>({body:url.endsWith('/status')?{index:{},monitor:{}}:{ok:true}}));
-  await h.run('saveKnowledgeConfig()');assert.equal(h.calls[0].opt.method,'PATCH');assert.deepEqual(JSON.parse(h.calls[0].opt.body),{enabled:true,scan_interval_seconds:300,notify_enabled:false});assert.equal(h.calls[0].opt.headers['X-CSRF-Token'],'csrf-config');
+  await h.run('saveKnowledgeConfig()');assert.equal(h.calls[0].opt.method,'PATCH');assert.deepEqual(JSON.parse(h.calls[0].opt.body),{enabled:true,scan_interval_seconds:300,notify_enabled:false,notify_channel:'mobile',zalo_thread_id:''});assert.equal(h.calls[0].opt.headers['X-CSRF-Token'],'csrf-config');
 });
 
 test('Scan and re-index send explicit CSRF mutations and refresh status',async()=>{
@@ -135,3 +136,29 @@ test('Explicit Reject and Rollback use their own endpoints and refresh the revie
 
 
 test('Changed scan fingerprint makes stale index warning visible',()=>{const h=harness();h.sandbox.status={index:{status:'ready',stale:true,files:1,chunks:1,records:1},monitor:{enabled:true},pending_count:1};h.run('renderKnowledgeStatus(status)');assert.match(h.nodes.get('knowledgeStatus').innerHTML,/Scan mới nhất khác index/);});
+
+
+test('Review queue is scroll-bounded and notification controls exist for every notifying feature',()=>{
+  assert.match(css,/#knowledgeProposals\s*\{[^}]*max-height:[^;}]+;[^}]*overflow-y:auto/s);
+  for(const id of ['approvalNotifyChannel','approvalZaloThread','jobNotifyChannel','jobZaloThread','ruleNotifyChannel','ruleZaloThread','knowledgeNotifyChannel','knowledgeZaloThread'])assert.match(html,new RegExp('id="'+id+'"'));
+});
+
+test('Scheduler edit loads persisted values and PUT saves notification route',async()=>{
+  const h=harness();h.run("jobsCache=[{id:7,name:'Night',prompt:'Report',schedule_type:'daily',schedule_value:'21:00',notify:1,notify_channel:'zalo',zalo_thread_id:'thread-7',enabled:true}];editJob(7)");
+  assert.equal(h.nodes.get('jobname').value,'Night');assert.equal(h.nodes.get('jobNotifyChannel').value,'zalo');assert.equal(h.nodes.get('jobZaloThread').value,'thread-7');assert.equal(h.nodes.get('jobSubmitBtn').textContent,'Lưu thay đổi');
+  h.nodes.get('jobname').value='Night edited';h.respond(async(url)=>({body:url==='/api/jobs/7'?{id:7,enabled:true}:[]}));await h.run('saveJob()');
+  const call=h.calls.find(x=>x.url==='/api/jobs/7');assert.ok(call);assert.equal(call.opt.method,'PUT');const body=JSON.parse(call.opt.body);assert.equal(body.name,'Night edited');assert.equal(body.notify_channel,'zalo');assert.equal(body.zalo_thread_id,'thread-7');
+});
+
+test('Event rule edit loads persisted values and PUT saves notification route',async()=>{
+  const h=harness();h.run("rulesCache=[{id:8,name:'Door',entity_id:'binary_sensor.door',to_state:'on',prompt:'Check',cooldown_seconds:120,notify:1,notify_channel:'zalo',zalo_thread_id:'thread-8',enabled:true}];editRule(8)");
+  assert.equal(h.nodes.get('rulename').value,'Door');assert.equal(h.nodes.get('ruleNotifyChannel').value,'zalo');assert.equal(h.nodes.get('ruleZaloThread').value,'thread-8');assert.equal(h.nodes.get('ruleSubmitBtn').textContent,'Lưu thay đổi');
+  h.nodes.get('rulename').value='Door edited';h.respond(async(url)=>({body:url==='/api/event-rules/8'?{id:8,enabled:true}:[]}));await h.run('saveRule()');
+  const call=h.calls.find(x=>x.url==='/api/event-rules/8');assert.ok(call);assert.equal(call.opt.method,'PUT');const body=JSON.parse(call.opt.body);assert.equal(body.name,'Door edited');assert.equal(body.notify_channel,'zalo');assert.equal(body.zalo_thread_id,'thread-8');
+});
+
+test('Approval notification preference saves Zalo route and defaults empty select to mobile',async()=>{
+  const h=harness();h.nodes.get('approvalNotifyEnabled').checked=true;h.nodes.get('approvalNotifyChannel').value='zalo';h.nodes.get('approvalZaloThread').value='abc';h.respond(async()=>({body:{ok:true}}));await h.run('saveApprovalNotification()');
+  let body=JSON.parse(h.calls[0].opt.body);assert.deepEqual(body,{enabled:true,channel:'zalo',zalo_thread_id:'abc'});
+  const h2=harness();h2.nodes.get('approvalNotifyEnabled').checked=true;h2.respond(async()=>({body:{ok:true}}));await h2.run('saveApprovalNotification()');body=JSON.parse(h2.calls[0].opt.body);assert.equal(body.channel,'mobile');
+});

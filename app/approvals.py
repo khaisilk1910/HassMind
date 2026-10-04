@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from .db import conn, utcnow
 from .ha import HomeAssistantClient
+from .notifications import get_notification_preference, send_notification
 from .policy import config_risk
 from .settings import settings
 
@@ -89,12 +90,25 @@ def decide_by_web(aid: str, approve: bool) -> dict:
     return {"id": aid, "status": status}
 
 
-async def notify_approval(ha: HomeAssistantClient, approval: dict, reason: str):
-    diff_excerpt = approval["diff"][-1800:] if approval.get("diff") else "(no diff)"
-    msg = f"{approval['id']} | risk={approval['risk']}\n{reason}\n\n{diff_excerpt}"
-    await ha.notify(
-        message=msg,
-        title="HassMind: yêu cầu duyệt thay đổi",
+async def notify_approval(ha: HomeAssistantClient, approval: dict, reason: str, integrations=None):
+    pref = get_notification_preference("approvals")
+    if not pref["enabled"]:
+        return {"skipped": True, "reason": "Approval notifications are disabled"}
+    diff_excerpt = approval["diff"][-1800:] if approval.get("diff") else "(không có diff)"
+    msg = (
+        f"🔐 Yêu cầu duyệt thay đổi\n"
+        f"ID: {approval['id']}\n"
+        f"Mức rủi ro: {approval['risk']}\n\n"
+        f"{reason}\n\n"
+        f"Diff rút gọn:\n{diff_excerpt}"
+    )
+    return await send_notification(
+        ha,
+        integrations,
+        msg,
+        title="HassMind · Yêu cầu duyệt",
+        channel=pref["channel"],
+        zalo_thread_id=pref["zalo_thread_id"],
         actions=[
             {"action": f"HASSMIND_APPROVE:{approval['approve_token']}", "title": "Duyệt"},
             {"action": f"HASSMIND_REJECT:{approval['reject_token']}", "title": "Từ chối", "destructive": True},
@@ -136,7 +150,7 @@ async def apply_approval(ha: HomeAssistantClient, aid: str) -> dict:
         raise
 
 
-async def propose_rollback(ha: HomeAssistantClient, aid: str, reason: str) -> dict:
+async def propose_rollback(ha: HomeAssistantClient, aid: str, reason: str, integrations=None) -> dict:
     row = get_approval(aid, include_secrets=True)
     if not row:
         raise KeyError(aid)
@@ -144,5 +158,5 @@ async def propose_rollback(ha: HomeAssistantClient, aid: str, reason: str) -> di
         raise ValueError("Only applied changes can be rolled back")
     current = await ha.config_get(row["kind"], row["target_id"])
     rb = create_approval(row["kind"], row["target_id"], current, row["old_config"], f"Rollback {aid}: {reason}", parent_change_id=aid)
-    await notify_approval(ha, rb, f"Rollback {aid}: {reason}")
+    await notify_approval(ha, rb, f"Rollback {aid}: {reason}", integrations)
     return {"id": rb["id"], "status": "pending", "risk": rb["risk"], "diff": rb["diff"]}

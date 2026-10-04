@@ -1,10 +1,18 @@
-# HassMind v1.3.1 — AI Agent riêng cho Home Assistant
+# HassMind v1.3.2 — AI Agent riêng cho Home Assistant
 
-## Knowledge mới trong 1.3.1
+## Mới trong v1.3.2
+
+- Review changes của Knowledge chỉ giữ tối đa **4 proposal đã lỗi thời** trong hàng đợi và có vùng cuộn riêng, tránh kéo dài toàn bộ trang. Lịch sử đầy đủ vẫn nằm trong Knowledge audit.
+- Chuẩn hóa thông báo theo hai kênh **Điện thoại (Home Assistant)** hoặc **Zalo** cho Approvals, Scheduler, Event rules và Knowledge monitor. Khi chọn Zalo có thể nhập `thread_id`; để trống sẽ dùng Thread ID thông báo mặc định, sau đó fallback sang Allowed thread ID đã cấu hình.
+- Thông báo điện thoại được chuyển sang plain text có emoji/bullet, không còn hiện dấu Markdown như `**`, `` ` `` hoặc heading `#`. Thông báo Zalo đi qua cùng rich-text compiler với phản hồi chat Zalo.
+- Scheduler và Event rules có nút **Sửa**, cho phép đổi prompt/lịch/entity/cooldown/kênh thông báo mà vẫn giữ trạng thái enabled hiện tại.
+- Giữ toàn bộ sửa lỗi Knowledge v1.3.1: dry-run hiển thị vị trí xung đột chi tiết và warning conflict không khóa Re-index hợp lệ.
+
+Đọc [changelog 1.3.2](CHANGELOG_V1.3.2.md), [QA 1.3.2](QA_V1.3.2.md) và [hướng dẫn migrate/triển khai](KNOWLEDGE_MIGRATION_VI.md). Mẫu Knowledge nằm ở `examples/knowledge/`, không tự đưa vào Knowledge đang dùng. Stack mặc định giữ Knowledge chỉ đọc; dùng override `docker-compose.knowledge-write.yml` nếu muốn apply nội dung sau phê duyệt.
+
+## Knowledge từ 1.3.1
 
 Semantic registry entity/area/scene/script và tài liệu reference/rules/procedures, phân biệt dữ liệu tĩnh với state HA realtime. Scan định kỳ tạo proposal/diff để người dùng Dry-run và Approve/Reject; có backup, rollback, audit và chặn stale proposal. Fuzzy/ambiguity không tự cấp quyền điều khiển. Dashboard có kết quả chi tiết, lỗi index, monitor config và editor tạo draft.
-
-Đọc [hướng dẫn migrate/triển khai](KNOWLEDGE_MIGRATION_VI.md), [changelog 1.3.1](CHANGELOG_V1.3.1.md) và [QA 1.3.1](QA_V1.3.1.md). Mẫu nằm ở `examples/knowledge/`, không tự đưa vào Knowledge đang dùng. Stack mặc định giữ Knowledge chỉ đọc; dùng override `docker-compose.knowledge-write.yml` nếu muốn apply nội dung sau phê duyệt. Các mục 1.2.x bên dưới mô tả chức năng nền và lịch sử nâng cấp.
 
 
 ## Mới trong v1.2.9
