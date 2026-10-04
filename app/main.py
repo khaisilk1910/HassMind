@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from .agent import Agent
 from .approvals import apply_approval, decide_by_action, decide_by_web, get_approval
+from .custom_integrations import create_custom_integration, delete_custom_integration, update_custom_integration
 from .auth import (
     change_password,
     change_username,
@@ -68,7 +69,7 @@ from .tools import ToolRuntime
 
 os.umask(0o077)
 
-APP_VERSION = "1.2.3"
+APP_VERSION = "1.2.4"
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 setup_logging()
@@ -562,6 +563,20 @@ class IntegrationConfigIn(BaseModel):
     values: dict[str, Any] = Field(default_factory=dict)
 
 
+class CustomIntegrationIn(BaseModel):
+    id: str = Field(default="", max_length=64)
+    name: str = Field(min_length=1, max_length=120)
+    icon: str = Field(default="🔌", max_length=16)
+    description: str = Field(default="", max_length=600)
+    enabled: bool = True
+    base_url: str = Field(min_length=1, max_length=2048)
+    health_path: str = Field(default="/health", max_length=512)
+    auth_type: str = Field(default="none", max_length=32)
+    auth_header: str = Field(default="X-API-Key", max_length=128)
+    secret: str = Field(default="", max_length=4096)
+    clear_secret: bool = False
+
+
 @app.get("/")
 async def root(request: Request):
     if not session_from_request(request, touch=False):
@@ -936,6 +951,69 @@ async def integration_config_delete(integration_id: str, request: Request):
         details=f"integration={integration_id}",
     )
     return {"ok": True, "config": result, "status": await integrations.status()}
+
+
+@app.post("/api/integrations/custom", dependencies=[Depends(require_admin)])
+async def custom_integration_create(body: CustomIntegrationIn, request: Request):
+    if integrations is None:
+        raise HTTPException(503, "Integrations are starting")
+    try:
+        item = create_custom_integration(body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    await integrations.reconfigure()
+    record_admin_audit(
+        "custom_integration_created",
+        request,
+        user_id=request.state.admin_session["user_id"],
+        username=request.state.admin_session["username"],
+        details=f"integration={item['id']}",
+    )
+    return {"ok": True, "integration": item, "config": integration_config_view()}
+
+
+@app.put("/api/integrations/custom/{integration_id}", dependencies=[Depends(require_admin)])
+async def custom_integration_update(integration_id: str, body: CustomIntegrationIn, request: Request):
+    if integrations is None:
+        raise HTTPException(503, "Integrations are starting")
+    try:
+        item = update_custom_integration(integration_id, body.model_dump())
+    except KeyError:
+        raise HTTPException(404, "Unknown custom integration")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(500, str(exc))
+    await integrations.reconfigure()
+    record_admin_audit(
+        "custom_integration_updated",
+        request,
+        user_id=request.state.admin_session["user_id"],
+        username=request.state.admin_session["username"],
+        details=f"integration={integration_id}",
+    )
+    return {"ok": True, "integration": item, "config": integration_config_view()}
+
+
+@app.delete("/api/integrations/custom/{integration_id}", dependencies=[Depends(require_admin)])
+async def custom_integration_delete(integration_id: str, request: Request):
+    if integrations is None:
+        raise HTTPException(503, "Integrations are starting")
+    try:
+        delete_custom_integration(integration_id)
+    except KeyError:
+        raise HTTPException(404, "Unknown custom integration")
+    except RuntimeError as exc:
+        raise HTTPException(500, str(exc))
+    await integrations.reconfigure()
+    record_admin_audit(
+        "custom_integration_deleted",
+        request,
+        user_id=request.state.admin_session["user_id"],
+        username=request.state.admin_session["username"],
+        details=f"integration={integration_id}",
+    )
+    return {"ok": True, "config": integration_config_view()}
 
 
 @app.get("/api/integrations", dependencies=[Depends(require_access)])

@@ -199,6 +199,21 @@ def init_db():
               config_json TEXT NOT NULL DEFAULT '{}',
               updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS custom_integrations (
+              id TEXT PRIMARY KEY,
+              name TEXT NOT NULL,
+              icon TEXT NOT NULL DEFAULT '🔌',
+              description TEXT NOT NULL DEFAULT '',
+              enabled INTEGER NOT NULL DEFAULT 1,
+              base_url TEXT NOT NULL,
+              health_path TEXT NOT NULL DEFAULT '/health',
+              auth_type TEXT NOT NULL DEFAULT 'none',
+              auth_header TEXT NOT NULL DEFAULT 'X-API-Key',
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_custom_integrations_name ON custom_integrations(name);
             """
         )
         try:

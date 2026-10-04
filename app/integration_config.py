@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from .custom_integrations import list_custom_integrations
 from .db import conn, utcnow
 from .observability import get_logger, info, register_secret, warning
 from .settings import Settings, settings
@@ -206,6 +207,7 @@ def integration_config_view() -> dict[str, Any]:
         integrations.append(item)
     return {
         "integrations": integrations,
+        "custom_integrations": list_custom_integrations(),
         "storage": {
             "config": settings.db_path,
             "secrets": settings.runtime_secret_dir,

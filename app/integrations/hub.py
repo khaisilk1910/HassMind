@@ -6,7 +6,9 @@ from typing import Any, Awaitable, Callable
 
 from .camera_tts import CameraTTSClient
 from .facedetect import FaceDetectClient
+from .generic import GenericHTTPIntegrationClient
 from .zalo import ZaloClient
+from ..custom_integrations import custom_runtime_integrations
 from ..observability import get_logger, info, warning
 from ..settings import settings
 
@@ -18,6 +20,8 @@ class IntegrationHub:
         self.camera_tts: CameraTTSClient | None = None
         self.facedetect: FaceDetectClient | None = None
         self.zalo: ZaloClient | None = None
+        self.custom: dict[str, GenericHTTPIntegrationClient] = {}
+        self.custom_meta: dict[str, dict[str, Any]] = {}
         self._build_clients()
         info(
             logger,
@@ -27,7 +31,18 @@ class IntegrationHub:
             zalo=settings.zalo_enabled,
             wyoming=settings.wyoming_enabled,
             ha_custom_integrations=settings.ha_custom_integrations_enabled,
+            custom_integrations=len(self.custom_meta),
         )
+
+    @staticmethod
+    def _custom_headers(item: dict[str, Any]) -> dict[str, str]:
+        auth_type = str(item.get("auth_type") or "none")
+        secret = str(item.get("secret") or "")
+        if auth_type == "bearer" and secret:
+            return {"Authorization": f"Bearer {secret}"}
+        if auth_type == "header" and secret:
+            return {str(item.get("auth_header") or "X-API-Key"): secret}
+        return {}
 
     def _build_clients(self) -> None:
         timeout = settings.integration_http_timeout
@@ -47,9 +62,30 @@ class IntegrationHub:
             else None
         )
 
+        self.custom = {}
+        self.custom_meta = {}
+        for item in custom_runtime_integrations():
+            integration_id = str(item["id"])
+            self.custom_meta[integration_id] = item
+            if not item.get("enabled"):
+                continue
+            self.custom[integration_id] = GenericHTTPIntegrationClient(
+                str(item["base_url"]),
+                health_path=str(item.get("health_path") or "/health"),
+                timeout=timeout,
+                headers=self._custom_headers(item),
+            )
+
+    def _all_clients(self) -> list[Any]:
+        return [
+            x
+            for x in (self.camera_tts, self.facedetect, self.zalo, *self.custom.values())
+            if x is not None
+        ]
+
     async def reconfigure(self) -> None:
         """Rebuild clients in-place so ToolRuntime keeps the same hub reference."""
-        old_clients = [x for x in (self.camera_tts, self.facedetect, self.zalo) if x is not None]
+        old_clients = self._all_clients()
         self._build_clients()
         await asyncio.gather(*(client.close() for client in old_clients), return_exceptions=True)
         info(
@@ -60,13 +96,16 @@ class IntegrationHub:
             zalo=settings.zalo_enabled,
             wyoming=settings.wyoming_enabled,
             ha_custom_integrations=settings.ha_custom_integrations_enabled,
+            custom_integrations=len(self.custom_meta),
         )
 
     async def close(self) -> None:
-        clients = [x for x in (self.camera_tts, self.facedetect, self.zalo) if x is not None]
+        clients = self._all_clients()
         self.camera_tts = None
         self.facedetect = None
         self.zalo = None
+        self.custom = {}
+        self.custom_meta = {}
         await asyncio.gather(*(client.close() for client in clients), return_exceptions=True)
         info(logger, "integration_hub_closed", clients=len(clients))
 
@@ -132,5 +171,27 @@ class IntegrationHub:
                 self._wyoming_health if settings.wyoming_enabled else None,
             ),
         ]
+
+        for integration_id, item in self.custom_meta.items():
+            client = self.custom.get(integration_id)
+            auth_required = item.get("auth_type") in {"bearer", "header"}
+            secret_missing = auth_required and not bool(item.get("secret"))
+            if item.get("enabled") and secret_missing:
+                async def credential_missing() -> Any:
+                    raise RuntimeError("credential is not configured")
+                fn: Callable[[], Awaitable[Any]] | None = credential_missing
+            else:
+                fn = (lambda client=client: client.health(settings.integration_health_timeout)) if client else None
+            jobs.append(self._status_one(f"custom:{integration_id}", bool(item.get("enabled")), fn))
+
         pairs = await asyncio.gather(*jobs)
-        return {name: value for name, value in pairs}
+        out = {name: value for name, value in pairs}
+        for integration_id, item in self.custom_meta.items():
+            key = f"custom:{integration_id}"
+            if key in out:
+                out[key]["custom"] = True
+                out[key]["integration_id"] = integration_id
+                out[key]["name"] = item.get("name")
+                out[key]["base_url"] = item.get("base_url")
+                out[key]["health_path"] = item.get("health_path")
+        return out

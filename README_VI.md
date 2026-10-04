@@ -1,4 +1,13 @@
-# HassMind v1.2.3 — AI Agent riêng cho Home Assistant
+# HassMind v1.2.4 — AI Agent riêng cho Home Assistant
+
+
+## Mới trong v1.2.4
+
+- Tab **Integrations** có nút **Thêm Integration** để tạo Custom HTTP Integration trực tiếp từ Web Admin. Integration mới được persist trong SQLite và xuất hiện ngay trong danh sách sau khi lưu.
+- Custom Integration hỗ trợ Base URL, health path, bật/tắt, mô tả/icon, authentication kiểu Bearer token hoặc API-key header. Credential vẫn lưu riêng dưới `/data/secrets` và API chỉ trả trạng thái đã cấu hình.
+- IntegrationHub tự nạp/reconfigure Custom Integration và đưa health status vào trang Integrations mà không cần sửa stack hoặc restart container sau mỗi lần chỉnh cấu hình.
+- Toàn bộ card cấu hình Integration chuyển sang giao diện **thu gọn mặc định**; nhấn card để mở. Layout mới dùng 3/2/1 cột theo kích thước màn hình, tách rõ adapter tích hợp sẵn, Custom Integrations, Health Status và Effective Policy.
+- Custom HTTP Integration chỉ cung cấp health monitoring. Quyền/tool/action cho AI vẫn yêu cầu typed adapter trong code để không tạo một HTTP tunnel tùy ý cho model.
 
 ## Mới trong v1.2.3
 
@@ -468,6 +477,14 @@ Thứ tự ưu tiên là:
 
 Nút **Khôi phục stack/default** xóa runtime override của integration đó và quay về nguồn cũ. Vì vậy nâng cấp từ cấu hình `.env` hiện tại không bị mất tương thích.
 
+#### Thêm Custom HTTP Integration
+
+Từ v1.2.4, nhấn **Thêm Integration** ở đầu trang để tạo một Integration mới mà không sửa stack. Các trường chính gồm tên, ID, Base URL, health path và authentication. ID có thể để trống để HassMind tự sinh từ tên.
+
+Custom Integration được lưu trong bảng `custom_integrations`; credential nằm trong `/data/secrets/integration_custom_<id>_secret`. Khi bật Integration, HassMind gọi `GET <base_url><health_path>` để hiển thị trạng thái kết nối. Có thể sửa, bật/tắt hoặc xóa ngay trên Web Admin.
+
+Đây là lớp **health/config registry**, không phải generic action bridge. Nếu muốn AI gọi chức năng nghiệp vụ của service mới, hãy thêm typed adapter/tool với schema và policy rõ ràng thay vì cho model gọi HTTP tùy ý.
+
 ### 20.3 Camera TTS EZVIZ
 
 Trong **Integrations → Camera TTS EZVIZ**, cấu hình Base URL, API key, bật integration và policy cho phép TTS/media/PTZ. Default URL là `http://127.0.0.1:8124`. Nếu chỉ muốn agent đọc trạng thái, tắt **Cho phép TTS/media/PTZ**.
@@ -561,7 +578,7 @@ Khuyến nghị: lần deploy đầu để các cờ gửi/xóa/download/auto-re
 ## 22. Quy trình nâng cấp từ HassMind v1 cũ
 
 1. Backup `data/hassmind.db`, `.env`, `config/`, `knowledge/` và secrets hiện có.
-2. Thay code bằng bản v1.2.3 này nhưng giữ `data/` cũ.
+2. Thay code bằng bản v1.2.4 này nhưng giữ `data/` cũ.
 3. Chạy `sudo ./setup.sh`. Script chỉ tạo core secret còn thiếu, không ghi đè secret đang có. Nếu phát hiện Camera TTS/Zalo secret từ bản cũ, script tự migrate một lần sang `data/secrets/integration_*`; runtime secret mới có sẵn sẽ không bị ghi đè. Integration credential cũng có thể nhập/sửa sau trong Web Admin.
 4. Merge các biến core mới từ `.env.example` vào `.env`. Không cần đưa Camera TTS/FaceDetect/Zalo/Wyoming vào stack nếu sẽ quản lý bằng Web Admin.
 5. Deploy lại HassMind. Lần startup đầu sẽ tạo bảng admin/session mới, bootstrap tài khoản admin và best-effort scrub event/tool-audit + log file cũ.

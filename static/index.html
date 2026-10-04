@@ -4,15 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="color-scheme" content="dark">
-  <title>HassMind v1.2.3</title>
+  <title>HassMind v1.2.4</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/app.css?v=1.2.3">
-  <script src="/static/app.js?v=1.2.3" defer></script>
+  <link rel="stylesheet" href="/static/app.css?v=1.2.4">
+  <script src="/static/app.js?v=1.2.4" defer></script>
 </head>
 <body>
 <div class="app">
   <header class="topbar">
-    <div class="brand"><img class="brand-logo" src="/favicon.svg" alt="HassMind"><div><div class="brand-title">HassMind</div><div class="version">v1.2.3 · Observability & Secure Admin</div></div></div>
+    <div class="brand"><img class="brand-logo" src="/favicon.svg" alt="HassMind"><div><div class="brand-title">HassMind</div><div class="version">v1.2.4 · Observability & Secure Admin</div></div></div>
     <div id="healthPill" class="health-pill"><span class="health-dot"></span><span id="healthText">Đang kiểm tra…</span></div>
     <div class="top-spacer"></div>
     <div class="user-chip"><div id="userAvatar" class="user-avatar">A</div><span id="currentUser">admin</span><button id="logoutBtn" class="btn small" type="button">Đăng xuất</button></div>
@@ -54,8 +54,8 @@
     </section>
 
     <section id="integrations" class="panel">
-      <div class="page-head"><div><h1 class="page-title">Integrations</h1><p class="page-sub">Cấu hình, bật/tắt và kiểm tra adapter trực tiếp từ Web Admin — không cần sửa stack cho integration đã được HassMind hỗ trợ.</p></div><button class="btn" data-action="integrations-refresh" type="button">Làm mới</button></div>
-      <div class="help-box"><div class="help-cell"><strong>Mục đích</strong><span>Quản lý cấu hình runtime cho Camera TTS, FaceDetect, Zalo, Wyoming và HA custom components.</span></div><div class="help-cell"><strong>Cách dùng</strong><span>Nhập URL/policy/credential, bấm Lưu & áp dụng. Secret được giữ trong /data/secrets và không hiển thị lại.</span></div><div class="help-cell"><strong>Ưu tiên cấu hình</strong><span>Web Admin override stack/default; nút Khôi phục sẽ quay về giá trị stack/default hiện có.</span></div></div>
+      <div class="page-head"><div><h1 class="page-title">Integrations</h1><p class="page-sub">Quản lý adapter tích hợp sẵn và tự thêm Custom HTTP Integration trực tiếp từ Web Admin.</p></div><div class="row"><button class="btn primary" data-action="integration-add" type="button">＋ Thêm Integration</button><button class="btn" data-action="integrations-refresh" type="button">Làm mới</button></div></div>
+      <div class="help-box"><div class="help-cell"><strong>Mục đích</strong><span>Quản lý Camera TTS, FaceDetect, Zalo, Wyoming, HA custom components và các HTTP Integration do bạn tự thêm.</span></div><div class="help-cell"><strong>Cách dùng</strong><span>Các thẻ mặc định thu gọn. Nhấn vào Integration để mở cấu hình; secret lưu trong /data/secrets và không hiển thị lại.</span></div><div class="help-cell"><strong>Custom Integration</strong><span>Nhấn Thêm Integration để khai báo URL, health path và authentication. Action/tool cho AI vẫn cần adapter typed riêng để bảo đảm an toàn.</span></div></div>
       <div id="integrationsBox" class="grid"><div class="card card-pad span-12"><div class="empty">Chưa tải.</div></div></div>
     </section>
 
@@ -120,7 +120,7 @@
       <div class="about-grid">
         <article class="feature-card"><h3>Tổng quan</h3><p>Hiển thị health, phiên bản HA, model LLM, DB, task nền và logging để biết hệ thống có sẵn sàng hay không.</p><div class="example">Ví dụ: DB writable = No → sửa quyền thư mục data cho UID 10001.</div></article>
         <article class="feature-card"><h3>Chat / Agent</h3><p>Nhận yêu cầu ngôn ngữ tự nhiên, gọi tool Home Assistant/MCP/RAG theo policy rồi trả lời có ngữ cảnh.</p><div class="example">Ví dụ: “Kiểm tra các đèn đang bật và tắt đèn phòng khách nếu an toàn.”</div></article>
-        <article class="feature-card"><h3>Integrations</h3><p>Cấu hình và kiểm tra Camera TTS, FaceDetect, Zalo, Wyoming và custom component HA ngay trên Web Admin. Cấu hình persist trong /data.</p><div class="example">Ví dụ: bật FaceDetect, nhập http://127.0.0.1:8181 rồi Lưu & áp dụng; không cần thêm FACEDETECT_* vào stack.</div></article>
+        <article class="feature-card"><h3>Integrations</h3><p>Cấu hình adapter có sẵn hoặc thêm Custom HTTP Integration ngay trên Web Admin. Cấu hình persist trong /data, credential lưu riêng trong /data/secrets.</p><div class="example">Ví dụ: nhấn Thêm Integration, nhập URL + /health + token rồi lưu; Integration mới xuất hiện ngay trong danh sách và Health Status.</div></article>
         <article class="feature-card"><h3>Logs</h3><p>Structured logging có request/session/component/latency/traceback. Dữ liệu nhạy cảm được che trước khi xuất console, file và ring buffer.</p><div class="example">Ví dụ: dán Request ID từ lỗi UI để tìm toàn bộ chuỗi sự kiện.</div></article>
         <article class="feature-card"><h3>Tool audit</h3><p>Lưu dấu vết tool call vào SQLite để kiểm tra agent đã gửi gì và nhận gì. Arguments/result được redact trước khi lưu.</p><div class="example">Ví dụ: xem tool nào đã gọi service sai entity.</div></article>
         <article class="feature-card"><h3>HA events</h3><p>Lưu các event gần đây để hỗ trợ chẩn đoán realtime rule và context.</p><div class="example">Ví dụ: kiểm tra state_changed của cửa trước trước khi điều tra Event rule.</div></article>
