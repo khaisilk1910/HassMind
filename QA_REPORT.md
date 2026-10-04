@@ -1,42 +1,36 @@
-# HassMind v1.2.4 — QA report
+# HassMind v1.2.5 — QA report
 
-## Kiểm tra backend
+## Phạm vi
 
-PASS:
+- Zalo plain-text formatter và FollowUp conversion.
+- Zalo long-message splitting.
+- Home Assistant live state cache/fallback.
+- `ha_search_states` / `ha_get_states` helpers.
+- Version/static cache-busting.
+- Python, JavaScript, shell và YAML syntax.
 
-- `python -m compileall -q app`
-- SQLite migration tạo `custom_integrations` mà không thay đổi/xóa `integration_settings` hiện có.
-- CRUD Custom Integration: create → list → update → delete.
-- ID validation, URL validation, health-path validation và HTTP-header validation.
-- Secret lưu ngoài SQLite trong `/data/secrets/integration_custom_<id>_secret`.
-- API/public view không trả secret thật; chỉ trả `secret_configured`.
-- Đổi auth về `none` hoặc chọn xóa credential sẽ xóa runtime secret.
-- IntegrationHub nạp Custom Integration và reconfigure runtime.
-- Health check thực tế với local HTTP test server + Bearer auth: PASS.
-- Health status response không chứa credential.
-- Disable Custom Integration sau reconfigure trả `status=disabled`.
+## Kiểm thử tự động
 
-## Kiểm tra frontend
+`python -m unittest discover -s tests -v`:
 
-PASS:
+- Markdown heading/bold/backtick/FollowUp -> Zalo plain text: PASS.
+- Double-backtick và Home Assistant entity IDs có `_`: PASS.
+- Long Zalo message split đúng giới hạn: PASS.
+- Tìm `phòng ngủ` bằng query không dấu `phong ngu`: PASS.
+- Domain/state filter: PASS.
+- Compact custom scalar attributes và loại bỏ string quá lớn: PASS.
+- HA state snapshot được reuse: PASS.
+- HA `state_changed` update cache in-memory: PASS.
+- Cache invalidation bắt buộc refresh: PASS.
 
-- `node --check static/app.js`
-- Các built-in Integration dùng `<details>` không có thuộc tính `open`, vì vậy mặc định thu gọn.
-- Custom Integration dùng cùng cơ chế thu gọn mặc định.
-- Nút **Thêm Integration** mở form tạo mới.
-- Create/update/delete dùng API riêng và reload danh sách sau thành công.
-- Layout responsive có breakpoint 3/2/1 cột.
-- Credential input luôn là `type=password`, giá trị secret cũ không được render lại.
+## Static QA
 
-## Kiểm tra package
+- `python -m compileall`: PASS.
+- `node --check static/app.js` và `static/login.js`: PASS.
+- YAML parse cho stack/compose/MCP config: PASS.
+- `bash -n setup.sh`: PASS.
+- Version sync backend/frontend/VERSION: PASS (`1.2.5`).
 
-PASS trước khi đóng gói:
+## Ghi chú hiệu năng
 
-- Không chứa `.env` runtime, SQLite database, log runtime hay credential thật.
-- Xóa `__pycache__`/`.pyc` khỏi package.
-- Version đồng bộ `1.2.4` ở backend, frontend, `VERSION` và HTML cache-busting.
-
-## Ghi chú
-
-Custom HTTP Integration ở v1.2.4 là registry + health monitoring. Tool/action cho AI không được tạo tự động; đây là chủ ý bảo mật để tránh generic HTTP tunnel do LLM điều khiển.
-- Headless Chromium render bằng mock data: card Integrations đóng mặc định, mở đúng khi click, card đang mở tự span rộng hơn để form không bị bó hẹp, form Thêm Integration hiển thị đúng.
+QA xác nhận số REST state fetch trùng lặp được loại bỏ ở tầng code và các read-only tool calls có đường thực thi song song. Thời gian end-to-end thực tế còn phụ thuộc model OpenAI-compatible đang dùng, tốc độ host Home Assistant, số entity, mạng và độ dài câu trả lời; không ghi một con số latency cố định khi chưa benchmark trực tiếp trên server của người vận hành.

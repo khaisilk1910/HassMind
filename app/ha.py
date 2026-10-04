@@ -23,7 +23,12 @@ class HomeAssistantClient:
             timeout=20.0,
             headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"},
         )
-        info(logger, "ha_client_initialized", base_url=self.base)
+        self._state_cache: dict[str, dict[str, Any]] = {}
+        self._state_cache_at = 0.0
+        self._state_cache_complete = False
+        self._event_stream_live = False
+        self._state_cache_lock = asyncio.Lock()
+        info(logger, "ha_client_initialized", base_url=self.base, state_cache_ttl=settings.ha_state_cache_ttl)
 
     async def close(self):
         await self.http.aclose()
@@ -89,11 +94,59 @@ class HomeAssistantClient:
             )
             raise
 
-    async def states(self):
-        return await self._get("/api/states")
+    def _state_cache_fresh(self) -> bool:
+        if not self._state_cache_complete:
+            return False
+        if self._event_stream_live:
+            return True
+        ttl = max(0.0, float(settings.ha_state_cache_ttl))
+        return ttl > 0 and (perf_counter() - self._state_cache_at) <= ttl
+
+    def _cache_state(self, state: dict[str, Any] | None, entity_id: str = "") -> None:
+        eid = str((state or {}).get("entity_id") or entity_id or "").strip()
+        if not eid or not self._state_cache_complete:
+            return
+        if state is None:
+            self._state_cache.pop(eid, None)
+        else:
+            self._state_cache[eid] = state
+        self._state_cache_at = perf_counter()
+
+    def invalidate_state_cache(self) -> None:
+        self._state_cache.clear()
+        self._state_cache_complete = False
+        self._state_cache_at = 0.0
+
+    async def refresh_states(self) -> list[dict[str, Any]]:
+        data = await self._get("/api/states")
+        cache = {
+            str(item.get("entity_id")): item
+            for item in data
+            if isinstance(item, dict) and item.get("entity_id")
+        }
+        self._state_cache = cache
+        self._state_cache_complete = True
+        self._state_cache_at = perf_counter()
+        info(logger, "ha_state_cache_refreshed", entities=len(cache), event_stream_live=self._event_stream_live)
+        return list(cache.values())
+
+    async def states(self, *, fresh: bool = False):
+        if not fresh and self._state_cache_fresh():
+            return list(self._state_cache.values())
+        async with self._state_cache_lock:
+            if not fresh and self._state_cache_fresh():
+                return list(self._state_cache.values())
+            return await self.refresh_states()
 
     async def state(self, entity_id: str):
-        return await self._get(f"/api/states/{entity_id}")
+        entity_id = str(entity_id).strip()
+        if self._state_cache_fresh() and entity_id in self._state_cache:
+            return self._state_cache[entity_id]
+        result = await self._get(f"/api/states/{entity_id}")
+        if self._state_cache_complete and isinstance(result, dict):
+            self._state_cache[entity_id] = result
+            self._state_cache_at = perf_counter()
+        return result
 
     async def history(self, entity_id: str, start_time: str | None = None):
         path = "/api/history/period" + (f"/{start_time}" if start_time else "")
@@ -104,7 +157,11 @@ class HomeAssistantClient:
 
     async def call_service_raw(self, domain: str, service: str, data: dict, *, return_response: bool = False):
         params = {"return_response": ""} if return_response else None
-        return await self._post(f"/api/services/{domain}/{service}", data, params=params)
+        result = await self._post(f"/api/services/{domain}/{service}", data, params=params)
+        # Avoid returning a pre-action snapshot if a follow-up status check happens
+        # before Home Assistant's state_changed event reaches our WebSocket listener.
+        self.invalidate_state_cache()
+        return result
 
     async def call_service(self, domain: str, service: str, data: dict):
         assert_service_allowed(domain, service)
@@ -205,20 +262,59 @@ class HomeAssistantClient:
                         raise PermissionError(f"HA WebSocket auth failed: {auth}")
                     await ws.send(json.dumps({"id": 1, "type": "subscribe_events", "event_type": "state_changed"}))
                     await ws.send(json.dumps({"id": 2, "type": "subscribe_events", "event_type": "mobile_app_notification_action"}))
+
+                    # Events can interleave with subscription acknowledgements. Buffer them
+                    # until the complete REST snapshot is loaded, then apply them in order.
+                    pending_events: list[dict[str, Any]] = []
+                    acknowledged: set[int] = set()
+                    while acknowledged != {1, 2}:
+                        handshake_msg = json.loads(await ws.recv())
+                        if handshake_msg.get("type") == "result" and handshake_msg.get("id") in {1, 2}:
+                            if not handshake_msg.get("success"):
+                                raise RuntimeError(f"HA event subscription failed: {handshake_msg}")
+                            acknowledged.add(int(handshake_msg["id"]))
+                        elif handshake_msg.get("type") == "event" and isinstance(handshake_msg.get("event"), dict):
+                            pending_events.append(handshake_msg["event"])
+
+                    self._event_stream_live = False
+                    try:
+                        await self.refresh_states()
+                    except Exception:
+                        self.invalidate_state_cache()
+                        warning(logger, "ha_state_cache_warm_failed", message="Unable to warm HA state cache; REST fallback remains available")
+                    self._event_stream_live = True
+
+                    async def _consume_event(event: dict[str, Any]) -> None:
+                        if event.get("event_type") == "state_changed":
+                            data = event.get("data") or {}
+                            if isinstance(data, dict):
+                                self._cache_state(data.get("new_state"), str(data.get("entity_id") or ""))
+                        try:
+                            await callback(event)
+                        except Exception:
+                            exception(logger, "ha_event_callback_failed", message="HA event callback failed")
+
+                    for buffered_event in pending_events:
+                        await _consume_event(buffered_event)
+
                     backoff = 2
-                    info(logger, "ha_ws_connected", subscriptions=["state_changed", "mobile_app_notification_action"])
+                    info(
+                        logger,
+                        "ha_ws_connected",
+                        subscriptions=["state_changed", "mobile_app_notification_action"],
+                        buffered_events=len(pending_events),
+                    )
                     while not stop.is_set():
                         raw = await ws.recv()
                         msg = json.loads(raw)
-                        if msg.get("type") == "event" and msg.get("event"):
-                            try:
-                                await callback(msg["event"])
-                            except Exception:
-                                exception(logger, "ha_event_callback_failed", message="HA event callback failed")
+                        if msg.get("type") == "event" and isinstance(msg.get("event"), dict):
+                            await _consume_event(msg["event"])
             except asyncio.CancelledError:
+                self._event_stream_live = False
                 info(logger, "ha_ws_cancelled")
                 raise
             except Exception as exc:
+                self._event_stream_live = False
                 if stop.is_set():
                     break
                 warning(

@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     openai_model: str = "gpt-5.6"
     max_tool_rounds: int = 10
+    agent_history_messages: int = 24
+    zalo_history_messages: int = 12
+    parallel_read_tools: bool = True
+    ha_state_cache_ttl: float = 1.5
 
     # HassMind API/UI
     agent_name: str = "HassMind"

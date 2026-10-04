@@ -5,6 +5,7 @@ from typing import Any
 from urllib.parse import quote
 
 from .base import IntegrationError, JsonHttpClient
+from ..message_format import format_zalo_message
 
 
 class ZaloClient(JsonHttpClient):
@@ -73,8 +74,9 @@ class ZaloClient(JsonHttpClient):
     ) -> Any:
         await self.ensure_login()
         selected = await self._select_account(account_selection)
+        clean_message = format_zalo_message(message)
         body: dict[str, Any] = {
-            "message": {"msg": message},
+            "message": {"msg": clean_message},
             "threadId": str(thread_id).removeprefix("zalo:"),
             "type": int(thread_type),
             "accountSelection": str(selected),

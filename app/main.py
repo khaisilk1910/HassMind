@@ -45,6 +45,7 @@ from .ha import HomeAssistantClient
 from .ha_integrations import HAIntegrationBridge
 from .integration_config import integration_config_view, load_runtime_integration_overrides, reset_integration_config, save_integration_config
 from .integrations import IntegrationHub
+from .message_format import split_zalo_message
 from .observability import (
     current_request_id,
     exception,
@@ -69,7 +70,7 @@ from .tools import ToolRuntime
 
 os.umask(0o077)
 
-APP_VERSION = "1.2.4"
+APP_VERSION = "1.2.5"
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 setup_logging()
@@ -251,13 +252,21 @@ async def _process_zalo_message(payload: dict[str, Any]) -> None:
         try:
             info(logger, "zalo_agent_reply_started", thread_id=thread_id, account=account or "default", text_chars=len(text))
             answer = await agent.chat(session_id, text, source="zalo")
-            await integrations.zalo.send_message(
+            chunks = split_zalo_message(answer)
+            for chunk in chunks or ["Đã xử lý yêu cầu nhưng không có nội dung văn bản để gửi."]:
+                await integrations.zalo.send_message(
+                    thread_id=thread_id,
+                    message=chunk,
+                    thread_type=thread_type,
+                    account_selection=account,
+                )
+            info(
+                logger,
+                "zalo_agent_reply_completed",
                 thread_id=thread_id,
-                message=answer[:4000],
-                thread_type=thread_type,
-                account_selection=account,
+                answer_chars=len(answer),
+                outbound_chunks=max(1, len(chunks)),
             )
-            info(logger, "zalo_agent_reply_completed", thread_id=thread_id, answer_chars=len(answer))
         except Exception as exc:
             add_event("zalo_agent_error", thread_id, {"error": f"{type(exc).__name__}: {exc}"})
             exception(logger, "zalo_agent_reply_failed", thread_id=thread_id, error_type=type(exc).__name__)

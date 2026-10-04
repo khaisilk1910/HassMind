@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 from time import perf_counter
@@ -10,6 +11,27 @@ from .settings import settings
 from .tools import ToolRuntime, schemas
 
 logger = get_logger("agent")
+
+_ZALO_FORMAT_PROMPT = (
+    "Kênh hiện tại là Zalo và chỉ hiển thị plain text. Không dùng Markdown (#, *, backtick, fenced code), "
+    "không xuất HTML/XML hoặc thẻ <FollowUp>. Trình bày dễ đọc bằng emoji vừa phải, dòng trống và bullet Unicode •/◦. "
+    "Giữ nguyên entity_id Home Assistant khi cần nêu chi tiết kỹ thuật."
+)
+
+_READ_ONLY_TOOLS = {
+    "ha_list_entities", "ha_search_states", "ha_get_states", "ha_get_state", "ha_history",
+    "ha_recent_events", "ha_entity_registry", "ha_get_config", "ha_get_change",
+    "memory_search", "knowledge_search", "skill_list", "skill_read", "web_search",
+    "mcp_servers", "mcp_list_tools", "integrations_status", "camera_tts_cameras",
+    "camera_tts_job", "zalo_accounts", "ha_custom_integrations_status", "evn_accounts",
+    "evn_summary", "evn_daily", "evn_monthly", "lunar_convert_date", "shopping_profiles",
+    "shopping_list", "yt_dlp_search", "yt_dlp_get_job",
+}
+_READ_ONLY_PREFIXES = ("facedetect_",)
+
+
+def _is_read_only_tool(name: str) -> bool:
+    return name in _READ_ONLY_TOOLS or any(name.startswith(prefix) for prefix in _READ_ONLY_PREFIXES)
 
 
 class Agent:
@@ -27,8 +49,66 @@ class Agent:
             model=settings.openai_model,
             base_url=settings.openai_base_url,
             max_tool_rounds=settings.max_tool_rounds,
+            history_messages=settings.agent_history_messages,
+            zalo_history_messages=settings.zalo_history_messages,
+            parallel_read_tools=settings.parallel_read_tools,
             system_prompt_chars=len(self.system_prompt),
         )
+
+    async def _execute_tool_call(self, tc, round_index: int) -> dict[str, str]:
+        args: dict = {}
+        tool_started = perf_counter()
+        try:
+            args = json.loads(tc.function.arguments or "{}")
+        except Exception as exc:
+            add_tool_audit(tc.function.name, {}, error=f"{type(exc).__name__}: {exc}")
+            exception(
+                logger,
+                "tool_arguments_invalid",
+                message="Tool arguments are not valid JSON",
+                tool=tc.function.name,
+                tool_call_id=tc.id,
+                raw_arguments=preview(tc.function.arguments or ""),
+            )
+            content = json.dumps({"error": type(exc).__name__, "message": str(exc)}, ensure_ascii=False)
+            return {"role": "tool", "tool_call_id": tc.id, "content": content}
+
+        info(
+            logger,
+            "tool_call_started",
+            tool=tc.function.name,
+            tool_call_id=tc.id,
+            round=round_index,
+            arguments=preview(args),
+        )
+        try:
+            result = await self.runtime.call(tc.function.name, args)
+            duration_ms = round((perf_counter() - tool_started) * 1000, 2)
+            add_tool_audit(tc.function.name, args, result=result)
+            info(
+                logger,
+                "tool_call_completed",
+                tool=tc.function.name,
+                tool_call_id=tc.id,
+                duration_ms=duration_ms,
+                result=preview(result),
+            )
+            content = json.dumps(result, ensure_ascii=False, default=str)
+        except Exception as exc:
+            duration_ms = round((perf_counter() - tool_started) * 1000, 2)
+            add_tool_audit(tc.function.name, args, error=f"{type(exc).__name__}: {exc}")
+            exception(
+                logger,
+                "tool_call_failed",
+                message="Tool call failed",
+                tool=tc.function.name,
+                tool_call_id=tc.id,
+                duration_ms=duration_ms,
+                arguments=preview(args),
+                error_type=type(exc).__name__,
+            )
+            content = json.dumps({"error": type(exc).__name__, "message": str(exc)}, ensure_ascii=False)
+        return {"role": "tool", "tool_call_id": tc.id, "content": content}
 
     async def chat(self, session_id: str, user_text: str, source: str = "web") -> str:
         started = perf_counter()
@@ -42,13 +122,18 @@ class Agent:
             )
             try:
                 add_message(session_id, "user", user_text, source)
-                history = get_messages(session_id, 36)
-                messages = [{"role": "system", "content": self.system_prompt}] + history
+                history_limit = settings.zalo_history_messages if source == "zalo" else settings.agent_history_messages
+                history = get_messages(session_id, max(2, int(history_limit)))
+                messages = [{"role": "system", "content": self.system_prompt}]
+                if source == "zalo":
+                    messages.append({"role": "system", "content": _ZALO_FORMAT_PROMPT})
+                messages.extend(history)
                 tool_schemas = schemas()
                 info(
                     logger,
                     "chat_context_ready",
                     history_messages=len(history),
+                    history_limit=history_limit,
                     outbound_messages=len(messages),
                     tools_available=len(tool_schemas),
                 )
@@ -126,61 +211,27 @@ class Agent:
                         )
                         return text
 
-                    for tc in msg.tool_calls:
-                        args = {}
-                        tool_started = perf_counter()
-                        try:
-                            args = json.loads(tc.function.arguments or "{}")
-                        except Exception as exc:
-                            add_tool_audit(tc.function.name, {}, error=f"{type(exc).__name__}: {exc}")
-                            exception(
-                                logger,
-                                "tool_arguments_invalid",
-                                message="Tool arguments are not valid JSON",
-                                tool=tc.function.name,
-                                tool_call_id=tc.id,
-                                raw_arguments=preview(tc.function.arguments or ""),
-                            )
-                            content = json.dumps({"error": type(exc).__name__, "message": str(exc)}, ensure_ascii=False)
-                            messages.append({"role": "tool", "tool_call_id": tc.id, "content": content})
-                            continue
-
+                    calls = list(msg.tool_calls)
+                    run_parallel = bool(
+                        settings.parallel_read_tools
+                        and len(calls) > 1
+                        and all(_is_read_only_tool(tc.function.name) for tc in calls)
+                    )
+                    if run_parallel:
+                        batch_started = perf_counter()
+                        info(logger, "tool_batch_parallel_started", round=round_index, tool_count=len(calls))
+                        tool_messages = await asyncio.gather(*(self._execute_tool_call(tc, round_index) for tc in calls))
                         info(
                             logger,
-                            "tool_call_started",
-                            tool=tc.function.name,
-                            tool_call_id=tc.id,
+                            "tool_batch_parallel_completed",
                             round=round_index,
-                            arguments=preview(args),
+                            tool_count=len(calls),
+                            duration_ms=round((perf_counter() - batch_started) * 1000, 2),
                         )
-                        try:
-                            result = await self.runtime.call(tc.function.name, args)
-                            duration_ms = round((perf_counter() - tool_started) * 1000, 2)
-                            add_tool_audit(tc.function.name, args, result=result)
-                            info(
-                                logger,
-                                "tool_call_completed",
-                                tool=tc.function.name,
-                                tool_call_id=tc.id,
-                                duration_ms=duration_ms,
-                                result=preview(result),
-                            )
-                            content = json.dumps(result, ensure_ascii=False, default=str)
-                        except Exception as exc:
-                            duration_ms = round((perf_counter() - tool_started) * 1000, 2)
-                            add_tool_audit(tc.function.name, args, error=f"{type(exc).__name__}: {exc}")
-                            exception(
-                                logger,
-                                "tool_call_failed",
-                                message="Tool call failed",
-                                tool=tc.function.name,
-                                tool_call_id=tc.id,
-                                duration_ms=duration_ms,
-                                arguments=preview(args),
-                                error_type=type(exc).__name__,
-                            )
-                            content = json.dumps({"error": type(exc).__name__, "message": str(exc)}, ensure_ascii=False)
-                        messages.append({"role": "tool", "tool_call_id": tc.id, "content": content})
+                        messages.extend(tool_messages)
+                    else:
+                        for tc in calls:
+                            messages.append(await self._execute_tool_call(tc, round_index))
 
                 text = "Đã đạt giới hạn số vòng gọi công cụ; HassMind dừng để tránh vòng lặp ngoài ý muốn."
                 add_message(session_id, "assistant", text, source)

@@ -67,3 +67,17 @@ Request ID: a9f0...
 ```
 
 Tại tab Logs, nhập `a9f0...` vào ô tìm kiếm và lọc `ERROR` nếu cần.
+
+## v1.2.5 performance events
+
+For current-state latency diagnostics, look for:
+
+- `ha_state_cache_refreshed`: a complete HA `/api/states` snapshot was loaded.
+- `ha_ws_connected`: persistent state event stream is active; current-state reads can be served from RAM.
+- `tool_batch_parallel_started` / `tool_batch_parallel_completed`: multiple read-only tools were executed concurrently.
+- `llm_request_completed.duration_ms`: model-side latency for each agent round.
+- `tool_call_completed.duration_ms`: individual tool latency.
+- `chat_completed.duration_ms`: total agent latency.
+- `zalo_agent_reply_completed.outbound_chunks`: number of Zalo messages used for a long answer.
+
+If `llm_request_completed.duration_ms` dominates while HA tool calls are already fast, changing HA cache settings will not materially reduce total time; tune the OpenAI-compatible model/provider or shorten conversation/output instead.

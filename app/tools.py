@@ -10,8 +10,10 @@ from .mcp_client import call_server_tool, list_server_tools, load_servers
 from .rag import search_knowledge
 from .scheduler import create_job
 from .settings import settings
+from .state_query import compact_state, search_states
 from .skills import list_skills, read_skill
 from .websearch import search_web
+
 
 
 def _fn(name: str, description: str, properties: dict, required: list[str] | None = None) -> dict:
@@ -32,8 +34,19 @@ def _fn(name: str, description: str, properties: dict, required: list[str] | Non
 
 def schemas() -> list[dict]:
     tools = [
-        _fn("ha_list_entities", "List Home Assistant entities, optionally filtered by domain.", {"domain": {"type": "string"}}),
-        _fn("ha_get_state", "Get one entity state and attributes.", {"entity_id": {"type": "string"}}, ["entity_id"]),
+        _fn("ha_list_entities", "List Home Assistant entities, optionally filtered by domain. Uses the live in-memory state snapshot when available.", {"domain": {"type": "string"}}),
+        _fn("ha_search_states", "FAST status lookup: search current Home Assistant states by friendly name/entity_id keywords and optional domains in one live snapshot. Prefer this for room/device status questions instead of many ha_get_state calls.", {
+            "query": {"type": "string", "description": "Keywords such as 'phong ngu', 'soc chip', 'dieu hoa'. Accent-insensitive."},
+            "domains": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
+            "state": {"type": "string", "description": "Optional exact state filter such as on/off/unavailable."},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+            "include_attributes": {"type": "boolean"},
+        }),
+        _fn("ha_get_states", "FAST batch lookup: get many exact entity states from one live snapshot. Prefer this over repeated ha_get_state calls when multiple entity_ids are known.", {
+            "entity_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 200},
+            "include_attributes": {"type": "boolean"},
+        }, ["entity_ids"]),
+        _fn("ha_get_state", "Get one exact entity state and attributes. For multiple entities use ha_get_states.", {"entity_id": {"type": "string"}}, ["entity_id"]),
         _fn("ha_history", "Get recent Home Assistant history for an entity. start_time may be ISO8601.", {"entity_id": {"type": "string"}, "start_time": {"type": "string"}}, ["entity_id"]),
         _fn("ha_recent_events", "Read recent events captured by HassMind, including Home Assistant and enabled companion webhooks.", {"limit": {"type": "integer", "minimum": 1, "maximum": 100}}),
         _fn("ha_call_service", "Call a Home Assistant service only if its domain is in the direct-action allowlist.", {"domain": {"type": "string"}, "service": {"type": "string"}, "data": {"type": "object"}}, ["domain", "service", "data"]),
@@ -175,6 +188,27 @@ class ToolRuntime:
                 "friendly_name": (s.get("attributes") or {}).get("friendly_name"),
                 "last_changed": s.get("last_changed"),
             } for s in states]
+        if name == "ha_search_states":
+            states = await self.ha.states()
+            query = str(args.get("query") or "")
+            domains = [str(x).strip() for x in (args.get("domains") or []) if str(x).strip()]
+            state_filter = str(args.get("state") or "").strip()
+            limit = min(max(int(args.get("limit", 80)), 1), 200)
+            include_attributes = bool(args.get("include_attributes", True))
+            return search_states(
+                states, query=query, domains=domains, state_filter=state_filter,
+                limit=limit, include_attributes=include_attributes,
+            )
+        if name == "ha_get_states":
+            requested = [str(x).strip() for x in (args.get("entity_ids") or []) if str(x).strip()]
+            if len(requested) > 200:
+                requested = requested[:200]
+            include_attributes = bool(args.get("include_attributes", True))
+            states = await self.ha.states()
+            by_id = {str(s.get("entity_id")): s for s in states if isinstance(s, dict) and s.get("entity_id")}
+            found = [compact_state(by_id[eid], include_attributes=include_attributes) for eid in requested if eid in by_id]
+            missing = [eid for eid in requested if eid not in by_id]
+            return {"count": len(found), "states": found, "missing": missing}
         if name == "ha_get_state":
             return await self.ha.state(args["entity_id"])
         if name == "ha_history":

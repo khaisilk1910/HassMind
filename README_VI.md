@@ -1,5 +1,14 @@
-# HassMind v1.2.4 — AI Agent riêng cho Home Assistant
+# HassMind v1.2.5 — AI Agent riêng cho Home Assistant
 
+
+## Mới trong v1.2.5
+
+- Zalo dùng formatter plain-text riêng: tự bỏ Markdown (`#`, `*`, backtick, code fence) và chuyển `<FollowUp>` thành gợi ý văn bản dễ đọc.
+- Câu trả lời dài trên Zalo được chia ở ranh giới đoạn, tránh cắt cụt giữa nội dung.
+- Thêm `ha_search_states` và `ha_get_states` để truy vấn nhiều trạng thái trong một snapshot thay vì gọi từng entity.
+- Cache trạng thái Home Assistant được giữ đồng bộ bằng WebSocket `state_changed`; REST là fallback khi stream mất kết nối.
+- Các tool chỉ-đọc trong cùng một vòng model được chạy song song khi an toàn.
+- Context mặc định giảm còn 24 message; Zalo 12 message để giảm token và thời gian phản hồi. Có thể chỉnh qua `.env`.
 
 ## Mới trong v1.2.4
 
@@ -578,7 +587,7 @@ Khuyến nghị: lần deploy đầu để các cờ gửi/xóa/download/auto-re
 ## 22. Quy trình nâng cấp từ HassMind v1 cũ
 
 1. Backup `data/hassmind.db`, `.env`, `config/`, `knowledge/` và secrets hiện có.
-2. Thay code bằng bản v1.2.4 này nhưng giữ `data/` cũ.
+2. Thay code bằng bản v1.2.5 này nhưng giữ `data/` cũ.
 3. Chạy `sudo ./setup.sh`. Script chỉ tạo core secret còn thiếu, không ghi đè secret đang có. Nếu phát hiện Camera TTS/Zalo secret từ bản cũ, script tự migrate một lần sang `data/secrets/integration_*`; runtime secret mới có sẵn sẽ không bị ghi đè. Integration credential cũng có thể nhập/sửa sau trong Web Admin.
 4. Merge các biến core mới từ `.env.example` vào `.env`. Không cần đưa Camera TTS/FaceDetect/Zalo/Wyoming vào stack nếu sẽ quản lý bằng Web Admin.
 5. Deploy lại HassMind. Lần startup đầu sẽ tạo bảng admin/session mới, bootstrap tài khoản admin và best-effort scrub event/tool-audit + log file cũ.
