@@ -15,6 +15,21 @@ logger = get_logger("integrations")
 
 class IntegrationHub:
     def __init__(self):
+        self.camera_tts: CameraTTSClient | None = None
+        self.facedetect: FaceDetectClient | None = None
+        self.zalo: ZaloClient | None = None
+        self._build_clients()
+        info(
+            logger,
+            "integration_hub_initialized",
+            camera_tts=settings.camera_tts_enabled,
+            facedetect=settings.facedetect_enabled,
+            zalo=settings.zalo_enabled,
+            wyoming=settings.wyoming_enabled,
+            ha_custom_integrations=settings.ha_custom_integrations_enabled,
+        )
+
+    def _build_clients(self) -> None:
         timeout = settings.integration_http_timeout
         self.camera_tts = (
             CameraTTSClient(settings.camera_tts_url, settings.read_camera_tts_key(), timeout)
@@ -31,9 +46,15 @@ class IntegrationHub:
             if settings.zalo_enabled
             else None
         )
+
+    async def reconfigure(self) -> None:
+        """Rebuild clients in-place so ToolRuntime keeps the same hub reference."""
+        old_clients = [x for x in (self.camera_tts, self.facedetect, self.zalo) if x is not None]
+        self._build_clients()
+        await asyncio.gather(*(client.close() for client in old_clients), return_exceptions=True)
         info(
             logger,
-            "integration_hub_initialized",
+            "integration_hub_reconfigured",
             camera_tts=settings.camera_tts_enabled,
             facedetect=settings.facedetect_enabled,
             zalo=settings.zalo_enabled,
@@ -43,6 +64,9 @@ class IntegrationHub:
 
     async def close(self) -> None:
         clients = [x for x in (self.camera_tts, self.facedetect, self.zalo) if x is not None]
+        self.camera_tts = None
+        self.facedetect = None
+        self.zalo = None
         await asyncio.gather(*(client.close() for client in clients), return_exceptions=True)
         info(logger, "integration_hub_closed", clients=len(clients))
 

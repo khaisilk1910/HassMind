@@ -212,13 +212,25 @@ class Settings(BaseSettings):
         return self._read_optional(self.telegram_bot_token_file) or self.telegram_bot_token
 
     def read_camera_tts_key(self) -> str:
-        return self._read_optional(self.camera_tts_api_key_file) or self.camera_tts_api_key
+        return (
+            self.read_runtime_secret("integration_camera_tts_api_key")
+            or self._read_optional(self.camera_tts_api_key_file)
+            or self.camera_tts_api_key
+        )
 
     def read_zalo_password(self) -> str:
-        return self._read_optional(self.zalo_password_file) or self.zalo_password
+        return (
+            self.read_runtime_secret("integration_zalo_password")
+            or self._read_optional(self.zalo_password_file)
+            or self.zalo_password
+        )
 
     def read_zalo_webhook_secret(self) -> str:
-        return self._read_optional(self.zalo_webhook_secret_file) or self.zalo_webhook_secret
+        return (
+            self.read_runtime_secret("integration_zalo_webhook_secret")
+            or self._read_optional(self.zalo_webhook_secret_file)
+            or self.zalo_webhook_secret
+        )
 
     def configured_secret_values(self) -> list[str]:
         values = [
@@ -226,9 +238,9 @@ class Settings(BaseSettings):
             self._read_optional(self.openai_api_key_file), self.openai_api_key,
             self.read_runtime_secret(self.runtime_api_token_name), self._read_optional(self.api_token_file), self.api_token,
             self._read_optional(self.telegram_bot_token_file), self.telegram_bot_token,
-            self._read_optional(self.camera_tts_api_key_file), self.camera_tts_api_key,
-            self._read_optional(self.zalo_password_file), self.zalo_password,
-            self._read_optional(self.zalo_webhook_secret_file), self.zalo_webhook_secret,
+            self.read_runtime_secret("integration_camera_tts_api_key"), self._read_optional(self.camera_tts_api_key_file), self.camera_tts_api_key,
+            self.read_runtime_secret("integration_zalo_password"), self._read_optional(self.zalo_password_file), self.zalo_password,
+            self.read_runtime_secret("integration_zalo_webhook_secret"), self._read_optional(self.zalo_webhook_secret_file), self.zalo_webhook_secret,
             self._read_optional(self.admin_bootstrap_password_file), self.admin_bootstrap_password,
             self.read_runtime_secret(self.runtime_recovery_key_name), self._read_optional(self.admin_recovery_key_file), self.admin_recovery_key,
         ]

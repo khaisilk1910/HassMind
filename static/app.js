@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION='1.2.2';
+const APP_VERSION='1.2.3';
 const $=id=>document.getElementById(id);
 function makeSessionId(){if(globalThis.crypto&&typeof globalThis.crypto.randomUUID==='function')return globalThis.crypto.randomUUID();return 'web-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,12)}
 const uiState={sessionId:localStorage.getItem('hassmind_session')||makeSessionId(),activeTab:'overview',csrf:'',user:null,passwordMinLength:14};
@@ -8,12 +8,78 @@ function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&l
 function fmtTime(ts){try{return new Date(ts).toLocaleString('vi-VN',{hour12:false})}catch{return ts||''}}
 function fmtDuration(seconds){seconds=Number(seconds||0);if(seconds<60)return seconds.toFixed(0)+'s';if(seconds<3600)return Math.floor(seconds/60)+'m '+Math.floor(seconds%60)+'s';return Math.floor(seconds/3600)+'h '+Math.floor((seconds%3600)/60)+'m'}
 function toast(message,bad=false){const d=document.createElement('div');d.className='toast'+(bad?' bad':'');d.textContent=message;$('toastHost').appendChild(d);setTimeout(()=>d.remove(),4500)}
-function parseChatStrong(text){
-  const source=String(text??''),parts=[];let cursor=0;const re=/\*\*([\s\S]+?)\*\*/g;let match;
-  while((match=re.exec(source))!==null){if(match.index>cursor)parts.push({text:source.slice(cursor,match.index),strong:false});parts.push({text:match[1],strong:true});cursor=re.lastIndex}
-  if(cursor<source.length)parts.push({text:source.slice(cursor),strong:false});return parts.length?parts:[{text:source,strong:false}]
+function hasLeadingEmoji(text){return /^[\u2600-\u27BF\u{1F300}-\u{1FAFF}]/u.test(String(text||'').trim())}
+function semanticEmoji(text,heading=false){
+  const raw=String(text||'').trim();if(!raw||hasLeadingEmoji(raw))return '';
+  const t=raw.toLocaleLowerCase('vi-VN');
+  const rules=[
+    [/kết luận|tổng kết|tóm tắt|summary|trạng thái chung|an toàn/,'✅'],
+    [/hiện diện|presence|occupancy|chuyển động|motion|giám sát/,'👁️'],
+    [/camera|frigate/,'📷'],[/cửa|door|contact/,'🚪'],
+    [/đèn|chiếu sáng|light/,'💡'],[/quạt|fan/,'🌀'],[/điều hòa|climate|air conditioner/,'❄️'],
+    [/ổ cắm|socket|plug/,'🔌'],[/máy in|printer/,'🖨️'],
+    [/nhiệt độ|temperature/,'🌡️'],[/độ ẩm|humidity/,'💧'],[/môi trường|environment/,'🌿'],
+    [/điện năng|năng lượng|energy|power/,'⚡'],[/mạng|wifi|network/,'📡'],[/âm thanh|media|tts/,'🔊'],
+    [/lỗi|error|unavailable|mất kết nối/,'⚠️']
+  ];
+  for(const [re,icon] of rules)if(re.test(t))return icon;
+  return heading?'📌':'•';
 }
-function renderChatText(target,text,enableStrong=false){target.replaceChildren();if(!enableStrong){target.textContent=String(text??'');return}const fragment=document.createDocumentFragment();for(const part of parseChatStrong(text)){if(part.strong){const el=document.createElement('strong');el.className='chat-strong';el.textContent=part.text;fragment.appendChild(el)}else{fragment.appendChild(document.createTextNode(part.text))}}target.appendChild(fragment)}
+function appendInlineMarkdown(parent,text){
+  const src=String(text??'');let i=0,buffer='';
+  const flush=()=>{if(buffer){parent.appendChild(document.createTextNode(buffer));buffer=''}};
+  const addWrapped=(tag,content,cls='')=>{flush();const el=document.createElement(tag);if(cls)el.className=cls;appendInlineMarkdown(el,content);parent.appendChild(el)};
+  while(i<src.length){
+    if(src[i]==='\\'&&i+1<src.length&&'\\`*_~#[]'.includes(src[i+1])){buffer+=src[i+1];i+=2;continue}
+    if(src[i]==='`'){
+      const j=src.indexOf('`',i+1);if(j!==-1){flush();const code=document.createElement('code');code.className='chat-inline-code';code.textContent=src.slice(i+1,j);parent.appendChild(code);i=j+1;continue}
+    }
+    if(src.startsWith('**',i)||src.startsWith('__',i)){
+      const marker=src.slice(i,i+2),j=src.indexOf(marker,i+2);if(j!==-1){addWrapped('strong',src.slice(i+2,j),'chat-strong');i=j+2;continue}
+    }
+    if(src.startsWith('~~',i)){
+      const j=src.indexOf('~~',i+2);if(j!==-1){addWrapped('del',src.slice(i+2,j));i=j+2;continue}
+    }
+    if((src[i]==='*'||src[i]==='_')&&src[i+1]&&!/\s/.test(src[i+1])){
+      const marker=src[i],j=src.indexOf(marker,i+1);if(j>i+1){addWrapped('em',src.slice(i+1,j));i=j+1;continue}
+    }
+    buffer+=src[i];i++;
+  }
+  flush();
+}
+function parseListLine(line){
+  const m=String(line).replace(/\t/g,'    ').match(/^(\s*)([-+*]|\d+[.)])\s+(.+)$/);if(!m)return null;
+  return {indent:m[1].length,ordered:/^\d/.test(m[2]),text:m[3]};
+}
+function isTableSeparator(line){return /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(String(line||''))}
+function tableCells(line){let v=String(line||'').trim();if(v.startsWith('|'))v=v.slice(1);if(v.endsWith('|'))v=v.slice(0,-1);return v.split('|').map(x=>x.trim())}
+function renderMarkdown(target,text){
+  target.replaceChildren();target.classList.add('chat-markdown');
+  const lines=String(text??'').replace(/(?:&#x20;|&#32;|&nbsp;)/gi,' ').replace(/\r\n?/g,'\n').split('\n');let i=0;
+  const appendParagraph=(chunk)=>{const p=document.createElement('p');chunk.forEach((line,idx)=>{appendInlineMarkdown(p,line.trim());if(idx<chunk.length-1)p.appendChild(document.createElement('br'))});target.appendChild(p)};
+  while(i<lines.length){
+    const line=lines[i];if(!line.trim()){i++;continue}
+    const fence=line.match(/^\s*```([^`]*)$/);if(fence){const code=[];i++;while(i<lines.length&&!/^\s*```\s*$/.test(lines[i]))code.push(lines[i++]);if(i<lines.length)i++;const pre=document.createElement('pre');pre.className='chat-code-block';const c=document.createElement('code');if(fence[1].trim())c.dataset.language=fence[1].trim();c.textContent=code.join('\n');pre.appendChild(c);target.appendChild(pre);continue}
+    const heading=line.match(/^\s*(#{1,6})\s+(.+?)\s*#*\s*$/);if(heading){const h=document.createElement('h'+Math.min(6,heading[1].length));const icon=semanticEmoji(heading[2],true);if(icon){const span=document.createElement('span');span.className='chat-heading-icon';span.textContent=icon;h.appendChild(span)}appendInlineMarkdown(h,heading[2]);target.appendChild(h);i++;continue}
+    if(/^\s{0,3}((---+)|(\*\*\*+)|(___+))\s*$/.test(line)){target.appendChild(document.createElement('hr'));i++;continue}
+    if(i+1<lines.length&&line.includes('|')&&isTableSeparator(lines[i+1])){
+      const table=document.createElement('table');table.className='chat-table';const thead=document.createElement('thead'),tr=document.createElement('tr');for(const cell of tableCells(line)){const th=document.createElement('th');appendInlineMarkdown(th,cell);tr.appendChild(th)}thead.appendChild(tr);table.appendChild(thead);i+=2;const tbody=document.createElement('tbody');while(i<lines.length&&lines[i].trim()&&lines[i].includes('|')){const row=document.createElement('tr');for(const cell of tableCells(lines[i])){const td=document.createElement('td');appendInlineMarkdown(td,cell);row.appendChild(td)}tbody.appendChild(row);i++}table.appendChild(tbody);target.appendChild(table);continue
+    }
+    const firstList=parseListLine(line);if(firstList){
+      const root=document.createElement(firstList.ordered?'ol':'ul');root.className='chat-list';target.appendChild(root);const stack=[{indent:firstList.indent,ordered:firstList.ordered,list:root,lastLi:null}];
+      while(i<lines.length){const item=parseListLine(lines[i]);if(!item)break;let current=stack[stack.length-1];while(stack.length>1&&item.indent<current.indent){stack.pop();current=stack[stack.length-1]}
+        if(item.indent>current.indent&&current.lastLi){const nested=document.createElement(item.ordered?'ol':'ul');nested.className='chat-list nested';current.lastLi.appendChild(nested);current={indent:item.indent,ordered:item.ordered,list:nested,lastLi:null};stack.push(current)}
+        else if(item.indent===current.indent&&item.ordered!==current.ordered){break}
+        const li=document.createElement('li');if(!item.ordered){const icon=document.createElement('span');icon.className='chat-bullet-icon';icon.textContent=semanticEmoji(item.text,false);li.appendChild(icon)}appendInlineMarkdown(li,item.text);current.list.appendChild(li);current.lastLi=li;i++;
+      }continue
+    }
+    if(/^\s*>\s?/.test(line)){const q=document.createElement('blockquote');const qlines=[];while(i<lines.length&&/^\s*>\s?/.test(lines[i]))qlines.push(lines[i++].replace(/^\s*>\s?/,''));qlines.forEach((x,idx)=>{appendInlineMarkdown(q,x);if(idx<qlines.length-1)q.appendChild(document.createElement('br'))});target.appendChild(q);continue}
+    const para=[];while(i<lines.length&&lines[i].trim()){
+      const next=lines[i];if(para.length&&( /^\s*```/.test(next)||/^\s*#{1,6}\s+/.test(next)||parseListLine(next)||/^\s*>\s?/.test(next)||/^\s{0,3}---+\s*$/.test(next)||(i+1<lines.length&&next.includes('|')&&isTableSeparator(lines[i+1]))))break;para.push(next);i++}
+    appendParagraph(para);
+  }
+}
+function renderChatText(target,text,enableMarkdown=false){target.classList.remove('chat-markdown');if(enableMarkdown){renderMarkdown(target,text);return}target.replaceChildren();target.textContent=String(text??'')}
 async function copyTextSafe(value,sourceElement=null){
   const text=String(value??'');if(!text)throw new Error('Không có nội dung để sao chép.');
   if(globalThis.isSecureContext===true&&navigator.clipboard&&typeof navigator.clipboard.writeText==='function'){try{await navigator.clipboard.writeText(text);return 'clipboard'}catch{}}
@@ -53,8 +119,12 @@ function addMsg(role,text,meta='',isError=false){clearChatEmpty();const row=docu
 async function sendChat(){const el=$('chatinput'),text=el.value.trim();if(!text)return;el.value='';addMsg('user',text);const pending=addMsg('assistant','Đang xử lý…');$('sendBtn').disabled=true;try{const j=await api('/api/chat',{method:'POST',body:JSON.stringify({session_id:uiState.sessionId,message:text})});renderChatText(pending.body,j.answer,true);if(j.request_id){const m=document.createElement('div');m.className='msg-meta mono';m.textContent='request: '+j.request_id;pending.bubble.appendChild(m)}}catch(e){pending.bubble.classList.add('error');renderChatText(pending.body,'ERROR: '+e.message,false);if(e.requestId){const m=document.createElement('div');m.className='msg-meta mono';m.textContent='Request ID: '+e.requestId;pending.bubble.appendChild(m)}reportClientError('chat_error',e.message,e.stack||'',{request_id:e.requestId||''})}finally{$('sendBtn').disabled=false;el.focus()}}
 function newSession(){uiState.sessionId=makeSessionId();localStorage.setItem('hassmind_session',uiState.sessionId);$('session').textContent='session: '+uiState.sessionId;$('chatbox').innerHTML='<div class="chat-empty" id="chatEmpty"><div><strong>Phiên mới</strong><div class="small-text mt-10">Session đã được tạo lại.</div></div></div>';toast('Đã tạo phiên mới')}
 
-function integrationCard(name,x){const status=x?.status||'unknown',ok=!!x?.ok,enabled=x?.enabled!==false;const badge=!enabled?'warn':ok?'ok':'bad';return `<div class="card card-pad span-4"><div class="card-title"><h3>${esc(name)}</h3><span class="badge ${badge}">${esc(status)}</span></div>${x?.error?`<div class="error-text small-text">${esc(x.error)}</div>`:''}<details class="mt-10"><summary>Chi tiết</summary><pre>${esc(JSON.stringify(x,null,2))}</pre></details></div>`}
-async function loadIntegrations(){const box=$('integrationsBox');try{const j=await api('/api/integrations');const cards=[];Object.entries(j.companion_containers||{}).forEach(([k,v])=>cards.push(integrationCard(k,v)));Object.entries(j.home_assistant_custom_components||{}).forEach(([k,v])=>{if(typeof v==='object')cards.push(integrationCard('HA · '+k,v))});cards.push(`<div class="card card-pad span-12"><div class="card-title"><h3>Policy</h3></div><pre>${esc(JSON.stringify(j.policy,null,2))}</pre></div>`);box.innerHTML=cards.join('')||'<div class="card card-pad span-12"><div class="empty">Không có integration.</div></div>'}catch(e){box.innerHTML=`<div class="card card-pad span-12">${errorHtml(e)}</div>`}}
+function integrationCard(name,x){const status=x?.status||'unknown',ok=!!x?.ok,enabled=x?.enabled!==false;const badge=!enabled?'warn':ok?'ok':'bad';return `<div class="card card-pad span-4 integration-status-card"><div class="card-title"><h3>${esc(name)}</h3><span class="badge ${badge}">${esc(status)}</span></div>${x?.error?`<div class="error-text small-text">${esc(x.error)}</div>`:''}<details class="mt-10"><summary>Chi tiết</summary><pre>${esc(JSON.stringify(x,null,2))}</pre></details></div>`}
+function integrationField(integrationId,field){const id=`int-${integrationId}-${field.name}`,label=esc(field.label||field.name);if(field.type==='boolean')return `<label class="integration-toggle" for="${esc(id)}"><span>${label}</span><input id="${esc(id)}" data-field="${esc(field.name)}" type="checkbox" ${field.value?'checked':''}></label>`;if(field.type==='secret'){const status=field.configured?`<span class="badge ok">đã cấu hình · ${esc(field.source||'')}</span>`:'<span class="badge warn">chưa cấu hình</span>';return `<div class="field"><label for="${esc(id)}">${label} ${status}</label><input id="${esc(id)}" data-field="${esc(field.name)}" class="input mono" type="password" value="" autocomplete="new-password" placeholder="${field.configured?'Để trống để giữ secret hiện tại':'Nhập secret'}"><div class="field-hint">Secret được lưu trong /data/secrets và không được trả ngược qua API.</div></div>`}const type=field.type==='integer'?'number':'text',extra=field.type==='integer'?` min="${esc(field.min??1)}" max="${esc(field.max??65535)}"`:'';return `<div class="field"><label for="${esc(id)}">${label}</label><input id="${esc(id)}" data-field="${esc(field.name)}" class="input${field.type==='url'?' mono':''}" type="${type}" value="${esc(field.value??'')}" placeholder="${esc(field.placeholder||'')}"${extra}></div>`}
+function integrationEditor(item){const enabled=item.fields.find(f=>f.name==='enabled')?.value!==false;return `<form class="card card-pad span-6 integration-editor" data-integration-form="${esc(item.id)}"><div class="card-title"><div><h3>${esc(item.icon||'🔌')} ${esc(item.name)}</h3><div class="small-text muted mt-10">${esc(item.description||'')}</div></div><span class="badge ${enabled?'ok':'warn'}">${enabled?'enabled':'disabled'}</span></div><div class="integration-fields">${item.fields.map(f=>integrationField(item.id,f)).join('')}</div><div class="row between mt-14"><span class="small-text muted">Nguồn: <span class="mono">${esc(item.source||'')}</span></span><div class="row"><button class="btn small" data-action="integration-reset" data-id="${esc(item.id)}" type="button">Khôi phục stack/default</button><button class="btn primary small" type="submit">Lưu & áp dụng</button></div></div></form>`}
+async function saveIntegration(id,form){const values={};form.querySelectorAll('[data-field]').forEach(el=>{values[el.dataset.field]=el.type==='checkbox'?el.checked:el.value});const btn=form.querySelector('button[type="submit"]');if(btn)btn.disabled=true;try{await api('/api/integrations/config/'+encodeURIComponent(id),{method:'PUT',body:JSON.stringify({values})});toast('Đã lưu và áp dụng '+id);await loadIntegrations()}catch(e){toast(e.message,true)}finally{if(btn)btn.disabled=false}}
+async function resetIntegration(id){if(!confirm('Khôi phục '+id+' về cấu hình stack/default và xóa secret override trong Web Admin?'))return;try{await api('/api/integrations/config/'+encodeURIComponent(id),{method:'DELETE'});toast('Đã khôi phục '+id);await loadIntegrations()}catch(e){toast(e.message,true)}}
+async function loadIntegrations(){const box=$('integrationsBox');try{const [status,config]=await Promise.all([api('/api/integrations'),api('/api/integrations/config')]);const editors=(config.integrations||[]).map(integrationEditor);const cards=[];Object.entries(status.companion_containers||{}).forEach(([k,v])=>cards.push(integrationCard(k,v)));Object.entries(status.home_assistant_custom_components||{}).forEach(([k,v])=>{if(typeof v==='object')cards.push(integrationCard('HA · '+k,v))});box.innerHTML=`<div class="span-12 integration-section-title"><h2>⚙️ Cấu hình từ Web Admin</h2><p>Các giá trị lưu tại /data và tự áp dụng lại adapter. Không cần thêm biến integration vào stack.</p></div>${editors.join('')}<div class="span-12 integration-section-title"><h2>🩺 Trạng thái kết nối</h2><p>Health/status thực tế của các adapter và Home Assistant custom component.</p></div>${cards.join('')}<div class="card card-pad span-12"><div class="card-title"><h3>🛡️ Effective policy</h3></div><pre>${esc(JSON.stringify(status.policy,null,2))}</pre></div>`}catch(e){box.innerHTML=`<div class="card card-pad span-12">${errorHtml(e)}</div>`}}
 
 function logRow(row,index){const rid=row.request_id||'',sid=row.session_id||'';return `<tr class="log-row" data-log-index="${index}"><td class="mono">${esc(fmtTime(row.ts))}</td><td><span class="lvl ${esc(row.level)}">${esc(row.level)}</span></td><td>${esc(row.component||row.logger||'')}</td><td class="mono">${esc(row.event||'')}</td><td class="log-msg" title="${esc(row.message||'')}">${esc(row.message||'')}</td><td class="mono">${esc(rid||sid||'—')}</td></tr><tr id="logDetail${index}" class="log-detail" hidden><td colspan="6"><pre>${esc(JSON.stringify(row,null,2))}</pre></td></tr>`}
 function toggleLogDetail(index){const el=$('logDetail'+index);if(el)el.hidden=!el.hidden}
@@ -98,7 +168,8 @@ function bindEvents(){
   $('tokenForm').addEventListener('submit',e=>{e.preventDefault();saveApiToken(false)});$('generateTokenBtn').addEventListener('click',()=>saveApiToken(true));$('copyGeneratedToken').addEventListener('click',async()=>{const el=$('generatedToken');try{await copyTextSafe(el.value,el);toast('Đã sao chép token')}catch(err){toast(err.message||'Không thể sao chép tự động.',true)}});
   $('recoveryForm').addEventListener('submit',e=>{e.preventDefault();rotateRecoveryKey()});$('copyGeneratedRecoveryKey').addEventListener('click',async()=>{const el=$('generatedRecoveryKey');try{await copyTextSafe(el.value,el);toast('Đã sao chép Recovery Key')}catch(err){toast(err.message||'Không thể sao chép tự động.',true)}});
   $('usernameForm').addEventListener('submit',e=>{e.preventDefault();changeUsernameSubmit()});$('passwordForm').addEventListener('submit',e=>{e.preventDefault();changePasswordSubmit()});
-  document.addEventListener('click',e=>{const log=e.target.closest('.log-row');if(log){toggleLogDetail(log.dataset.logIndex);return}const b=e.target.closest('[data-action]');if(!b)return;const a=b.dataset.action,id=b.dataset.id;const actions={'overview-refresh':loadOverview,'new-session':newSession,'integrations-refresh':loadIntegrations,'logs-refresh':loadLogs,'logs-export':exportLogs,'audit-refresh':loadAudit,'events-refresh':loadEvents,'approvals-refresh':loadApprovals,'jobs-refresh':loadJobs,'rules-refresh':loadRules,'knowledge-reindex':reindexKnowledge,'knowledge-search':searchKnowledge,'settings-refresh':loadSettings,'sessions-refresh':loadSessions,'sessions-revoke-others':revokeOtherSessions,'auth-audit-refresh':loadAuthAudit};if(actions[a]){actions[a]();return}if(a==='approval-approve')decideApproval(id,true);if(a==='approval-reject')decideApproval(id,false);if(a==='job-toggle')toggleJob(Number(id),b.dataset.enabled==='1');if(a==='job-delete')deleteJob(Number(id));if(a==='rule-toggle')toggleRule(Number(id),b.dataset.enabled==='1');if(a==='rule-delete')deleteRule(Number(id))});
+  document.addEventListener('submit',e=>{const form=e.target.closest('[data-integration-form]');if(!form)return;e.preventDefault();saveIntegration(form.dataset.integrationForm,form)});
+  document.addEventListener('click',e=>{const log=e.target.closest('.log-row');if(log){toggleLogDetail(log.dataset.logIndex);return}const b=e.target.closest('[data-action]');if(!b)return;const a=b.dataset.action,id=b.dataset.id;const actions={'overview-refresh':loadOverview,'new-session':newSession,'integrations-refresh':loadIntegrations,'logs-refresh':loadLogs,'logs-export':exportLogs,'audit-refresh':loadAudit,'events-refresh':loadEvents,'approvals-refresh':loadApprovals,'jobs-refresh':loadJobs,'rules-refresh':loadRules,'knowledge-reindex':reindexKnowledge,'knowledge-search':searchKnowledge,'settings-refresh':loadSettings,'sessions-refresh':loadSessions,'sessions-revoke-others':revokeOtherSessions,'auth-audit-refresh':loadAuthAudit};if(actions[a]){actions[a]();return}if(a==='approval-approve')decideApproval(id,true);if(a==='approval-reject')decideApproval(id,false);if(a==='job-toggle')toggleJob(Number(id),b.dataset.enabled==='1');if(a==='job-delete')deleteJob(Number(id));if(a==='rule-toggle')toggleRule(Number(id),b.dataset.enabled==='1');if(a==='rule-delete')deleteRule(Number(id));if(a==='integration-reset')resetIntegration(id)});
 }
 async function start(){const ok=await initAuth();if(!ok)return;bindEvents();health();loadOverview();setInterval(health,30000);setInterval(()=>{if(uiState.activeTab==='logs'&&$('logAuto').checked)loadLogs()},5000)}
 start().catch(e=>{toast(e.message||String(e),true);reportClientError('startup_error',e.message||String(e),e.stack||'')});

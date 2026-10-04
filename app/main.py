@@ -42,6 +42,7 @@ from .db import add_event, conn, get_messages, init_db, list_approvals, list_eve
 from .event_engine import handle_state_event, set_rule_enabled
 from .ha import HomeAssistantClient
 from .ha_integrations import HAIntegrationBridge
+from .integration_config import integration_config_view, load_runtime_integration_overrides, reset_integration_config, save_integration_config
 from .integrations import IntegrationHub
 from .observability import (
     current_request_id,
@@ -67,7 +68,7 @@ from .tools import ToolRuntime
 
 os.umask(0o077)
 
-APP_VERSION = "1.2.2"
+APP_VERSION = "1.2.3"
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 setup_logging()
@@ -297,6 +298,30 @@ async def _zalo_webhook_registration_loop() -> None:
             pass
 
 
+async def _sync_zalo_webhook_registration_task() -> None:
+    global tasks
+    existing = [task for task in tasks if task.get_name() == "zalo-webhook-register" and not task.done()]
+    for task in existing:
+        task.cancel()
+    if existing:
+        await asyncio.gather(*existing, return_exceptions=True)
+    tasks = [task for task in tasks if task.get_name() != "zalo-webhook-register"]
+
+    should_run = bool(
+        integrations is not None
+        and integrations.zalo is not None
+        and settings.zalo_enabled
+        and settings.zalo_webhook_enabled
+        and settings.zalo_auto_register_webhook
+    )
+    if should_run:
+        task = asyncio.create_task(_zalo_webhook_registration_loop(), name="zalo-webhook-register")
+        tasks.append(task)
+        info(logger, "zalo_webhook_registration_task_started")
+    elif existing:
+        info(logger, "zalo_webhook_registration_task_stopped")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global ha, agent, tasks, integrations
@@ -317,6 +342,7 @@ async def lifespan(app: FastAPI):
     )
     try:
         init_db()
+        load_runtime_integration_overrides()
         scrub_sensitive_audit_history()
         ensure_bootstrap_admin()
         cleanup_sessions()
@@ -333,8 +359,7 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(scheduler_loop(stop_event, run_prompt), name="scheduler"),
             asyncio.create_task(telegram_loop(stop_event, lambda sid, text, src: agent.chat(sid, text, src)), name="telegram"),
         ]
-        if settings.zalo_enabled and settings.zalo_webhook_enabled and settings.zalo_auto_register_webhook:
-            tasks.append(asyncio.create_task(_zalo_webhook_registration_loop(), name="zalo-webhook-register"))
+        await _sync_zalo_webhook_registration_task()
         info(
             logger,
             "application_started",
@@ -531,6 +556,10 @@ class ApiTokenRotateIn(BaseModel):
 
 class RecoveryKeyRotateIn(BaseModel):
     current_password: str = Field(min_length=1, max_length=256)
+
+
+class IntegrationConfigIn(BaseModel):
+    values: dict[str, Any] = Field(default_factory=dict)
 
 
 @app.get("/")
@@ -860,6 +889,53 @@ async def client_log(body: ClientLogIn):
             component="frontend",
         )
     return {"ok": True, "request_id": current_request_id()}
+
+
+@app.get("/api/integrations/config", dependencies=[Depends(require_admin)])
+async def integration_config_get():
+    return integration_config_view()
+
+
+@app.put("/api/integrations/config/{integration_id}", dependencies=[Depends(require_admin)])
+async def integration_config_put(integration_id: str, body: IntegrationConfigIn, request: Request):
+    if integrations is None:
+        raise HTTPException(503, "Integrations are starting")
+    try:
+        result = save_integration_config(integration_id, body.values)
+    except KeyError:
+        raise HTTPException(404, "Unknown integration")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    await integrations.reconfigure()
+    await _sync_zalo_webhook_registration_task()
+    record_admin_audit(
+        "integration_config_saved",
+        request,
+        user_id=request.state.admin_session["user_id"],
+        username=request.state.admin_session["username"],
+        details=f"integration={integration_id}",
+    )
+    return {"ok": True, "config": result, "status": await integrations.status()}
+
+
+@app.delete("/api/integrations/config/{integration_id}", dependencies=[Depends(require_admin)])
+async def integration_config_delete(integration_id: str, request: Request):
+    if integrations is None:
+        raise HTTPException(503, "Integrations are starting")
+    try:
+        result = reset_integration_config(integration_id)
+    except KeyError:
+        raise HTTPException(404, "Unknown integration")
+    await integrations.reconfigure()
+    await _sync_zalo_webhook_registration_task()
+    record_admin_audit(
+        "integration_config_reset",
+        request,
+        user_id=request.state.admin_session["user_id"],
+        username=request.state.admin_session["username"],
+        details=f"integration={integration_id}",
+    )
+    return {"ok": True, "config": result, "status": await integrations.status()}
 
 
 @app.get("/api/integrations", dependencies=[Depends(require_access)])

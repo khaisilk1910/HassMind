@@ -17,6 +17,16 @@ generate_hex() {
   fi
 }
 
+migrate_legacy_integration_secret() {
+  src="$1"
+  dst="$2"
+  if [ -s "$src" ] && [ ! -s "$dst" ]; then
+    cp "$src" "$dst"
+    chmod 600 "$dst" 2>/dev/null || true
+    echo "Migrated legacy integration secret: $src -> $dst"
+  fi
+}
+
 mkdir -p data/logs data/secrets knowledge secrets
 [ -f .env ] || cp .env.example .env
 [ -f secrets/ha_token.txt ] || : > secrets/ha_token.txt
@@ -25,11 +35,16 @@ mkdir -p data/logs data/secrets knowledge secrets
 [ -f secrets/admin_password.txt ] || generate_hex 24 > secrets/admin_password.txt
 [ -f secrets/admin_recovery_key.txt ] || generate_hex 32 > secrets/admin_recovery_key.txt
 [ -f secrets/telegram_bot_token.txt ] || : > secrets/telegram_bot_token.txt
-[ -f secrets/camera_tts_api_key.txt ] || : > secrets/camera_tts_api_key.txt
-[ -f secrets/zalo_password.txt ] || : > secrets/zalo_password.txt
-[ -f secrets/zalo_webhook_secret.txt ] || generate_hex 32 > secrets/zalo_webhook_secret.txt
+
+# v1.2.3 migration: integration secrets now live under /data so future adapters
+# do not require Docker secret declarations in the stack. Existing values are
+# copied once and the old files are left untouched for rollback.
+migrate_legacy_integration_secret secrets/camera_tts_api_key.txt data/secrets/integration_camera_tts_api_key
+migrate_legacy_integration_secret secrets/zalo_password.txt data/secrets/integration_zalo_password
+migrate_legacy_integration_secret secrets/zalo_webhook_secret.txt data/secrets/integration_zalo_webhook_secret
 
 chmod 600 secrets/*.txt 2>/dev/null || true
+chmod 600 data/secrets/* 2>/dev/null || true
 chmod 700 data data/logs data/secrets 2>/dev/null || true
 if [ "$(id -u)" = "0" ]; then
   chown -R 10001:10001 data
@@ -41,4 +56,4 @@ echo "Prepared securely."
 echo "Admin username: admin"
 echo "Read the initial admin password with: cat secrets/admin_password.txt"
 echo "Store the recovery key offline: cat secrets/admin_recovery_key.txt"
-echo "Then edit .env and deploy the stack."
+echo "Then edit the core .env values and deploy the stack. Configure optional integrations later in Web Admin."

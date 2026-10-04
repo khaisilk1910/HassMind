@@ -1,4 +1,12 @@
-# HassMind v1.2.2 — AI Agent riêng cho Home Assistant
+# HassMind v1.2.3 — AI Agent riêng cho Home Assistant
+
+## Mới trong v1.2.3
+
+- **Integrations cấu hình trực tiếp trong Web Admin**: bật/tắt, URL, policy và credential cho Camera TTS, FaceDetect, Zalo, Wyoming và HA custom components; không còn bắt buộc thêm các biến này vào stack.
+- Runtime config persist trong SQLite; integration secret persist riêng dưới `/data/secrets`, không được API trả ngược về trình duyệt. Cấu hình Web Admin override stack/default và có nút khôi phục.
+- IntegrationHub có thể reconfigure tại runtime nên thay đổi được áp dụng ngay; tool schema của Agent tự phản ánh integration/policy mới.
+- Chat có renderer Markdown nội bộ an toàn cho heading, danh sách lồng, inline code, code block, bảng, blockquote, bold/italic và separator; tự thêm emoji ngữ cảnh cho đầu mục để nội dung dễ đọc hơn.
+- Deployment stack không còn bắt buộc mount secret riêng cho Camera TTS/Zalo.
 
 ## Mới trong v1.2.2
 
@@ -446,109 +454,33 @@ secrets/openai_api_key.txt
 
 Có thể kiểm tra model mà Gemini server expose bằng `GET http://127.0.0.1:8000/v1/models` với cơ chế auth tương ứng trước khi điền `OPENAI_MODEL`.
 
-### 20.2 Camera TTS EZVIZ
+### 20.2 Cấu hình Integrations từ Web Admin
 
-```dotenv
-CAMERA_TTS_ENABLED=true
-CAMERA_TTS_URL=http://127.0.0.1:8124
-CAMERA_TTS_ALLOW_ACTIONS=true
-```
+Từ v1.2.3, các integration đã được HassMind hỗ trợ **không còn bắt buộc khai báo trong stack**. Sau khi deploy core HassMind, mở tab **Integrations** để cấu hình và bấm **Lưu & áp dụng**.
 
-Đặt API key của camera service vào:
+Cấu hình không nhạy cảm được lưu trong bảng `integration_settings` của `/data/hassmind.db`. Credential nhập từ Web Admin được lưu riêng dưới `/data/secrets/` với quyền runtime của container và **không được API trả ngược ra trình duyệt**.
 
-```text
-secrets/camera_tts_api_key.txt
-```
+Thứ tự ưu tiên là:
 
-HassMind có tool đọc camera/job và các action `say`, `media`, `ptz`, `stop`. Nếu muốn chỉ quan sát trạng thái mà không cho agent phát loa/PTZ, đặt:
+1. Web Admin runtime override.
+2. Docker secret / environment cũ nếu bạn vẫn đang dùng.
+3. Giá trị mặc định trong code.
 
-```dotenv
-CAMERA_TTS_ALLOW_ACTIONS=false
-```
+Nút **Khôi phục stack/default** xóa runtime override của integration đó và quay về nguồn cũ. Vì vậy nâng cấp từ cấu hình `.env` hiện tại không bị mất tương thích.
 
-### 20.3 FaceDetect / IRIS
+### 20.3 Camera TTS EZVIZ
 
-Với stack chuẩn publish `8080:80`:
+Trong **Integrations → Camera TTS EZVIZ**, cấu hình Base URL, API key, bật integration và policy cho phép TTS/media/PTZ. Default URL là `http://127.0.0.1:8124`. Nếu chỉ muốn agent đọc trạng thái, tắt **Cho phép TTS/media/PTZ**.
 
-```dotenv
-FACEDETECT_ENABLED=true
-FACEDETECT_URL=http://127.0.0.1:8080
-```
+### 20.4 FaceDetect / IRIS
 
-Với `portainer-stack-intel.yml` của project đã tải lên, port publish là `8181:80`, vì vậy dùng:
+Trong **Integrations → IRIS FaceDetect**, bật integration và nhập Base URL. Với stack Intel thường dùng `http://127.0.0.1:8181`; nếu service publish port khác thì nhập đúng port thực tế. HassMind chỉ expose các API đọc summary/events/people/cameras.
 
-```dotenv
-FACEDETECT_URL=http://127.0.0.1:8181
-```
+### 20.5 Zalo Bot Server và Wyoming
 
-HassMind chỉ expose các API đọc (summary/events/people/cameras). Các trigger realtime của FaceDetect nên tiếp tục đi qua MQTT/Home Assistant webhook mà project đã hỗ trợ; cách này tránh tạo thêm một event transport song song.
+**Zalo Bot Server:** nhập URL, username/password, policy gửi tin, webhook và allowlist thread ngay trong Web Admin. Password và webhook secret được giữ trong `/data/secrets`. Auto-reply vẫn yêu cầu đồng thời bật policy gửi, agent reply và allowlist thread.
 
-### 20.4 Zalo Bot Server
-
-Cấu hình client:
-
-```dotenv
-ZALO_ENABLED=true
-ZALO_URL=http://127.0.0.1:3000
-ZALO_USERNAME=admin
-ZALO_DEFAULT_ACCOUNT=
-ZALO_ALLOW_SEND=false
-```
-
-Đặt password web/API của Zalo server vào:
-
-```text
-secrets/zalo_password.txt
-```
-
-`ZALO_DEFAULT_ACCOUNT` có thể là `ownId` hoặc số điện thoại mà Zalo server nhận ở `accountSelection`. HassMind luôn giữ `threadId` và account ID ở dạng **string** để không mất chính xác với ID lớn.
-
-Để agent được gửi tin chủ động, operator phải bật rõ:
-
-```dotenv
-ZALO_ALLOW_SEND=true
-```
-
-#### Webhook Zalo -> HassMind
-
-`setup.sh` tự tạo `secrets/zalo_webhook_secret.txt`. Bật:
-
-```dotenv
-ZALO_WEBHOOK_ENABLED=true
-ZALO_AUTO_REGISTER_WEBHOOK=true
-ZALO_WEBHOOK_CALLBACK_BASE=http://127.0.0.1:8090
-```
-
-HassMind đăng ký thêm một destination `message` cho từng account Zalo đã login và **không xóa các webhook hiện có**. Callback thực tế có dạng:
-
-```text
-http://127.0.0.1:8090/webhooks/zalo/<random-secret>
-```
-
-Handler trả HTTP nhanh rồi mới chạy model bằng background task nội bộ, phù hợp timeout webhook ~10 giây của Zalo Bot Server.
-
-Auto-reply được tách khỏi việc nhận webhook. Chỉ bật sau khi đã kiểm tra:
-
-```dotenv
-ZALO_ALLOW_SEND=true
-ZALO_AGENT_REPLY_ENABLED=true
-ZALO_AGENT_ALLOWED_THREAD_IDS=1234567890123456789,9876543210987654321
-```
-
-Auto-reply **không chạy nếu allowlist rỗng**. Khuyến nghị liệt kê rõ từng thread ID. Giá trị `*` cho phép mọi thread và chỉ nên dùng trong môi trường đã kiểm soát hoàn toàn.
-
-### 20.5 Wyoming Vietnamese Prosody
-
-```dotenv
-WYOMING_ENABLED=true
-WYOMING_HOST=127.0.0.1
-WYOMING_PORT=10300
-WYOMING_ALLOW_TTS=true
-```
-
-HassMind không tự implement Wyoming protocol. Nó chỉ TCP health-check port 10300; khi cần nói, agent gọi Home Assistant `tts.speak`. Nếu Home Assistant có đúng một TTS entity, hoặc đúng một entity có platform `wyoming`, HassMind tự chọn; nếu có nhiều, yêu cầu truyền `tts_entity_id` rõ ràng.
-
-Cách này giữ Home Assistant làm voice-provider boundary và tương thích tốt hơn với Assist pipeline hiện có.
+**Wyoming Vietnamese TTS:** nhập host/port, bật integration và policy TTS trong Web Admin. HassMind chỉ TCP health-check Wyoming; phát giọng nói vẫn đi qua Home Assistant `tts.speak`.
 
 ### 20.6 EVN CSKH Monitor
 
@@ -629,9 +561,9 @@ Khuyến nghị: lần deploy đầu để các cờ gửi/xóa/download/auto-re
 ## 22. Quy trình nâng cấp từ HassMind v1 cũ
 
 1. Backup `data/hassmind.db`, `.env`, `config/`, `knowledge/` và secrets hiện có.
-2. Thay code bằng bản v1.2.2 này nhưng giữ `data/` cũ.
-3. Chạy `sudo ./setup.sh`. Script chỉ tạo secret còn thiếu, không ghi đè secret đang có. Bản này cần thêm `admin_password.txt` và `admin_recovery_key.txt`.
-4. Merge các biến mới từ `.env.example` vào `.env`, đặc biệt nhóm `ADMIN_*`, `RUNTIME_SECRET_DIR`, `LOG_SCRUB_EXISTING_ON_START` và `AUDIT_SCRUB_EXISTING_ON_START`.
+2. Thay code bằng bản v1.2.3 này nhưng giữ `data/` cũ.
+3. Chạy `sudo ./setup.sh`. Script chỉ tạo core secret còn thiếu, không ghi đè secret đang có. Nếu phát hiện Camera TTS/Zalo secret từ bản cũ, script tự migrate một lần sang `data/secrets/integration_*`; runtime secret mới có sẵn sẽ không bị ghi đè. Integration credential cũng có thể nhập/sửa sau trong Web Admin.
+4. Merge các biến core mới từ `.env.example` vào `.env`. Không cần đưa Camera TTS/FaceDetect/Zalo/Wyoming vào stack nếu sẽ quản lý bằng Web Admin.
 5. Deploy lại HassMind. Lần startup đầu sẽ tạo bảng admin/session mới, bootstrap tài khoản admin và best-effort scrub event/tool-audit + log file cũ.
 6. Truy cập `/`, đăng nhập bằng password trong `secrets/admin_password.txt`, sau đó đổi mật khẩu ở **Settings**.
 7. Mở **Settings** kiểm tra `Allowed networks`, `Cookie Secure`, trạng thái redaction, API token và Recovery Key source. Nếu muốn loại bỏ dependence vào Recovery Key bootstrap, xoay Recovery Key một lần và lưu khóa mới an toàn.

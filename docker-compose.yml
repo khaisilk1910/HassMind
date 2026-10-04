@@ -16,9 +16,6 @@ services:
       ADMIN_BOOTSTRAP_PASSWORD_FILE: /run/secrets/admin_password
       ADMIN_RECOVERY_KEY_FILE: /run/secrets/admin_recovery_key
       TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram_bot_token
-      CAMERA_TTS_API_KEY_FILE: /run/secrets/camera_tts_api_key
-      ZALO_PASSWORD_FILE: /run/secrets/zalo_password
-      ZALO_WEBHOOK_SECRET_FILE: /run/secrets/zalo_webhook_secret
     secrets:
       - ha_token
       - openai_api_key
@@ -26,9 +23,6 @@ services:
       - admin_password
       - admin_recovery_key
       - telegram_bot_token
-      - camera_tts_api_key
-      - zalo_password
-      - zalo_webhook_secret
     volumes:
       - ./data:/data:rw
       - ./knowledge:/knowledge:ro
@@ -66,9 +60,3 @@ secrets:
     file: ./secrets/admin_recovery_key.txt
   telegram_bot_token:
     file: ./secrets/telegram_bot_token.txt
-  camera_tts_api_key:
-    file: ./secrets/camera_tts_api_key.txt
-  zalo_password:
-    file: ./secrets/zalo_password.txt
-  zalo_webhook_secret:
-    file: ./secrets/zalo_webhook_secret.txt

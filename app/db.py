@@ -193,6 +193,12 @@ def init_db():
               created_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_auth_audit_id ON auth_audit(id DESC);
+
+            CREATE TABLE IF NOT EXISTS integration_settings (
+              integration_id TEXT PRIMARY KEY,
+              config_json TEXT NOT NULL DEFAULT '{}',
+              updated_at TEXT NOT NULL
+            );
             """
         )
         try:

@@ -1,74 +1,104 @@
-# HassMind v1.2.2 — QA report
+# HassMind v1.2.3 — QA report
 
-Ngày rà soát: 2026-10-03.
+Ngày rà soát: 2026-10-04.
 
-## Phạm vi sửa lần này
+## Phạm vi
 
-- Clipboard Recovery Key/API token khi dashboard chạy HTTP trong LAN.
-- Vòng đời admin password / Recovery Key và thông tin hiển thị trong Settings/Login/README.
-- Render `**...**` trong câu trả lời Chat thành phần nhấn mạnh có màu, không hiện dấu `**`.
-- Đồng bộ version/cache-busting lên 1.2.2.
+- Runtime Integration configuration trong Web Admin.
+- SQLite migration `integration_settings`.
+- Runtime secret storage và redaction.
+- Hot reconfigure IntegrationHub/Zalo registration task.
+- Rich Markdown renderer + semantic emoji cho Chat.
+- Deployment YAML không còn yêu cầu integration-specific secrets/env.
 
-## Static / syntax validation
-
-Đã chạy và đạt:
+## Static validation — PASS
 
 - `python3 -m compileall -q app`
 - `node --check static/app.js`
 - `node --check static/login.js`
 - `sh -n setup.sh`
-- Parse YAML bằng PyYAML cho `docker-compose.yml`, `docker-stack.yml`, `portainer-stack.yml`, `portainer-stack-opt.yml`, `config/mcp_servers.yaml`.
-- Kiểm tra duplicate DOM id và mapping toàn bộ `$('<id>')` trong `static/app.js`: không có id thiếu.
-- Kiểm tra version đồng bộ: backend, package, dashboard và login đều là `1.2.2`.
+- Parse YAML bằng PyYAML:
+  - `docker-compose.yml`
+  - `docker-stack.yml`
+  - `portainer-stack.yml`
+  - `portainer-stack-opt.yml`
+  - `config/mcp_servers.yaml`
+- Kiểm tra toàn bộ literal `$('<id>')` trong `static/app.js` đều tồn tại trong `static/index.html`.
+- Không có duplicate static DOM id.
 
-## Clipboard test
+## Runtime Integration config smoke test — PASS
 
-Đã kiểm tra bằng Node mock DOM:
+Đã test với SQLite/runtime-secret tạm:
 
-- Khi `isSecureContext=false`, code **không gọi** Clipboard API hiện đại.
-- Fallback tạo textarea tạm, select nội dung và gọi `document.execCommand('copy')` ngay trong click flow.
-- Fallback trả trạng thái thành công và xóa textarea tạm.
-- Nếu fallback cũng bị browser chặn, code select input gốc để người dùng chỉ cần nhấn Ctrl/Cmd+C.
+- Save Camera TTS config tạo runtime override.
+- URL được normalize bỏ `/` cuối.
+- Boolean policy được áp dụng đúng vào `settings`.
+- API config view chỉ báo secret `configured`, giá trị trả về rỗng.
+- Secret không xuất hiện trong SQLite file.
+- Secret được ghi dưới `/data/secrets` tương đương và mode `0600`.
+- `load_runtime_integration_overrides()` khôi phục config sau khi mô phỏng restart.
+- Reset xóa DB override + runtime secret và quay về stack/default.
 
-Cùng helper được dùng cho cả Recovery Key và HassMind API token.
+## IntegrationHub hot reconfigure — PASS
 
-## Chat emphasis test
+- Khởi tạo disabled → client không tồn tại.
+- Bật FaceDetect runtime → `reconfigure()` tạo client mới.
+- Tắt lại → client được đóng và reference trở về `None`.
+- `ToolRuntime` vẫn dùng cùng `IntegrationHub` object nên không cần rebuild Agent.
 
-Đã kiểm tra parser với câu:
+## Main endpoint smoke test — PASS
 
-`Hôm nay là **Thứ Bảy**, ngày **03 tháng 10 năm 2026**.`
+Dùng stub tối thiểu cho `openai`/`mcp` vì QA host không cài hai package này:
 
-Kết quả token hóa giữ nguyên nội dung nhưng loại marker `**`; hai đoạn `Thứ Bảy` và `03 tháng 10 năm 2026` được đánh dấu strong. Marker không đóng cặp được giữ nguyên thay vì làm mất dữ liệu.
+- `PUT /api/integrations/config/facedetect` logic save + reconfigure thành công.
+- Cấu hình persist vào `integration_settings`.
+- Health-check unreachable được trả thành status lỗi, không làm mất config.
+- `DELETE /api/integrations/config/facedetect` reset + reconfigure thành công.
 
-Renderer không dùng `innerHTML` cho nội dung chat; nó tạo `TextNode` và phần tử `strong`, vì vậy nội dung LLM không được diễn giải thành HTML tùy ý.
+## Markdown renderer — PASS
 
-## Admin password / Recovery Key API smoke test
+Mẫu test chứa đúng cấu trúc người dùng báo lỗi:
 
-Đã chạy FastAPI `TestClient` với SQLite/runtime-secret tạm và IP `127.0.0.1`:
+- `###` heading
+- `*` list và nested list
+- `**bold**`
+- `` `entity_id` ``
+- `---`
+- `&#x20;`
 
-- Bootstrap admin bằng password ban đầu thành công.
-- Login password ban đầu thành công.
-- `/api/settings/security` báo `password_storage=argon2id_hash_only` và `bootstrap_password_is_initial_only=true`.
-- Đổi password thành công.
-- Password bootstrap ban đầu vẫn giữ nguyên ở nguồn bootstrap, nhưng **không còn đăng nhập được**.
-- Password mới đăng nhập được.
-- Rotate Recovery Key thành công.
-- Recovery Key mới được ghi vào runtime file và `admin_recovery_key_source()` chuyển thành `runtime_file`.
-- Recovery Key bootstrap cũ bị từ chối sau rotate.
-- Recovery Key runtime mới reset password thành công.
-- Password trước reset không còn đăng nhập được; password sau reset đăng nhập được.
-- `admin_users.password_hash` là Argon2 hash và không chứa plaintext password mới.
+Kết quả:
 
-## Kết luận về hai file `/opt/hassmind/secrets/*`
+- Không còn marker `###`, `**`, `&#x20;` trong text hiển thị.
+- DOM có heading/list/strong/code/hr đúng loại.
+- Emoji ngữ cảnh được thêm cho heading/bullet phù hợp.
 
-`admin_password.txt` và `admin_recovery_key.txt` là nguồn bootstrap. Chúng không phải cơ chế đồng bộ credential hiện hành sau khi đổi từ UI.
+## XSS safety — PASS
 
-- Password hiện hành: chỉ lưu Argon2id hash trong SQLite, không có plaintext để `cat` xem lại.
-- Recovery Key sau rotate: lưu runtime tại `/data/secrets/admin_recovery_key` mode `0600` và được ưu tiên hơn bootstrap key.
-- Nếu stack mount `/opt/hassmind/data:/data`, host path tương ứng là `/opt/hassmind/data/secrets/admin_recovery_key`.
+Test nội dung có `<img onerror=...>` và `<script>...</script>` trong Chat:
 
-Thiết kế này được giữ nguyên để tránh ghi password hiện hành dạng plaintext xuống disk chỉ nhằm mục đích xem lại.
+- Không tạo DOM `IMG` hoặc `SCRIPT` từ nội dung model.
+- Nội dung HTML nguy hiểm chỉ tồn tại như text/code.
+- Renderer không dùng `innerHTML` cho câu trả lời Chat.
+
+## Deployment review — PASS
+
+`setup.sh` đã được test migration secret legacy:
+
+- Nếu `secrets/camera_tts_api_key.txt`, `secrets/zalo_password.txt` hoặc `secrets/zalo_webhook_secret.txt` cũ có dữ liệu và runtime secret mới chưa tồn tại, script copy một lần sang `data/secrets/integration_*`.
+- Runtime secret hiện có không bị ghi đè.
+- File đích được đặt mode `0600`.
+
+Các file stack mặc định không còn khai báo/mount bắt buộc:
+
+- `camera_tts_api_key`
+- `zalo_password`
+- `zalo_webhook_secret`
+- các biến Camera TTS / FaceDetect / Zalo / Wyoming / Shopping / yt-dlp trong Portainer stack
+
+Legacy environment/Docker-secret vẫn được backend hỗ trợ nếu operator tự cấu hình.
 
 ## Giới hạn QA
 
-Môi trường QA không cài package `openai` và `mcp`; smoke test API đã dùng import stub tối thiểu cho hai dependency này và không gọi network/LLM/MCP. Các dependency thực tế vẫn được cài từ `requirements.txt` trong Docker image.
+- QA host không có container companion thật nên không test end-to-end Camera TTS/FaceDetect/Zalo/Wyoming qua network thật.
+- QA host không cài `openai` và `mcp`; import endpoint smoke test dùng stub. Docker image vẫn cài dependency thật từ `requirements.txt`.
+- Việc thêm **một loại adapter hoàn toàn mới** vẫn cần code client/tool tương ứng. Web Admin hiện loại bỏ nhu cầu sửa stack cho các adapter đã được HassMind hỗ trợ và UI được sinh từ catalog để việc bổ sung adapter code-backed sau này đơn giản hơn.
