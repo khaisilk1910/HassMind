@@ -4,7 +4,7 @@ import re
 import secrets
 import threading
 from collections import defaultdict, deque
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any
 
 from argon2 import PasswordHasher
@@ -14,6 +14,7 @@ from fastapi import HTTPException, Request
 from .db import conn, utcnow
 from .observability import get_logger, info, register_secret, warning
 from .settings import settings
+from .time_utils import now as local_now, parse_datetime
 
 logger = get_logger("auth")
 _password_hasher = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=2, hash_len=32, salt_len=16)
@@ -24,17 +25,11 @@ _rate_events: dict[str, deque[float]] = defaultdict(deque)
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return local_now()
 
 
 def _parse_dt(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        dt = datetime.fromisoformat(value)
-        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-    except ValueError:
-        return None
+    return parse_datetime(value)
 
 
 def _sha256(value: str) -> str:
@@ -416,4 +411,4 @@ def cleanup_sessions() -> None:
     now = _now()
     idle = now - timedelta(minutes=settings.admin_session_idle_minutes)
     with conn() as c:
-        c.execute("DELETE FROM admin_sessions WHERE expires_at<=? OR last_seen_at<=?", (now.isoformat(), idle.isoformat()))
+        c.execute("DELETE FROM admin_sessions WHERE julianday(expires_at)<=julianday(?) OR julianday(last_seen_at)<=julianday(?)", (now.isoformat(), idle.isoformat()))

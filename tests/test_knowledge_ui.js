@@ -162,3 +162,9 @@ test('Approval notification preference saves Zalo route and defaults empty selec
   let body=JSON.parse(h.calls[0].opt.body);assert.deepEqual(body,{enabled:true,channel:'zalo',zalo_thread_id:'abc'});
   const h2=harness();h2.nodes.get('approvalNotifyEnabled').checked=true;h2.respond(async()=>({body:{ok:true}}));await h2.run('saveApprovalNotification()');body=JSON.parse(h2.calls[0].opt.body);assert.equal(body.channel,'mobile');
 });
+
+test('Time formatter preserves the server timezone offset instead of browser-local conversion',()=>{
+  const h=harness();
+  assert.equal(h.run("fmtTime('2026-10-04T18:27:57.027022+07:00')"),'04/10/2026 18:27:57 +07:00');
+  assert.equal(h.run("fmtTime('2026-10-04T11:27:57Z')"),'04/10/2026 11:27:57 +00:00');
+});

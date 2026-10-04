@@ -17,6 +17,7 @@ import yaml
 from .db import conn, utcnow
 from .observability import get_logger, info
 from .settings import settings
+from .time_utils import parse_datetime
 
 logger = get_logger("knowledge")
 ALLOWED = {".md", ".txt", ".yaml", ".yml", ".json"}
@@ -601,7 +602,9 @@ def _control_index_warning(c=None, state: dict | None = None, catalog_indexed_at
             # Re-indexing commits a newer snapshot and supersedes prior scans.
             scan_time = scan.get("scanned_at", scan.get("created_at"))
             index_time = state.get("scanned_at", state.get("indexed_at"))
-            if not scan_time or not index_time or str(scan_time) >= str(index_time):
+            scan_dt = parse_datetime(scan_time) if scan_time else None
+            index_dt = parse_datetime(index_time) if index_time else None
+            if not scan_dt or not index_dt or scan_dt >= index_dt:
                 return {"code": "stale_index", "message": "Knowledge changed after this index. Review changes and re-index before controlling devices by name or alias.",
                         "indexed_fingerprint": indexed_hash, "scan_fingerprint": scan["fingerprint"]}
         return None

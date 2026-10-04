@@ -2,18 +2,157 @@ import json
 import sqlite3
 import os
 from contextlib import contextmanager
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from .settings import settings
+from .time_utils import now_iso, timezone_name, to_local_iso
 from .observability import exception, get_logger, info, redact
 
 logger = get_logger("database")
 
 
 def utcnow() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    """Backward-compatible name: timestamps are emitted in configured TIMEZONE/TZ."""
+    return now_iso()
+
+
+_TIMESTAMP_COLUMNS: dict[str, tuple[str, ...]] = {
+    "messages": ("created_at",),
+    "approvals": ("created_at", "decided_at", "applied_at"),
+    "events": ("created_at",),
+    "jobs": ("next_run", "last_run", "created_at"),
+    "event_rules": ("last_triggered", "created_at"),
+    "memory_facts": ("created_at",),
+    "knowledge_chunks": ("updated_at",),
+    "knowledge_records": ("updated_at",),
+    "knowledge_manifest": ("indexed_at",),
+    "knowledge_scans": ("created_at",),
+    "knowledge_proposals": ("created_at", "decided_at"),
+    "knowledge_audit": ("created_at",),
+    "tool_audit": ("created_at",),
+    "admin_users": ("created_at", "updated_at", "last_login_at", "password_changed_at", "locked_until"),
+    "admin_sessions": ("created_at", "last_seen_at", "expires_at"),
+    "auth_audit": ("created_at",),
+    "integration_settings": ("updated_at",),
+    "custom_integrations": ("created_at", "updated_at"),
+    "notification_preferences": ("updated_at",),
+}
+
+_TIME_JSON_KEYS = {
+    "created_at", "updated_at", "indexed_at", "scanned_at", "decided_at", "applied_at",
+    "next_run", "last_run", "last_triggered", "last_login_at", "password_changed_at",
+    "locked_until", "last_seen_at", "expires_at", "timestamp", "ts",
+}
+
+
+def _normalize_owned_time_json(value: Any) -> tuple[Any, bool]:
+    changed = False
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for key, item in value.items():
+            if key in _TIME_JSON_KEYS and isinstance(item, str):
+                normalized = to_local_iso(item)
+                if normalized is not None and normalized != item:
+                    out[key] = normalized
+                    changed = True
+                    continue
+            normalized_item, item_changed = _normalize_owned_time_json(item)
+            out[key] = normalized_item
+            changed = changed or item_changed
+        return out, changed
+    if isinstance(value, list):
+        out_list = []
+        for item in value:
+            normalized_item, item_changed = _normalize_owned_time_json(item)
+            out_list.append(normalized_item)
+            changed = changed or item_changed
+        return out_list, changed
+    return value, False
+
+
+def _normalize_json_timestamp_rows(c: sqlite3.Connection) -> int:
+    changed = 0
+    targets = (
+        ("knowledge_index_state", "data", None),
+        ("knowledge_scans", "payload", None),
+        ("knowledge_control", "value", "key='latest_scan'"),
+    )
+    tables = {row["name"] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    for table, column, where in targets:
+        if table not in tables:
+            continue
+        columns = {row["name"] for row in c.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in columns:
+            continue
+        sql = f"SELECT rowid AS __rowid__, {column} FROM {table}" + (f" WHERE {where}" if where else "")
+        for row in c.execute(sql).fetchall():
+            raw = row[column]
+            if not raw:
+                continue
+            try:
+                parsed = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            normalized, did_change = _normalize_owned_time_json(parsed)
+            if did_change:
+                c.execute(
+                    f"UPDATE {table} SET {column}=? WHERE rowid=?",
+                    (json.dumps(normalized, ensure_ascii=False, separators=(",", ":")), row["__rowid__"]),
+                )
+                changed += 1
+    return changed
+
+
+def normalize_stored_timestamps() -> int:
+    """Convert legacy UTC/offset timestamps to the configured application timezone.
+
+    ISO-8601 offsets are preserved, so this is idempotent and safe across restarts.
+    Tables created by optional subsystems are handled only when present.
+    """
+    changed = 0
+    target_timezone = timezone_name()
+    marker_key = "timestamp_timezone_v1"
+    with conn() as c:
+        tables = {row["name"] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        if "app_meta" in tables:
+            marker = c.execute("SELECT value FROM app_meta WHERE key=?", (marker_key,)).fetchone()
+            if marker and marker["value"] == target_timezone:
+                return 0
+        for table, wanted_columns in _TIMESTAMP_COLUMNS.items():
+            if table not in tables:
+                continue
+            columns = {row["name"] for row in c.execute(f"PRAGMA table_info({table})").fetchall()}
+            timestamp_columns = [name for name in wanted_columns if name in columns]
+            if not timestamp_columns:
+                continue
+            select_cols = ",".join(["rowid AS __rowid__", *timestamp_columns])
+            rows = c.execute(f"SELECT {select_cols} FROM {table}").fetchall()
+            for row in rows:
+                updates: dict[str, str] = {}
+                for column in timestamp_columns:
+                    raw = row[column]
+                    if raw in (None, ""):
+                        continue
+                    normalized = to_local_iso(raw)
+                    if normalized is not None and normalized != raw:
+                        updates[column] = normalized
+                if updates:
+                    assignments = ",".join(f"{column}=?" for column in updates)
+                    c.execute(
+                        f"UPDATE {table} SET {assignments} WHERE rowid=?",
+                        (*updates.values(), row["__rowid__"]),
+                    )
+                    changed += len(updates)
+        changed += _normalize_json_timestamp_rows(c)
+        if "app_meta" in tables:
+            c.execute(
+                "INSERT INTO app_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (marker_key, target_timezone),
+            )
+    if changed:
+        info(logger, "database_timestamps_normalized", changed=changed, timezone=target_timezone)
+    return changed
 
 
 @contextmanager
@@ -219,6 +358,11 @@ def init_db():
               updated_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_custom_integrations_name ON custom_integrations(name);
+
+            CREATE TABLE IF NOT EXISTS app_meta (
+              key TEXT PRIMARY KEY,
+              value TEXT NOT NULL
+            );
 
             CREATE TABLE IF NOT EXISTS notification_preferences (
               feature TEXT PRIMARY KEY,

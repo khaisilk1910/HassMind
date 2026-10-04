@@ -11,6 +11,7 @@ services:
     user: "10001:10001"
 
     environment:
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
       HA_URL: ${HA_URL:-http://127.0.0.1:8123}
       HA_TOKEN: ${HA_TOKEN}
       HA_NOTIFY_SERVICE: ${HA_NOTIFY_SERVICE}

@@ -1,13 +1,12 @@
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from time import perf_counter
 from typing import Awaitable, Callable
-from zoneinfo import ZoneInfo
-
 from .db import conn, utcnow
 from .notifications import normalize_notification_channel
 from .observability import exception, get_logger, info, log_context
 from .settings import settings
+from .time_utils import local_tz, now as local_now, parse_datetime
 
 RunPrompt = Callable[[str, str, bool, str, str], Awaitable[str]]
 logger = get_logger("scheduler")
@@ -15,7 +14,9 @@ MIN_INTERVAL_SECONDS = 30
 
 
 def _next_run(schedule_type: str, value: str, now: datetime | None = None) -> datetime:
-    now = now or datetime.now(timezone.utc)
+    now = parse_datetime(now) if now is not None else local_now()
+    if now is None:
+        now = local_now()
     if schedule_type == "interval":
         try:
             seconds = int(str(value).strip())
@@ -31,12 +32,11 @@ def _next_run(schedule_type: str, value: str, now: datetime | None = None) -> da
             raise ValueError("daily schedule_value must be HH:MM") from None
         if not 0 <= hh <= 23 or not 0 <= mm <= 59:
             raise ValueError("daily schedule_value must be HH:MM")
-        tz = ZoneInfo(settings.timezone)
-        local = now.astimezone(tz)
+        local = now.astimezone(local_tz())
         candidate = local.replace(hour=hh, minute=mm, second=0, microsecond=0)
         if candidate <= local:
             candidate += timedelta(days=1)
-        return candidate.astimezone(timezone.utc)
+        return candidate.astimezone(local_tz())
     raise ValueError("schedule_type must be interval or daily")
 
 
@@ -115,10 +115,11 @@ async def scheduler_loop(stop: asyncio.Event, run_prompt: RunPrompt):
             if not settings.scheduler_enabled:
                 await asyncio.sleep(10)
                 continue
-            now = datetime.now(timezone.utc)
+            now = local_now()
             with conn() as c:
                 rows = c.execute(
-                    "SELECT * FROM jobs WHERE enabled=1 AND next_run IS NOT NULL AND next_run<=? ORDER BY next_run LIMIT 10",
+                    "SELECT * FROM jobs WHERE enabled=1 AND next_run IS NOT NULL "
+                    "AND julianday(next_run) <= julianday(?) ORDER BY julianday(next_run) LIMIT 10",
                     (now.isoformat(),),
                 ).fetchall()
                 jobs = [dict(r) for r in rows]

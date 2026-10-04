@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     runtime_secret_dir: str = "/data/secrets"
     runtime_api_token_name: str = "hassmind_api_token"
     runtime_recovery_key_name: str = "admin_recovery_key"
-    timezone: str = "Asia/Ho_Chi_Minh"
+    timezone: str = os.getenv("TIMEZONE") or os.getenv("TZ") or "Asia/Ho_Chi_Minh"
 
     # Web admin authentication/security
     admin_username: str = "admin"

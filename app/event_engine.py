@@ -1,4 +1,4 @@
-from datetime import datetime, timezone, timedelta
+from datetime import timedelta
 from time import perf_counter
 from typing import Awaitable, Callable
 
@@ -6,6 +6,7 @@ from .db import conn, utcnow
 from .notifications import normalize_notification_channel
 from .observability import exception, get_logger, info, log_context
 from .settings import settings
+from .time_utils import now as local_now, parse_datetime
 
 RunPrompt = Callable[[str, str, bool, str, str], Awaitable[str]]
 logger = get_logger("event_engine")
@@ -91,13 +92,13 @@ async def handle_state_event(event: dict, run_prompt: RunPrompt):
     if not rules:
         return
     info(logger, "state_event_rules_found", entity_id=entity_id, new_state=new_state, rule_count=len(rules))
-    now = datetime.now(timezone.utc)
+    now = local_now()
     for rule in rules:
         if rule["to_state"] not in (None, "", new_state):
             continue
         if rule["last_triggered"]:
-            last = datetime.fromisoformat(rule["last_triggered"])
-            if now - last < timedelta(seconds=int(rule["cooldown_seconds"])):
+            last = parse_datetime(rule["last_triggered"])
+            if last is not None and now - last < timedelta(seconds=int(rule["cooldown_seconds"])):
                 continue
         with conn() as c:
             c.execute("UPDATE event_rules SET last_triggered=? WHERE id=?", (utcnow(), rule["id"]))

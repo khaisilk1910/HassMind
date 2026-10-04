@@ -10,13 +10,13 @@ import traceback
 from collections import deque
 from contextlib import contextmanager
 from contextvars import ContextVar
-from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Iterator
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .settings import settings
+from .time_utils import now_iso, to_local_iso
 
 _request_id: ContextVar[str] = ContextVar("request_id", default="")
 _session_id: ContextVar[str] = ContextVar("session_id", default="")
@@ -70,8 +70,8 @@ def _register_configured_secrets() -> None:
         register_secret(value)
 
 
-def _utc_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+def _local_iso() -> str:
+    return now_iso(timespec="milliseconds")
 
 
 def sanitize_url(value: str) -> str:
@@ -136,6 +136,8 @@ def _scrub_log_line(line: str) -> str:
         parsed = json.loads(raw)
     except Exception:
         return _sanitize_string(raw, max_chars=max(12000, len(raw)))
+    if isinstance(parsed, dict) and parsed.get("ts"):
+        parsed["ts"] = to_local_iso(parsed.get("ts"), timespec="milliseconds") or parsed.get("ts")
     return json.dumps(redact(parsed), ensure_ascii=False, separators=(",", ":"), default=str)
 
 
@@ -217,7 +219,7 @@ def _record_to_dict(record: logging.LogRecord) -> dict[str, Any]:
     ctx = context_snapshot()
     extra = redact(getattr(record, "hassmind", {}) or {})
     item: dict[str, Any] = {
-        "ts": _utc_iso(),
+        "ts": _local_iso(),
         "level": record.levelname,
         "logger": record.name,
         "event": extra.pop("event", "log"),

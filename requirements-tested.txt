@@ -1,4 +1,4 @@
-# Optional constraints for the main packages in the 1.3.3 QA environment.
+# Optional constraints for the main packages in the 1.3.4 QA environment.
 # pip install -r requirements.txt -c requirements-tested.txt
 # Windows QA additionally installed tzdata for zoneinfo.
 fastapi==0.142.2

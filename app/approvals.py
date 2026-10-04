@@ -10,6 +10,7 @@ from .ha import HomeAssistantClient
 from .notifications import get_notification_preference, send_notification
 from .policy import config_risk
 from .settings import settings
+from .time_utils import now as local_now, parse_datetime
 
 
 def canonical_hash(obj: dict) -> str:
@@ -70,8 +71,8 @@ def decide_by_action(action: str) -> tuple[str, str] | None:
         r = c.execute(f"SELECT id,status,created_at FROM approvals WHERE {col}=?", (token,)).fetchone()
         if not r or r["status"] != "pending":
             return None
-        created = datetime.fromisoformat(r["created_at"])
-        if datetime.now(timezone.utc) - created > timedelta(minutes=settings.approval_ttl_minutes):
+        created = parse_datetime(r["created_at"])
+        if created is not None and local_now() - created > timedelta(minutes=settings.approval_ttl_minutes):
             c.execute("UPDATE approvals SET status='expired',decided_at=?,decided_by=? WHERE id=?", (utcnow(), "mobile", r["id"]))
             return r["id"], "expired"
         c.execute("UPDATE approvals SET status=?,decided_at=?,decided_by=? WHERE id=?", (status, utcnow(), "mobile", r["id"]))

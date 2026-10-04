@@ -39,7 +39,7 @@ from .auth import (
     session_from_request,
     require_session,
 )
-from .db import add_event, conn, get_messages, init_db, list_approvals, list_event_rules, list_jobs, recent_events, recent_tool_audit, scrub_sensitive_audit_history
+from .db import add_event, conn, get_messages, init_db, list_approvals, list_event_rules, list_jobs, normalize_stored_timestamps, recent_events, recent_tool_audit, scrub_sensitive_audit_history
 from .event_engine import handle_state_event, set_rule_enabled, update_event_rule
 from .ha import HomeAssistantClient
 from .ha_integrations import HAIntegrationBridge
@@ -66,13 +66,15 @@ from .rag import reindex_knowledge, search_knowledge
 from . import knowledge_governance as knowledge
 from .scheduler import scheduler_loop, set_job_enabled, update_job
 from .settings import settings
+from .time_utils import configure_process_timezone, timezone_name
 from .skills import list_skills
 from .telegram import telegram_supervisor
 from .tools import ToolRuntime
 
 os.umask(0o077)
+configure_process_timezone()
 
-APP_VERSION = "1.3.3"
+APP_VERSION = "1.3.4"
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 setup_logging()
@@ -403,10 +405,13 @@ async def lifespan(app: FastAPI):
         db_parent_exists=db_path.parent.exists(),
         db_parent_writable=os.access(db_path.parent, os.W_OK) if db_path.parent.exists() else False,
         log=log_file_info(),
+        timezone=timezone_name(),
+        tz_env=os.environ.get("TZ", ""),
     )
     try:
         init_db()
         await asyncio.to_thread(knowledge.recover_interrupted)
+        await asyncio.to_thread(normalize_stored_timestamps)
         load_runtime_integration_overrides()
         scrub_sensitive_audit_history()
         ensure_bootstrap_admin()
@@ -681,7 +686,7 @@ async def favicon():
 
 @app.get("/health")
 async def health():
-    return {"ok": True}
+    return {"ok": True, "timezone": timezone_name()}
 
 
 @app.post("/api/auth/login")
@@ -882,6 +887,7 @@ async def status():
         "event_agent": settings.event_agent_enabled,
         "log_level": settings.log_level.upper(),
         "log_file": settings.log_file if settings.log_file_enabled else "disabled",
+        "timezone": timezone_name(),
     }
 
 
@@ -929,6 +935,8 @@ async def diagnostics():
             "wyoming_host": settings.wyoming_host,
             "wyoming_port": settings.wyoming_port,
             "ha_custom_integrations_enabled": settings.ha_custom_integrations_enabled,
+            "timezone": timezone_name(),
+            "tz_env": os.environ.get("TZ", ""),
         },
     }
 

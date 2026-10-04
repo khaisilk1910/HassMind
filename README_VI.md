@@ -1,4 +1,15 @@
-# HassMind v1.3.3 — AI Agent riêng cho Home Assistant
+# HassMind v1.3.4 — AI Agent riêng cho Home Assistant
+
+## Mới trong v1.3.4
+
+- Toàn bộ timestamp do HassMind tạo dùng timezone cấu hình từ `TIMEZONE` (fallback `TZ`), ví dụ `Asia/Ho_Chi_Minh`, thay vì cố định UTC.
+- Đồng bộ `TIMEZONE` và `TZ` khi tiến trình khởi động để Python, logging và thư viện dùng cùng timezone.
+- Scheduler lưu `next_run`/`last_run` theo timezone cấu hình và vẫn so sánh đúng instant bằng SQLite `julianday`, kể cả dữ liệu cũ `+00:00`.
+- Tự chuyển các timestamp cũ trong SQLite và log hiện có sang timezone cấu hình khi khởi động.
+- Giao diện không còn tự đổi timestamp theo timezone của trình duyệt; hiển thị đúng offset mà server trả về.
+- `/api/status` và diagnostics báo timezone đang dùng để kiểm tra nhanh cấu hình.
+
+Đọc [changelog 1.3.4](CHANGELOG_V1.3.4.md) và [QA 1.3.4](QA_V1.3.4.md).
 
 ## Mới trong v1.3.3
 
