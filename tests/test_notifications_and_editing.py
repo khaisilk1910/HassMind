@@ -2,6 +2,7 @@ import asyncio
 import sqlite3
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app import knowledge_governance as kg
@@ -16,7 +17,7 @@ from app.notifications import (
     save_notification_preference,
     send_notification,
 )
-from app.scheduler import create_job, scheduler_loop, set_job_enabled, update_job
+from app.scheduler import _next_run, create_job, scheduler_loop, set_job_enabled, update_job
 from app.settings import settings
 
 
@@ -143,6 +144,31 @@ class NotificationsAndEditingTests(unittest.TestCase):
         self.assertNotIn("**", body["message"]["msg"])
         self.assertTrue(body["message"]["styles"])
 
+    def test_long_zalo_notification_is_split_before_transport(self):
+        settings.zalo_enabled = True
+        settings.zalo_allow_send = True
+        settings.zalo_agent_allowed_thread_ids = "thread-fallback"
+        zalo = _RecordingZalo()
+        message = "\n".join(
+            f"- **Công tắc {i}:** {{green}}Bật{{/green}} · **Khu vực:** Phòng học"
+            for i in range(80)
+        )
+        result = asyncio.run(
+            send_notification(
+                None,
+                _Integrations(zalo),
+                message,
+                title="HassMind · Scheduler",
+                channel="zalo",
+            )
+        )
+        self.assertGreater(result["chunks"], 1)
+        self.assertEqual(result["chunks"], len(zalo.requests))
+        for request in zalo.requests:
+            content = request["json"]["message"]
+            self.assertLessEqual(len(content["msg"]), 900)
+            self.assertLessEqual(len(content["styles"]), 40)
+
     def test_explicit_zalo_thread_overrides_default_then_allowed_list(self):
         settings.zalo_notification_thread_id = "zalo:default-thread"
         settings.zalo_agent_allowed_thread_ids = "allowed-thread"
@@ -202,6 +228,12 @@ class NotificationsAndEditingTests(unittest.TestCase):
         self.assertEqual(row["schedule_value"], "21:15")
         self.assertEqual(row["notify"], 0)
         self.assertEqual(row["notify_channel"], "mobile")
+
+    def test_scheduler_interval_30_seconds_is_not_silently_clamped_to_60(self):
+        now = datetime(2026, 10, 4, 11, 0, 0, tzinfo=timezone.utc)
+        self.assertEqual((_next_run("interval", "30", now) - now).total_seconds(), 30)
+        with self.assertRaises(ValueError):
+            _next_run("interval", "29", now)
 
     def test_event_rule_create_and_edit_preserves_enabled_state_and_route(self):
         created = create_event_rule("Door", "binary_sensor.door", "on", "Check door", 120, True, "zalo", "t2")

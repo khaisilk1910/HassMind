@@ -538,32 +538,86 @@ def format_mobile_notification_title(value: str) -> str:
     return plain if plain.startswith("🤖") else f"🤖 {plain}"
 
 
-def split_zalo_message(value: str, limit: int = 3900) -> list[str]:
-    """Format and split a long answer, preferring whole Zalo sections.
+def split_zalo_message(value: str, limit: int = 900, max_styles: int = 40) -> list[str]:
+    """Format and split a Zalo answer into transport-safe chunks.
 
-    The returned chunks are still markup. Each chunk is compiled independently
-    to `msg + styles[]` immediately before it is sent to Zalo Server.
+    The companion endpoint has been observed to accept messages around 900
+    visible characters / 40 style spans, while larger rich-text payloads can
+    fail inside the companion with HTTP 500.  Keep each outbound chunk inside
+    that known-good envelope instead of retrying an ambiguous 5xx response
+    (which could duplicate a message if the companion actually sent it).
+
+    Returned chunks remain markup.  Each chunk is compiled independently to
+    `msg + styles[]` immediately before transport.
     """
     text = format_zalo_message(value)
     limit = max(200, int(limit))
+    max_styles = max(1, int(max_styles))
     if not text:
         return []
-    if len(text) <= limit:
+
+    def fits(candidate: str) -> bool:
+        if len(candidate) > limit:
+            return False
+        return len(build_zalo_message_content(candidate).get("styles") or []) <= max_styles
+
+    if fits(text):
         return [text]
 
+    # Prefer whole lines.  This keeps heading/list/inline markup balanced in
+    # the normal model output and also bounds style-count, not only characters.
     chunks: list[str] = []
-    remaining = text
-    while len(remaining) > limit:
-        window = remaining[: limit + 1]
-        minimum = int(limit * 0.55)
-        cuts = [window.rfind("\n\n", minimum), window.rfind("\n", minimum), window.rfind(" ", minimum)]
-        cut = max(cuts)
-        if cut < minimum:
-            cut = limit
-        chunk = remaining[:cut].strip()
-        if chunk:
-            chunks.append(chunk)
-        remaining = remaining[cut:].lstrip()
-    if remaining:
-        chunks.append(remaining)
+    current: list[str] = []
+
+    def flush_current() -> None:
+        if current:
+            chunk = "\n".join(current).strip()
+            if chunk:
+                chunks.append(chunk)
+            current.clear()
+
+    def split_pathological_line(line: str) -> list[str]:
+        """Split one over-large line without ever exposing raw markup.
+
+        Long single-line Markdown is unusual for HassMind responses.  When it
+        does happen, compile it once to plain visible text, then split that text
+        on whitespace.  Rich formatting is intentionally sacrificed for this
+        one line so the transport remains valid and readable.
+        """
+        plain = str(build_zalo_message_content(line).get("msg") or "").strip()
+        if not plain:
+            return []
+        parts: list[str] = []
+        remaining = plain
+        while remaining:
+            if len(remaining) <= limit:
+                parts.append(remaining)
+                break
+            window = remaining[: limit + 1]
+            cut = window.rfind(" ")
+            if cut < int(limit * 0.5):
+                cut = limit
+            part = remaining[:cut].strip()
+            if part:
+                parts.append(part)
+            remaining = remaining[cut:].lstrip()
+        return parts
+
+    for line in text.split("\n"):
+        candidate_lines = current + [line]
+        candidate = "\n".join(candidate_lines).strip()
+        if candidate and fits(candidate):
+            current.append(line)
+            continue
+
+        flush_current()
+        single = line.strip()
+        if not single:
+            continue
+        if fits(single):
+            current.append(line)
+            continue
+        chunks.extend(split_pathological_line(line))
+
+    flush_current()
     return chunks

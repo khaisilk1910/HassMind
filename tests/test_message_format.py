@@ -121,6 +121,19 @@ class ZaloMessageFormatTests(unittest.TestCase):
         self.assertTrue(all(0 < len(chunk) <= 500 for chunk in chunks))
         self.assertTrue(all("###" in chunk for chunk in chunks))
 
+    def test_default_zalo_chunks_stay_inside_observed_safe_rich_text_envelope(self):
+        raw = "\n".join(
+            f"- **Thiết bị {i}:** {{green}}Bật{{/green}} · **Trạng thái:** Hoạt động bình thường"
+            for i in range(80)
+        )
+        chunks = split_zalo_message(raw)
+        self.assertGreater(len(chunks), 1)
+        for chunk in chunks:
+            content = build_zalo_message_content(chunk)
+            self.assertLessEqual(len(chunk), 900)
+            self.assertLessEqual(len(content["styles"]), 40)
+            self.assertNotIn("**", content["msg"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -115,6 +115,9 @@ class FakeHA:
     def __init__(self):
         self.calls = []
 
+    async def states(self):
+        return []
+
     async def call_service(self, domain, service, data=None, *, target=None):
         self.calls.append((domain, service, data, target))
         return {"ok": True}
@@ -144,6 +147,14 @@ class KnowledgeToolRoutingTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsInstance(result, list)
             self.assertEqual(result[0]["content_trust"], "untrusted")
             self.assertEqual(result[0]["data_scope"], "static_knowledge")
+
+    async def test_blank_optional_integer_from_model_uses_default_instead_of_crashing(self):
+        result = await self.runtime.call(
+            "ha_search_states",
+            {"query": "presence", "domains": ["binary_sensor"], "limit": ""},
+        )
+        self.assertEqual(result["count"], 0)
+        self.assertEqual(result["states"], [])
 
     async def test_unsafe_resolution_blocks_before_ha_dispatch(self):
         with knowledge_control_context("turn on bedrrom lamp"), patch("app.tools.resolve_entity", return_value=resolution(safe=False, match_type="fuzzy")):

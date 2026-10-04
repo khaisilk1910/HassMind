@@ -72,7 +72,7 @@ from .tools import ToolRuntime
 
 os.umask(0o077)
 
-APP_VERSION = "1.3.2"
+APP_VERSION = "1.3.3"
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 setup_logging()
@@ -134,17 +134,61 @@ async def run_prompt(session_id: str, prompt: str, notify: bool, notify_channel:
     with log_context(session_id=session_id, source="system"):
         info(logger, "system_prompt_started", notify=notify, notify_channel=channel, prompt_chars=len(prompt))
         result = await agent.chat(session_id, prompt, source="system")
+        notification_ok: bool | None = None
+        delivery_note = ""
         if notify:
-            await send_notification(
-                ha,
-                integrations,
-                result[:12000],
-                title=f"HassMind · {session_id}",
-                channel=channel,
-                zalo_thread_id=zalo_thread_id,
-            )
-        info(logger, "system_prompt_completed", result_chars=len(result), notify=notify, notify_channel=channel)
-        return result
+            try:
+                notification_result = await send_notification(
+                    ha,
+                    integrations,
+                    result[:12000],
+                    title=f"HassMind · {session_id}",
+                    channel=channel,
+                    zalo_thread_id=zalo_thread_id,
+                )
+                notification_ok = not bool(notification_result.get("skipped"))
+                if not notification_ok:
+                    reason = str(notification_result.get("reason") or "notification route unavailable").strip()
+                    delivery_note = f"\n\n⚠️ Thông báo {channel} chưa được gửi: {reason}"
+            except Exception as exc:
+                # A Scheduler/Event-rule execution that completed successfully
+                # must not be rewritten as a failed agent job only because the
+                # selected notification transport is temporarily unavailable.
+                # Keep the transport failure fully observable and preserve the
+                # actual agent result in jobs.last_result.
+                notification_ok = False
+                delivery_note = (
+                    f"\n\n⚠️ Gửi thông báo {channel} thất bại. "
+                    "Kết quả tác vụ vẫn hoàn tất; xem Logs để biết lỗi transport."
+                )
+                exception(
+                    logger,
+                    "system_notification_failed",
+                    message="Scheduled/event agent result completed but notification delivery failed",
+                    notify_channel=channel,
+                    error_type=type(exc).__name__,
+                )
+                try:
+                    add_event(
+                        "notification_error",
+                        session_id,
+                        {
+                            "channel": channel,
+                            "error_type": type(exc).__name__,
+                            "error": str(exc)[:1000],
+                        },
+                    )
+                except Exception:
+                    exception(logger, "notification_error_event_failed", notify_channel=channel)
+        info(
+            logger,
+            "system_prompt_completed",
+            result_chars=len(result + delivery_note),
+            notify=notify,
+            notify_channel=channel,
+            notification_ok=notification_ok,
+        )
+        return result + delivery_note
 
 
 async def event_callback(event: dict[str, Any]):
@@ -1186,7 +1230,10 @@ async def jobs():
 @app.post("/api/jobs", dependencies=[Depends(require_access)])
 async def create_job_api(body: JobIn):
     from .scheduler import create_job
-    return create_job(body.name, body.prompt, body.schedule_type, body.schedule_value, body.notify, body.notify_channel, body.zalo_thread_id)
+    try:
+        return create_job(body.name, body.prompt, body.schedule_type, body.schedule_value, body.notify, body.notify_channel, body.zalo_thread_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 
 @app.put("/api/jobs/{job_id}", dependencies=[Depends(require_access)])
@@ -1210,7 +1257,12 @@ async def update_job_api(job_id: int, body: JobIn):
 
 @app.patch("/api/jobs/{job_id}", dependencies=[Depends(require_access)])
 async def toggle_job(job_id: int, body: ToggleIn):
-    set_job_enabled(job_id, body.enabled)
+    try:
+        set_job_enabled(job_id, body.enabled)
+    except KeyError:
+        raise HTTPException(404, "Job not found")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     return {"id": job_id, "enabled": body.enabled}
 
 

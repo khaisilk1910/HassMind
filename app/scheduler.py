@@ -11,15 +11,24 @@ from .settings import settings
 
 RunPrompt = Callable[[str, str, bool, str, str], Awaitable[str]]
 logger = get_logger("scheduler")
+MIN_INTERVAL_SECONDS = 30
 
 
 def _next_run(schedule_type: str, value: str, now: datetime | None = None) -> datetime:
     now = now or datetime.now(timezone.utc)
     if schedule_type == "interval":
-        seconds = max(60, int(value))
+        try:
+            seconds = int(str(value).strip())
+        except (TypeError, ValueError):
+            raise ValueError("interval schedule_value must be an integer number of seconds") from None
+        if seconds < MIN_INTERVAL_SECONDS:
+            raise ValueError(f"interval schedule_value must be at least {MIN_INTERVAL_SECONDS} seconds")
         return now + timedelta(seconds=seconds)
     if schedule_type == "daily":
-        hh, mm = [int(x) for x in value.split(":", 1)]
+        try:
+            hh, mm = [int(x) for x in str(value).strip().split(":", 1)]
+        except (TypeError, ValueError):
+            raise ValueError("daily schedule_value must be HH:MM") from None
         if not 0 <= hh <= 23 or not 0 <= mm <= 59:
             raise ValueError("daily schedule_value must be HH:MM")
         tz = ZoneInfo(settings.timezone)

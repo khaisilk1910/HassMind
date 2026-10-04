@@ -16,6 +16,29 @@ from .skills import list_skills, read_skill
 from .websearch import search_web
 
 
+def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
+    """Parse optional model numeric arguments without failing on blanks."""
+    try:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            parsed = int(default)
+        else:
+            parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = int(default)
+    return min(max(parsed, minimum), maximum)
+
+
+def _bounded_float(value: Any, default: float, minimum: float, maximum: float) -> float:
+    try:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            parsed = float(default)
+        else:
+            parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = float(default)
+    return min(max(parsed, minimum), maximum)
+
+
 
 def _fn(name: str, description: str, properties: dict, required: list[str] | None = None) -> dict:
     return {
@@ -239,7 +262,7 @@ class ToolRuntime:
             query = str(args.get("query") or "")
             domains = [str(x).strip() for x in (args.get("domains") or []) if str(x).strip()]
             state_filter = str(args.get("state") or "").strip()
-            limit = min(max(int(args.get("limit", 80)), 1), 200)
+            limit = _bounded_int(args.get("limit"), 80, 1, 200)
             include_attributes = bool(args.get("include_attributes", True))
             return search_states(
                 states, query=query, domains=domains, state_filter=state_filter,
@@ -260,7 +283,7 @@ class ToolRuntime:
         if name == "ha_history":
             return await self.ha.history(args["entity_id"], args.get("start_time") or None)
         if name == "ha_recent_events":
-            return recent_events(int(args.get("limit", 25)))
+            return recent_events(_bounded_int(args.get("limit"), 25, 1, 100))
         if name == "ha_call_service":
             return await self.ha.call_service(args["domain"], args["service"], args.get("data") or {}, target=args.get("target") or None)
         if name == "ha_entity_registry":
@@ -287,10 +310,10 @@ class ToolRuntime:
         if name == "memory_add":
             return {"id": add_memory(args["text"], args.get("tags", ""))}
         if name == "memory_search":
-            return search_memory(args["query"], int(args.get("limit", 10)))
+            return search_memory(args["query"], _bounded_int(args.get("limit"), 10, 1, 20))
         if name == "knowledge_search":
             results = search_knowledge(
-                args["query"], min(max(int(args.get("limit", 8)), 1), 20),
+                args["query"], _bounded_int(args.get("limit"), 8, 1, 20),
                 area=args.get("area") or None, domain=args.get("domain") or None,
                 kind=args.get("kind") or None,
             )
@@ -310,9 +333,9 @@ class ToolRuntime:
         if name == "schedule_propose":
             return create_job(args["name"], args["prompt"], args["schedule_type"], args["schedule_value"], bool(args.get("notify", True)), args.get("notify_channel") or "mobile", args.get("zalo_thread_id") or "")
         if name == "event_rule_propose":
-            return create_event_rule(args["name"], args["entity_id"], args.get("to_state") or None, args["prompt"], int(args.get("cooldown_seconds", 300)), bool(args.get("notify", True)), args.get("notify_channel") or "mobile", args.get("zalo_thread_id") or "")
+            return create_event_rule(args["name"], args["entity_id"], args.get("to_state") or None, args["prompt"], _bounded_int(args.get("cooldown_seconds"), 300, 60, 86400), bool(args.get("notify", True)), args.get("notify_channel") or "mobile", args.get("zalo_thread_id") or "")
         if name == "web_search":
-            return await search_web(args["query"], int(args.get("limit", 5)))
+            return await search_web(args["query"], _bounded_int(args.get("limit"), 5, 1, 10))
         if name == "mcp_servers":
             return list(load_servers().keys())
         if name == "mcp_list_tools":
@@ -344,7 +367,12 @@ class ToolRuntime:
             if name == "camera_tts_media":
                 return await client.media(args["camera"], args["url"], queue_mode=args.get("queue_mode") or "replace", title=args.get("title") or "")
             if name == "camera_tts_ptz":
-                return await client.ptz(args["camera"], args["direction"], speed=int(args.get("speed", 50)), duration=float(args.get("duration", 0.35)))
+                return await client.ptz(
+                    args["camera"],
+                    args["direction"],
+                    speed=_bounded_int(args.get("speed"), 50, 1, 100),
+                    duration=_bounded_float(args.get("duration"), 0.35, 0.05, 10.0),
+                )
             if name == "camera_tts_stop":
                 return await client.stop(args["camera"])
 
@@ -356,7 +384,8 @@ class ToolRuntime:
                 return await client.summary()
             if name == "facedetect_events":
                 return await client.events(
-                    page=int(args.get("page", 1)), limit=int(args.get("limit", 20)),
+                    page=_bounded_int(args.get("page"), 1, 1, 100000),
+                    limit=_bounded_int(args.get("limit"), 20, 1, 200),
                     event_type=args.get("event_type") or "", camera_id=args.get("camera_id") or "", person_id=args.get("person_id") or "",
                 )
             if name == "facedetect_people":
@@ -403,7 +432,7 @@ class ToolRuntime:
         if name == "shopping_delete":
             return await self.ha_integrations.shopping_delete(args["entry_id"], int(args["order_id"]))
         if name == "yt_dlp_search":
-            return await self.ha_integrations.ytdlp_search(args["query"], int(args.get("limit", 10)))
+            return await self.ha_integrations.ytdlp_search(args["query"], _bounded_int(args.get("limit"), 10, 1, 50))
         if name == "yt_dlp_play":
             return await self.ha_integrations.ytdlp_play(args["url"], args["media_player"])
         if name == "yt_dlp_download":

@@ -1,4 +1,14 @@
-# HassMind v1.3.2 — AI Agent riêng cho Home Assistant
+# HassMind v1.3.3 — AI Agent riêng cho Home Assistant
+
+## Mới trong v1.3.3
+
+- Sửa lỗi Scheduler bị ghi nhận **failed** dù agent đã chạy xong chỉ vì bước gửi thông báo Zalo trả HTTP 500. Kết quả tác vụ giờ vẫn được lưu; lỗi transport được log riêng và hiển thị cảnh báo ở cuối `last_result`.
+- Chia phản hồi Zalo dài thành các chunk rich-text nhỏ trước khi gửi. Mỗi chunk mặc định giữ trong ngưỡng bảo thủ khoảng **900 ký tự markup / 40 style spans**, tránh payload lớn từng gây lỗi ở Zalo companion.
+- Interval Scheduler **30 giây** giờ chạy đúng 30 giây thay vì bị âm thầm nâng lên 60 giây. Giá trị dưới 30 giây bị từ chối rõ ràng; API trả `400` thay vì `500` cho lịch không hợp lệ.
+- UI Scheduler tự đổi gợi ý theo `daily`/`interval`, nêu rõ interval tối thiểu 30 giây.
+- Các tool có tham số số tùy chọn chịu được giá trị rỗng do OpenAI-compatible backend phát sinh, tránh lỗi kiểu `invalid literal for int() with base 10: ''` trong job định kỳ.
+
+Đọc [changelog 1.3.3](CHANGELOG_V1.3.3.md) và [QA 1.3.3](QA_V1.3.3.md). Bản này là hotfix tương thích dữ liệu với 1.3.2, không cần migration database.
 
 ## Mới trong v1.3.2
 
