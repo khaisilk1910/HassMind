@@ -1,4 +1,4 @@
-# HassMind Knowledge 1.3.4
+# HassMind Knowledge 1.3.5
 
 Put static `.md`, `.txt`, `.yaml`, `.yml` or `.json` files here. Structured catalogs are indexed as entity/area/scene/script/reference/rules/procedures; existing prose remains searchable. Use Knowledge → Scan Knowledge to inspect files and proposals, then **Re-index** for an explicitly requested index refresh. Scan does not automatically modify content or index.
 

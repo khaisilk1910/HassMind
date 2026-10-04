@@ -16,6 +16,8 @@ from app.notifications import (
     resolve_zalo_thread_id,
     save_notification_preference,
     send_notification,
+    should_suppress_notification,
+    NO_NOTIFY_TOKEN,
 )
 from app.scheduler import _next_run, create_job, scheduler_loop, set_job_enabled, update_job
 from app.settings import settings
@@ -207,6 +209,7 @@ class NotificationsAndEditingTests(unittest.TestCase):
         self.assertEqual(row["enabled"], 0)
         self.assertEqual(row["notify_channel"], "zalo")
         self.assertEqual(row["zalo_thread_id"], "t1")
+        self.assertEqual(row["notify_mode"], "always")
 
         set_job_enabled(jid, True)
         updated = update_job(
@@ -218,6 +221,7 @@ class NotificationsAndEditingTests(unittest.TestCase):
             notify=False,
             notify_channel="mobile",
             zalo_thread_id="",
+            notify_mode="actionable",
         )
         self.assertTrue(updated["enabled"])
         self.assertTrue(updated["next_run"])
@@ -228,6 +232,7 @@ class NotificationsAndEditingTests(unittest.TestCase):
         self.assertEqual(row["schedule_value"], "21:15")
         self.assertEqual(row["notify"], 0)
         self.assertEqual(row["notify_channel"], "mobile")
+        self.assertEqual(row["notify_mode"], "actionable")
 
     def test_scheduler_interval_30_seconds_is_not_silently_clamped_to_60(self):
         now = datetime(2026, 10, 4, 11, 0, 0, tzinfo=timezone.utc)
@@ -260,7 +265,7 @@ class NotificationsAndEditingTests(unittest.TestCase):
         self.assertEqual(row["notify_channel"], "mobile")
 
     def test_scheduler_runtime_passes_persisted_notification_route(self):
-        created = create_job("Due", "Run due prompt", "interval", "300", True, "zalo", "runtime-job")
+        created = create_job("Due", "Run due prompt", "interval", "300", True, "zalo", "runtime-job", "actionable")
         jid = created["id"]
         with conn() as c:
             c.execute("UPDATE jobs SET enabled=1,next_run=? WHERE id=?", ("2000-01-01T00:00:00+00:00", jid))
@@ -273,7 +278,11 @@ class NotificationsAndEditingTests(unittest.TestCase):
             return "done"
 
         asyncio.run(scheduler_loop(stop, run_prompt))
-        self.assertEqual(seen, [(f"job:{jid}", "Run due prompt", True, "zalo", "runtime-job")])
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0][0], f"job:{jid}")
+        self.assertTrue(seen[0][1].startswith("Run due prompt"))
+        self.assertIn(NO_NOTIFY_TOKEN, seen[0][1])
+        self.assertEqual(seen[0][2:], (True, "zalo", "runtime-job"))
 
     def test_event_runtime_passes_persisted_notification_route(self):
         created = create_event_rule("Door", "binary_sensor.door", "on", "Check door", 60, True, "zalo", "runtime-rule")
@@ -291,6 +300,12 @@ class NotificationsAndEditingTests(unittest.TestCase):
         self.assertEqual(seen[0][0], f"event-rule:{rid}")
         self.assertTrue(seen[0][1].startswith("Check door"))
         self.assertEqual(seen[0][2:], (True, "zalo", "runtime-rule"))
+
+    def test_silent_notification_token_requires_exact_match(self):
+        self.assertTrue(should_suppress_notification(NO_NOTIFY_TOKEN))
+        self.assertTrue(should_suppress_notification(f"  {NO_NOTIFY_TOKEN}\n"))
+        self.assertFalse(should_suppress_notification("Không có gì cần báo"))
+        self.assertFalse(should_suppress_notification(NO_NOTIFY_TOKEN + " thêm chữ"))
 
     def test_review_queue_returns_at_most_four_stale_proposals(self):
         ids = []

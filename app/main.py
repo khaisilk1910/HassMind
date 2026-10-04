@@ -46,7 +46,7 @@ from .ha_integrations import HAIntegrationBridge
 from .integration_config import integration_config_view, load_runtime_integration_overrides, reset_integration_config, save_integration_config
 from .integrations import IntegrationHub
 from .message_format import split_zalo_message
-from .notifications import get_notification_preference, normalize_notification_channel, save_notification_preference, send_notification
+from .notifications import get_notification_preference, normalize_notification_channel, save_notification_preference, send_notification, should_suppress_notification
 from .observability import (
     current_request_id,
     exception,
@@ -74,7 +74,7 @@ from .tools import ToolRuntime
 os.umask(0o077)
 configure_process_timezone()
 
-APP_VERSION = "1.3.4"
+APP_VERSION = "1.3.5"
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 setup_logging()
@@ -138,7 +138,11 @@ async def run_prompt(session_id: str, prompt: str, notify: bool, notify_channel:
         result = await agent.chat(session_id, prompt, source="system")
         notification_ok: bool | None = None
         delivery_note = ""
-        if notify:
+        silent_result = bool(notify and should_suppress_notification(result))
+        if silent_result:
+            notification_ok = True
+            info(logger, "system_notification_suppressed", reason="conditional_no_result", notify_channel=channel)
+        elif notify:
             try:
                 notification_result = await send_notification(
                     ha,
@@ -190,6 +194,8 @@ async def run_prompt(session_id: str, prompt: str, notify: bool, notify_channel:
             notify_channel=channel,
             notification_ok=notification_ok,
         )
+        if silent_result:
+            return "🔕 Không có nội dung cần thông báo."
         return result + delivery_note
 
 
@@ -579,6 +585,7 @@ class JobIn(BaseModel):
     notify: bool = True
     notify_channel: str = Field(default="mobile", pattern="^(mobile|zalo)$")
     zalo_thread_id: str = Field(default="", max_length=255)
+    notify_mode: str = Field(default="always", pattern="^(always|actionable)$")
 
 
 class RuleIn(BaseModel):
@@ -1239,7 +1246,7 @@ async def jobs():
 async def create_job_api(body: JobIn):
     from .scheduler import create_job
     try:
-        return create_job(body.name, body.prompt, body.schedule_type, body.schedule_value, body.notify, body.notify_channel, body.zalo_thread_id)
+        return create_job(body.name, body.prompt, body.schedule_type, body.schedule_value, body.notify, body.notify_channel, body.zalo_thread_id, body.notify_mode)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
 
@@ -1256,6 +1263,7 @@ async def update_job_api(job_id: int, body: JobIn):
             notify=body.notify,
             notify_channel=body.notify_channel,
             zalo_thread_id=body.zalo_thread_id,
+            notify_mode=body.notify_mode,
         )
     except KeyError:
         raise HTTPException(404, "Job not found")

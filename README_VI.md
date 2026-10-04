@@ -1,4 +1,19 @@
-# HassMind v1.3.4 — AI Agent riêng cho Home Assistant
+# HassMind v1.3.5 — AI Agent riêng cho Home Assistant
+
+## Mới trong v1.3.5
+
+- Scheduler có thêm **Khi nào gửi** với hai chế độ: `Luôn gửi kết quả` và `Chỉ gửi khi có nội dung cần báo`.
+- Chế độ điều kiện dùng một protocol nội bộ giữa Scheduler và agent. Khi prompt quy định không cần thông báo và không có kết quả phù hợp, agent trả sentinel nội bộ; HassMind chặn hoàn toàn bước gửi Điện thoại/Zalo.
+- Kết quả chạy im lặng vẫn được ghi trong Web Admin là `🔕 Không có nội dung cần thông báo.` để dễ kiểm tra Scheduler, nhưng không phát notification ra ngoài.
+- Chỉ sentinel chính xác mới bị chặn; câu trả lời tự nhiên bình thường không bị ẩn nhầm.
+- Job cũ tự migrate với `notify_mode=always`, nên không thay đổi hành vi sau nâng cấp.
+- Tool `schedule_propose` hỗ trợ `notify_mode=actionable` để AI có thể đề xuất job điều kiện nhưng job vẫn tạo ở trạng thái disabled.
+
+### Ví dụ: chỉ báo khi đã tắt đèn/quạt không có hiện diện
+
+Trong Scheduler bật **Gửi thông báo sau khi chạy**, chọn kênh Điện thoại/Zalo và chọn **Khi nào gửi → Chỉ gửi khi có nội dung cần báo**. Prompt nên quy định rõ rằng nếu không có thiết bị phù hợp, hoặc không tắt được thiết bị nào, thì không gửi thông báo.
+
+Đọc [changelog 1.3.5](CHANGELOG_V1.3.5.md) và [QA 1.3.5](QA_V1.3.5.md).
 
 ## Mới trong v1.3.4
 

@@ -108,7 +108,7 @@ def schemas() -> list[dict]:
         }, ["query"]),
         _fn("skill_list", "List installed HassMind operating skills.", {}),
         _fn("skill_read", "Read one installed skill workflow.", {"name": {"type": "string"}}, ["name"]),
-        _fn("schedule_propose", "Create a recurring agent job in DISABLED state. Human must enable it in dashboard/API.", {"name": {"type": "string"}, "prompt": {"type": "string"}, "schedule_type": {"type": "string", "enum": ["interval", "daily"]}, "schedule_value": {"type": "string", "description": "interval seconds or daily HH:MM"}, "notify": {"type": "boolean"}, "notify_channel": {"type": "string", "enum": ["mobile", "zalo"]}, "zalo_thread_id": {"type": "string"}}, ["name", "prompt", "schedule_type", "schedule_value"]),
+        _fn("schedule_propose", "Create a recurring agent job in DISABLED state. Human must enable it in dashboard/API.", {"name": {"type": "string"}, "prompt": {"type": "string"}, "schedule_type": {"type": "string", "enum": ["interval", "daily"]}, "schedule_value": {"type": "string", "description": "interval seconds or daily HH:MM"}, "notify": {"type": "boolean"}, "notify_channel": {"type": "string", "enum": ["mobile", "zalo"]}, "zalo_thread_id": {"type": "string"}, "notify_mode": {"type": "string", "enum": ["always", "actionable"]}}, ["name", "prompt", "schedule_type", "schedule_value"]),
         _fn("event_rule_propose", "Create a Home Assistant state-event agent rule in DISABLED state. Human must enable it in dashboard/API.", {"name": {"type": "string"}, "entity_id": {"type": "string"}, "to_state": {"type": "string"}, "prompt": {"type": "string"}, "cooldown_seconds": {"type": "integer"}, "notify": {"type": "boolean"}, "notify_channel": {"type": "string", "enum": ["mobile", "zalo"]}, "zalo_thread_id": {"type": "string"}}, ["name", "entity_id", "prompt"]),
         _fn("web_search", "Search the web through the optional user-hosted SearXNG instance.", {"query": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 10}}, ["query"]),
         _fn("mcp_servers", "List configured external MCP servers.", {}),
@@ -331,7 +331,7 @@ class ToolRuntime:
         if name == "skill_read":
             return read_skill(args["name"])
         if name == "schedule_propose":
-            return create_job(args["name"], args["prompt"], args["schedule_type"], args["schedule_value"], bool(args.get("notify", True)), args.get("notify_channel") or "mobile", args.get("zalo_thread_id") or "")
+            return create_job(args["name"], args["prompt"], args["schedule_type"], args["schedule_value"], bool(args.get("notify", True)), args.get("notify_channel") or "mobile", args.get("zalo_thread_id") or "", args.get("notify_mode") or "always")
         if name == "event_rule_propose":
             return create_event_rule(args["name"], args["entity_id"], args.get("to_state") or None, args["prompt"], _bounded_int(args.get("cooldown_seconds"), 300, 60, 86400), bool(args.get("notify", True)), args.get("notify_channel") or "mobile", args.get("zalo_thread_id") or "")
         if name == "web_search":

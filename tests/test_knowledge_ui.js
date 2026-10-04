@@ -140,14 +140,14 @@ test('Changed scan fingerprint makes stale index warning visible',()=>{const h=h
 
 test('Review queue is scroll-bounded and notification controls exist for every notifying feature',()=>{
   assert.match(css,/#knowledgeProposals\s*\{[^}]*max-height:[^;}]+;[^}]*overflow-y:auto/s);
-  for(const id of ['approvalNotifyChannel','approvalZaloThread','jobNotifyChannel','jobZaloThread','ruleNotifyChannel','ruleZaloThread','knowledgeNotifyChannel','knowledgeZaloThread'])assert.match(html,new RegExp('id="'+id+'"'));
+  for(const id of ['approvalNotifyChannel','approvalZaloThread','jobNotifyChannel','jobNotifyMode','jobZaloThread','ruleNotifyChannel','ruleZaloThread','knowledgeNotifyChannel','knowledgeZaloThread'])assert.match(html,new RegExp('id="'+id+'"'));
 });
 
 test('Scheduler edit loads persisted values and PUT saves notification route',async()=>{
-  const h=harness();h.run("jobsCache=[{id:7,name:'Night',prompt:'Report',schedule_type:'daily',schedule_value:'21:00',notify:1,notify_channel:'zalo',zalo_thread_id:'thread-7',enabled:true}];editJob(7)");
-  assert.equal(h.nodes.get('jobname').value,'Night');assert.equal(h.nodes.get('jobNotifyChannel').value,'zalo');assert.equal(h.nodes.get('jobZaloThread').value,'thread-7');assert.equal(h.nodes.get('jobSubmitBtn').textContent,'Lưu thay đổi');
+  const h=harness();h.run("jobsCache=[{id:7,name:'Night',prompt:'Report',schedule_type:'daily',schedule_value:'21:00',notify:1,notify_channel:'zalo',zalo_thread_id:'thread-7',notify_mode:'actionable',enabled:true}];editJob(7)");
+  assert.equal(h.nodes.get('jobname').value,'Night');assert.equal(h.nodes.get('jobNotifyChannel').value,'zalo');assert.equal(h.nodes.get('jobNotifyMode').value,'actionable');assert.equal(h.nodes.get('jobZaloThread').value,'thread-7');assert.equal(h.nodes.get('jobSubmitBtn').textContent,'Lưu thay đổi');
   h.nodes.get('jobname').value='Night edited';h.respond(async(url)=>({body:url==='/api/jobs/7'?{id:7,enabled:true}:[]}));await h.run('saveJob()');
-  const call=h.calls.find(x=>x.url==='/api/jobs/7');assert.ok(call);assert.equal(call.opt.method,'PUT');const body=JSON.parse(call.opt.body);assert.equal(body.name,'Night edited');assert.equal(body.notify_channel,'zalo');assert.equal(body.zalo_thread_id,'thread-7');
+  const call=h.calls.find(x=>x.url==='/api/jobs/7');assert.ok(call);assert.equal(call.opt.method,'PUT');const body=JSON.parse(call.opt.body);assert.equal(body.name,'Night edited');assert.equal(body.notify_channel,'zalo');assert.equal(body.zalo_thread_id,'thread-7');assert.equal(body.notify_mode,'actionable');
 });
 
 test('Event rule edit loads persisted values and PUT saves notification route',async()=>{

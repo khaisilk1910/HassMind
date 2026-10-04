@@ -11,7 +11,32 @@ from .settings import settings
 
 logger = get_logger("notifications")
 VALID_NOTIFICATION_CHANNELS = {"mobile", "zalo"}
+NO_NOTIFY_TOKEN = "__HASSMIND_NO_NOTIFY__"
 _FEATURE_RE = re.compile(r"^[a-z0-9_.-]{1,64}$")
+
+
+
+
+def should_suppress_notification(value: str | None) -> bool:
+    """Return True only for the explicit scheduler/event silent sentinel.
+
+    Exact matching is intentional: ordinary answers such as "không có gì cần báo"
+    must never be hidden accidentally.
+    """
+    return str(value or "").strip() == NO_NOTIFY_TOKEN
+
+
+def actionable_notification_prompt(prompt: str) -> str:
+    """Add the private result contract used by conditional Scheduler jobs."""
+    return (
+        str(prompt or "").rstrip()
+        + "\n\n---\n"
+        + "[HassMind Scheduler notification protocol]\n"
+        + "Job này dùng chế độ chỉ thông báo khi có kết quả cần báo. "
+          "Nếu sau khi kiểm tra/thực hiện tác vụ, theo đúng yêu cầu của người dùng không có nội dung nào được phép gửi thông báo, "
+          f"hãy trả về DUY NHẤT chuỗi {NO_NOTIFY_TOKEN} và không thêm bất kỳ ký tự nào. "
+          "Chỉ dùng chuỗi này khi điều kiện im lặng trong prompt của người dùng thực sự được thỏa mãn."
+    )
 
 
 def normalize_notification_channel(value: str | None) -> str:

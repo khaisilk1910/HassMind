@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from time import perf_counter
 from typing import Awaitable, Callable
 from .db import conn, utcnow
-from .notifications import normalize_notification_channel
+from .notifications import actionable_notification_prompt, normalize_notification_channel
 from .observability import exception, get_logger, info, log_context
 from .settings import settings
 from .time_utils import local_tz, now as local_now, parse_datetime
@@ -11,6 +11,14 @@ from .time_utils import local_tz, now as local_now, parse_datetime
 RunPrompt = Callable[[str, str, bool, str, str], Awaitable[str]]
 logger = get_logger("scheduler")
 MIN_INTERVAL_SECONDS = 30
+VALID_NOTIFY_MODES = {"always", "actionable"}
+
+
+def _normalize_notify_mode(value: str | None) -> str:
+    mode = str(value or "always").strip().lower()
+    if mode not in VALID_NOTIFY_MODES:
+        raise ValueError("notify_mode must be always or actionable")
+    return mode
 
 
 def _next_run(schedule_type: str, value: str, now: datetime | None = None) -> datetime:
@@ -52,17 +60,19 @@ def create_job(
     notify: bool = True,
     notify_channel: str = "mobile",
     zalo_thread_id: str = "",
+    notify_mode: str = "always",
 ) -> dict:
     channel = normalize_notification_channel(notify_channel)
+    mode = _normalize_notify_mode(notify_mode)
     thread_id = _clean_thread_id(zalo_thread_id)
     nr = _next_run(schedule_type, schedule_value).isoformat()
     with conn() as c:
         cur = c.execute(
-            "INSERT INTO jobs(name,prompt,schedule_type,schedule_value,enabled,notify,notify_channel,zalo_thread_id,next_run,created_at) VALUES(?,?,?,?,0,?,?,?,?,?)",
-            (name, prompt, schedule_type, schedule_value, 1 if notify else 0, channel, thread_id, nr, utcnow()),
+            "INSERT INTO jobs(name,prompt,schedule_type,schedule_value,enabled,notify,notify_channel,zalo_thread_id,notify_mode,next_run,created_at) VALUES(?,?,?,?,0,?,?,?,?,?,?)",
+            (name, prompt, schedule_type, schedule_value, 1 if notify else 0, channel, thread_id, mode, nr, utcnow()),
         )
         jid = int(cur.lastrowid)
-    info(logger, "job_created", job_id=jid, name=name, schedule_type=schedule_type, schedule_value=schedule_value, notify=notify, notify_channel=channel, next_run=nr)
+    info(logger, "job_created", job_id=jid, name=name, schedule_type=schedule_type, schedule_value=schedule_value, notify=notify, notify_channel=channel, notify_mode=mode, next_run=nr)
     return {"id": jid, "enabled": False, "next_run": nr, "message": "Created disabled; enable it from the dashboard/API after review."}
 
 
@@ -76,8 +86,10 @@ def update_job(
     notify: bool,
     notify_channel: str,
     zalo_thread_id: str = "",
+    notify_mode: str = "always",
 ) -> dict:
     channel = normalize_notification_channel(notify_channel)
+    mode = _normalize_notify_mode(notify_mode)
     thread_id = _clean_thread_id(zalo_thread_id)
     # Validate before touching the persisted row.
     _next_run(schedule_type, schedule_value)
@@ -89,12 +101,12 @@ def update_job(
         nr = _next_run(schedule_type, schedule_value).isoformat() if enabled else None
         c.execute(
             """
-            UPDATE jobs SET name=?,prompt=?,schedule_type=?,schedule_value=?,notify=?,notify_channel=?,zalo_thread_id=?,next_run=?
+            UPDATE jobs SET name=?,prompt=?,schedule_type=?,schedule_value=?,notify=?,notify_channel=?,zalo_thread_id=?,notify_mode=?,next_run=?
             WHERE id=?
             """,
-            (name, prompt, schedule_type, schedule_value, 1 if notify else 0, channel, thread_id, nr, job_id),
+            (name, prompt, schedule_type, schedule_value, 1 if notify else 0, channel, thread_id, mode, nr, job_id),
         )
-    info(logger, "job_updated", job_id=job_id, name=name, schedule_type=schedule_type, schedule_value=schedule_value, notify=notify, notify_channel=channel, next_run=nr)
+    info(logger, "job_updated", job_id=job_id, name=name, schedule_type=schedule_type, schedule_value=schedule_value, notify=notify, notify_channel=channel, notify_mode=mode, next_run=nr)
     return {"id": job_id, "enabled": enabled, "next_run": nr}
 
 
@@ -133,10 +145,14 @@ async def scheduler_loop(stop: asyncio.Event, run_prompt: RunPrompt):
                 sid = f"job:{job['id']}"
                 with log_context(session_id=sid, source="scheduler", component="scheduler"):
                     try:
-                        info(logger, "job_run_started", job_id=job["id"], name=job["name"], notify=bool(job["notify"]), notify_channel=job.get("notify_channel") or "mobile")
+                        notify_mode = _normalize_notify_mode(job.get("notify_mode"))
+                        runtime_prompt = job["prompt"]
+                        if bool(job["notify"]) and notify_mode == "actionable":
+                            runtime_prompt = actionable_notification_prompt(runtime_prompt)
+                        info(logger, "job_run_started", job_id=job["id"], name=job["name"], notify=bool(job["notify"]), notify_channel=job.get("notify_channel") or "mobile", notify_mode=notify_mode)
                         result = await run_prompt(
                             sid,
-                            job["prompt"],
+                            runtime_prompt,
                             bool(job["notify"]),
                             job.get("notify_channel") or "mobile",
                             job.get("zalo_thread_id") or "",

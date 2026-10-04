@@ -4,15 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="color-scheme" content="dark">
-  <title>HassMind v1.3.4</title>
+  <title>HassMind v1.3.5</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/app.css?v=1.3.4">
-  <script src="/static/app.js?v=1.3.4" defer></script>
+  <link rel="stylesheet" href="/static/app.css?v=1.3.5">
+  <script src="/static/app.js?v=1.3.5" defer></script>
 </head>
 <body>
 <div class="app">
   <header class="topbar">
-    <div class="brand"><img class="brand-logo" src="/favicon.svg" alt="HassMind"><div><div class="brand-title">HassMind</div><div class="version">v1.3.4 · Knowledge & Secure Admin</div></div></div>
+    <div class="brand"><img class="brand-logo" src="/favicon.svg" alt="HassMind"><div><div class="brand-title">HassMind</div><div class="version">v1.3.5 · Knowledge & Secure Admin</div></div></div>
     <div id="healthPill" class="health-pill"><span class="health-dot"></span><span id="healthText">Đang kiểm tra…</span></div>
     <div class="top-spacer"></div>
     <div class="user-chip"><div id="userAvatar" class="user-avatar">A</div><span id="currentUser">admin</span><button id="logoutBtn" class="btn small" type="button">Đăng xuất</button></div>
@@ -86,7 +86,7 @@
     <section id="jobs" class="panel">
       <div class="page-head"><div><h1 class="page-title">Scheduler</h1><p class="page-sub">Job mới luôn ở trạng thái disabled để kiểm tra trước khi bật.</p></div><button class="btn" data-action="jobs-refresh" type="button">Làm mới</button></div>
       <div class="help-box"><div class="help-cell"><strong>Mục đích</strong><span>Chạy prompt theo lịch định kỳ.</span></div><div class="help-cell"><strong>Cách dùng</strong><span>Tạo job, kiểm tra prompt/lịch rồi bấm Bật.</span></div><div class="help-cell"><strong>Ví dụ</strong><span>daily 21:00 → “Tạo báo cáo nhà cuối ngày và gửi thông báo.”</span></div></div>
-      <form id="jobForm" class="card card-pad mb-14"><div class="card-title"><h3 id="jobFormTitle">Tạo Scheduler job</h3><span id="jobEditBadge" class="badge info hidden">Đang sửa</span></div><div class="form-grid"><input id="jobname" class="input" placeholder="Tên job" required><select id="jobtype" class="select"><option value="daily">daily HH:MM</option><option value="interval">interval seconds</option></select><input id="jobvalue" class="input" placeholder="HH:MM, ví dụ 21:00" required><label class="check"><input id="jobNotify" type="checkbox" checked> Gửi thông báo sau khi chạy</label><textarea id="jobprompt" class="textarea full" placeholder="Prompt agent sẽ chạy theo lịch" required></textarea><div class="field"><label for="jobNotifyChannel">Kênh thông báo</label><select id="jobNotifyChannel" class="select"><option value="mobile">Điện thoại</option><option value="zalo">Zalo</option></select></div><div id="jobZaloThreadField" class="field zalo-thread-only hidden"><label for="jobZaloThread">Zalo thread_id</label><input id="jobZaloThread" class="input mono" placeholder="Để trống = dùng cấu hình Zalo"><div class="field-hint">Nếu trống, dùng Thread ID thông báo mặc định; nếu chưa có thì dùng Allowed thread ID đã cấu hình.</div></div><div class="full row end"><button id="jobCancelEdit" class="btn hidden" type="button" data-action="job-edit-cancel">Hủy sửa</button><button id="jobSubmitBtn" class="btn primary" type="submit">Tạo job</button></div></div></form><div id="jobsBox" class="item-list"></div>
+      <form id="jobForm" class="card card-pad mb-14"><div class="card-title"><h3 id="jobFormTitle">Tạo Scheduler job</h3><span id="jobEditBadge" class="badge info hidden">Đang sửa</span></div><div class="form-grid"><input id="jobname" class="input" placeholder="Tên job" required><select id="jobtype" class="select"><option value="daily">daily HH:MM</option><option value="interval">interval seconds</option></select><input id="jobvalue" class="input" placeholder="HH:MM, ví dụ 21:00" required><label class="check"><input id="jobNotify" type="checkbox" checked> Gửi thông báo sau khi chạy</label><textarea id="jobprompt" class="textarea full" placeholder="Prompt agent sẽ chạy theo lịch" required></textarea><div class="field"><label for="jobNotifyChannel">Kênh thông báo</label><select id="jobNotifyChannel" class="select"><option value="mobile">Điện thoại</option><option value="zalo">Zalo</option></select></div><div class="field"><label for="jobNotifyMode">Khi nào gửi</label><select id="jobNotifyMode" class="select"><option value="always">Luôn gửi kết quả</option><option value="actionable">Chỉ gửi khi có nội dung cần báo</option></select><div class="field-hint">Chế độ điều kiện cho phép agent im lặng khi prompt quy định không có gì cần báo.</div></div><div id="jobZaloThreadField" class="field zalo-thread-only hidden"><label for="jobZaloThread">Zalo thread_id</label><input id="jobZaloThread" class="input mono" placeholder="Để trống = dùng cấu hình Zalo"><div class="field-hint">Nếu trống, dùng Thread ID thông báo mặc định; nếu chưa có thì dùng Allowed thread ID đã cấu hình.</div></div><div class="full row end"><button id="jobCancelEdit" class="btn hidden" type="button" data-action="job-edit-cancel">Hủy sửa</button><button id="jobSubmitBtn" class="btn primary" type="submit">Tạo job</button></div></div></form><div id="jobsBox" class="item-list"></div>
     </section>
 
     <section id="rules" class="panel">

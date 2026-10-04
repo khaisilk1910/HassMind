@@ -251,6 +251,7 @@ def init_db():
               notify INTEGER NOT NULL DEFAULT 1,
               notify_channel TEXT NOT NULL DEFAULT 'mobile',
               zalo_thread_id TEXT NOT NULL DEFAULT '',
+              notify_mode TEXT NOT NULL DEFAULT 'always',
               next_run TEXT,
               last_run TEXT,
               last_result TEXT,
@@ -378,6 +379,8 @@ def init_db():
             c.execute("ALTER TABLE jobs ADD COLUMN notify_channel TEXT NOT NULL DEFAULT 'mobile'")
         if "zalo_thread_id" not in job_columns:
             c.execute("ALTER TABLE jobs ADD COLUMN zalo_thread_id TEXT NOT NULL DEFAULT ''")
+        if "notify_mode" not in job_columns:
+            c.execute("ALTER TABLE jobs ADD COLUMN notify_mode TEXT NOT NULL DEFAULT 'always'")
         rule_columns = {row["name"] for row in c.execute("PRAGMA table_info(event_rules)").fetchall()}
         if "notify_channel" not in rule_columns:
             c.execute("ALTER TABLE event_rules ADD COLUMN notify_channel TEXT NOT NULL DEFAULT 'mobile'")
