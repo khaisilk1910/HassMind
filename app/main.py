@@ -67,7 +67,7 @@ from .tools import ToolRuntime
 
 os.umask(0o077)
 
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.2.2"
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 setup_logging()
@@ -680,6 +680,9 @@ async def security_settings(request: Request):
             "cookie_secure": settings.admin_cookie_secure,
             "allowed_networks": settings.admin_allowed_network_list,
             "password_min_length": settings.password_min_length,
+            "password_storage": "argon2id_hash_only",
+            "bootstrap_password_is_initial_only": True,
+            "recovery_runtime_file": str(Path(settings.runtime_secret_dir) / settings.runtime_recovery_key_name),
         },
         "logging": {
             "secret_redaction": True,

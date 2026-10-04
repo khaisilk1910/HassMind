@@ -6,12 +6,12 @@
   <meta name="color-scheme" content="dark">
   <title>Đăng nhập · HassMind</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/login.css">
-  <script src="/static/login.js" defer></script>
+  <link rel="stylesheet" href="/static/login.css?v=1.2.2">
+  <script src="/static/login.js?v=1.2.2" defer></script>
 </head>
 <body>
   <main class="shell">
-    <div class="brand"><img src="/favicon.svg" alt="HassMind"><div><div class="brand-title">HassMind</div><div class="brand-sub">v1.2.1 · Secure Admin</div></div></div>
+    <div class="brand"><img src="/favicon.svg" alt="HassMind"><div><div class="brand-title">HassMind</div><div class="brand-sub">v1.2.2 · Secure Admin</div></div></div>
     <section id="loginCard" class="card">
       <h1>Đăng nhập quản trị</h1>
       <p>Dashboard chỉ mở sau khi xác thực tài khoản admin. Phiên đăng nhập dùng cookie HttpOnly và tự hết hạn.</p>
@@ -22,12 +22,12 @@
       </form>
       <div class="row"><span></span><button id="showReset" class="link-btn" type="button">Quên mật khẩu?</button></div>
       <div id="loginMessage" class="message hidden" role="alert"></div>
-      <div class="security">Ví dụ: tài khoản mặc định là <strong>admin</strong>. Mật khẩu khởi tạo nằm trong Docker secret <code>admin_password</code>; không dùng HassMind API token để đăng nhập web.</div>
+      <div class="security">Ví dụ: tài khoản mặc định là <strong>admin</strong>. Mật khẩu bootstrap ban đầu lấy từ <code>admin_password</code> (Docker secret hoặc biến môi trường tùy stack). Sau khi bạn đổi mật khẩu, nguồn bootstrap này không được cập nhật và không còn là mật khẩu đăng nhập hiện hành.</div>
     </section>
 
     <section id="resetCard" class="card hidden">
       <h1>Khôi phục mật khẩu</h1>
-      <p>Nhập Recovery Key được lưu trong Docker secret <code>admin_recovery_key</code>. Khôi phục thành công sẽ đăng xuất toàn bộ phiên đang hoạt động.</p>
+      <p>Nhập Recovery Key hiện hành. Docker secret <code>admin_recovery_key</code> chỉ là khóa bootstrap; nếu đã xoay khóa trong Settings thì HassMind ưu tiên khóa runtime tại <code>/data/secrets/admin_recovery_key</code>. Khôi phục thành công sẽ đăng xuất toàn bộ phiên đang hoạt động.</p>
       <form id="resetForm">
         <div class="field"><label for="resetUsername">Tên đăng nhập</label><input id="resetUsername" class="input" autocomplete="username" required maxlength="64" value="admin"></div>
         <div class="field"><label for="recoveryKey">Recovery Key</label><input id="recoveryKey" class="input" type="password" autocomplete="off" required></div>

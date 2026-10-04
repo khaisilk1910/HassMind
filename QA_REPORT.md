@@ -1,85 +1,74 @@
-# HassMind v1.2.0 — QA report
+# HassMind v1.2.2 — QA report
 
 Ngày rà soát: 2026-10-03.
 
-## Static/syntax validation
+## Phạm vi sửa lần này
+
+- Clipboard Recovery Key/API token khi dashboard chạy HTTP trong LAN.
+- Vòng đời admin password / Recovery Key và thông tin hiển thị trong Settings/Login/README.
+- Render `**...**` trong câu trả lời Chat thành phần nhấn mạnh có màu, không hiện dấu `**`.
+- Đồng bộ version/cache-busting lên 1.2.2.
+
+## Static / syntax validation
 
 Đã chạy và đạt:
 
-- `python -m compileall -q app`
+- `python3 -m compileall -q app`
 - `node --check static/app.js`
 - `node --check static/login.js`
 - `sh -n setup.sh`
-- Parse YAML bằng PyYAML cho:
-  - `docker-compose.yml`
-  - `docker-stack.yml`
-  - `portainer-stack.yml`
-  - `portainer-stack-opt.yml`
-  - `config/mcp_servers.yaml`
-- Kiểm tra HTML/JavaScript mapping: không có duplicate DOM id và mọi `getElementById` được dùng trong JS đều có phần tử tương ứng.
-- Kiểm tra CSP compatibility: không có inline `<script>` và không dùng inline `onclick=`.
-- Mỗi dashboard panel đều có `help-box` mô tả mục đích/cách dùng/ví dụ.
-- Không còn browser storage key `hassmind_token`; API token chỉ được quản lý trong Settings.
+- Parse YAML bằng PyYAML cho `docker-compose.yml`, `docker-stack.yml`, `portainer-stack.yml`, `portainer-stack-opt.yml`, `config/mcp_servers.yaml`.
+- Kiểm tra duplicate DOM id và mapping toàn bộ `$('<id>')` trong `static/app.js`: không có id thiếu.
+- Kiểm tra version đồng bộ: backend, package, dashboard và login đều là `1.2.2`.
 
-## FastAPI/authentication smoke test
+## Clipboard test
 
-Đã chạy bằng `FastAPI TestClient` với database/log/runtime-secret tạm và IP client thuộc LAN allowlist:
+Đã kiểm tra bằng Node mock DOM:
 
-- `/health` trả đúng `{ "ok": true }`.
-- `/` khi chưa đăng nhập trả `303 -> /login`.
-- `/login` tải thành công.
-- Login sai trả `401`.
-- Login đúng tạo admin session + CSRF cookie/token.
-- `/` sau login tải dashboard có `Settings` và `Giới thiệu`.
-- `/api/auth/me`, `/api/settings/security`, `/api/auth/audit` hoạt động.
-- Request thay đổi trạng thái bằng admin session nhưng thiếu CSRF trả `403`.
-- Xoay HassMind API token từ Settings hoạt động; token runtime mới thay thế token cũ cho external API authentication.
-- Password change hoạt động và giữ phiên hiện tại.
-- Recovery Key rotation từ Settings hoạt động; nguồn chuyển sang `runtime_file`, khóa cũ hết hiệu lực ngay và khóa mới dùng được cho reset.
-- Forgot-password với Recovery Key sai thất bại; Recovery Key đúng đặt lại password và thu hồi phiên cũ.
-- IP ngoài `ADMIN_ALLOWED_NETWORKS` bị chặn `403` trên web-admin surface.
-- API/admin response có security headers và `Cache-Control: no-store`.
+- Khi `isSecureContext=false`, code **không gọi** Clipboard API hiện đại.
+- Fallback tạo textarea tạm, select nội dung và gọi `document.execCommand('copy')` ngay trong click flow.
+- Fallback trả trạng thái thành công và xóa textarea tạm.
+- Nếu fallback cũng bị browser chặn, code select input gốc để người dùng chỉ cần nhấn Ctrl/Cmd+C.
 
-## Secret redaction / migration hardening
+Cùng helper được dùng cho cả Recovery Key và HassMind API token.
 
-Đã tạo dữ liệu legacy giả lập chứa secret trước startup và xác minh:
+## Chat emphasis test
 
-- rotating log cũ được scrub khi startup;
-- `events.payload` cũ được scrub;
-- `tool_audit.arguments/result/error` cũ được scrub;
-- API token, admin password, Recovery Key và token mới không xuất hiện dạng plaintext trong log sau test;
-- redaction vẫn giữ `[REDACTED]` marker để điều tra log biết đã có dữ liệu bị che.
+Đã kiểm tra parser với câu:
 
-## File permission test
+`Hôm nay là **Thứ Bảy**, ngày **03 tháng 10 năm 2026**.`
 
-Trong runtime test:
+Kết quả token hóa giữ nguyên nội dung nhưng loại marker `**`; hai đoạn `Thứ Bảy` và `03 tháng 10 năm 2026` được đánh dấu strong. Marker không đóng cặp được giữ nguyên thay vì làm mất dữ liệu.
 
-- SQLite DB: `0600`;
-- parent data directory: `0700`;
-- log file: `0600`;
-- runtime API token: `0600`.
+Renderer không dùng `innerHTML` cho nội dung chat; nó tạo `TextNode` và phần tử `strong`, vì vậy nội dung LLM không được diễn giải thành HTML tùy ý.
 
-`setup.sh` cũng được chạy trong thư mục tạm và xác minh:
+## Admin password / Recovery Key API smoke test
 
-- tạo được cryptographically-random admin/API/recovery secrets;
-- secret files có mode `0600`;
-- script không in secret value ra stdout.
+Đã chạy FastAPI `TestClient` với SQLite/runtime-secret tạm và IP `127.0.0.1`:
 
-## Docker/production checks
+- Bootstrap admin bằng password ban đầu thành công.
+- Login password ban đầu thành công.
+- `/api/settings/security` báo `password_storage=argon2id_hash_only` và `bootstrap_password_is_initial_only=true`.
+- Đổi password thành công.
+- Password bootstrap ban đầu vẫn giữ nguyên ở nguồn bootstrap, nhưng **không còn đăng nhập được**.
+- Password mới đăng nhập được.
+- Rotate Recovery Key thành công.
+- Recovery Key mới được ghi vào runtime file và `admin_recovery_key_source()` chuyển thành `runtime_file`.
+- Recovery Key bootstrap cũ bị từ chối sau rotate.
+- Recovery Key runtime mới reset password thành công.
+- Password trước reset không còn đăng nhập được; password sau reset đăng nhập được.
+- `admin_users.password_hash` là Argon2 hash và không chứa plaintext password mới.
 
-Đã rà soát cấu hình để giữ:
+## Kết luận về hai file `/opt/hassmind/secrets/*`
 
-- non-root `10001:10001`;
-- root filesystem `read_only`;
-- `cap_drop: ALL`;
-- `no-new-privileges:true`;
-- `/tmp` tmpfs với `noexec,nosuid,nodev`;
-- PID limit;
-- Docker log rotation;
-- secret mount qua `/run/secrets/*` trong Compose stack ưu tiên.
+`admin_password.txt` và `admin_recovery_key.txt` là nguồn bootstrap. Chúng không phải cơ chế đồng bộ credential hiện hành sau khi đổi từ UI.
 
-## Giới hạn của môi trường QA
+- Password hiện hành: chỉ lưu Argon2id hash trong SQLite, không có plaintext để `cat` xem lại.
+- Recovery Key sau rotate: lưu runtime tại `/data/secrets/admin_recovery_key` mode `0600` và được ưu tiên hơn bootstrap key.
+- Nếu stack mount `/opt/hassmind/data:/data`, host path tương ứng là `/opt/hassmind/data/secrets/admin_recovery_key`.
 
-Môi trường QA không có Home Assistant, Gemini/Zalo/Camera/FaceDetect thật để chạy end-to-end. Home Assistant URL trong smoke test cố ý trỏ tới port không lắng nghe để xác minh app vẫn hoạt động khi HA disconnected. Package MCP/OpenAI được stub tối thiểu trong smoke test để không phát sinh network call; Docker image thực tế cài dependency từ `requirements.txt`.
+Thiết kế này được giữ nguyên để tránh ghi password hiện hành dạng plaintext xuống disk chỉ nhằm mục đích xem lại.
 
-Không có tool redaction nào có thể chứng minh tuyệt đối rằng mọi chuỗi bí mật tùy ý từng xuất hiện trong log lịch sử đều được nhận diện. Vì vậy `SECURITY.md` vẫn khuyến nghị rotate credential và xóa/archive mã hóa log cũ nếu có nghi ngờ từ phiên bản trước.
+## Giới hạn QA
+
+Môi trường QA không cài package `openai` và `mcp`; smoke test API đã dùng import stub tối thiểu cho hai dependency này và không gọi network/LLM/MCP. Các dependency thực tế vẫn được cài từ `requirements.txt` trong Docker image.

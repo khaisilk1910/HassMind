@@ -1,4 +1,11 @@
-# HassMind v1.2.1 — AI Agent riêng cho Home Assistant
+# HassMind v1.2.2 — AI Agent riêng cho Home Assistant
+
+## Mới trong v1.2.2
+
+- Sửa nút **Sao chép** Recovery Key/API token trên HTTP LAN: ưu tiên Clipboard API và tự fallback sang cơ chế copy tương thích khi trang không phải secure context.
+- Chat render an toàn nội dung `**in đậm**`: bỏ dấu `**` và tô màu phần được nhấn mạnh, không dùng `innerHTML` nên không mở thêm bề mặt XSS.
+- Làm rõ vòng đời secret admin: `admin_password.txt` là **bootstrap-only**; mật khẩu hiện hành chỉ tồn tại dạng Argon2id hash trong SQLite. Recovery Key xoay từ UI nằm ở `/data/secrets/admin_recovery_key`.
+- Thêm cache-busting cho CSS/JS và đồng bộ version package lên `1.2.2`.
 
 ## Mới trong v1.2.1
 
@@ -72,12 +79,20 @@ secrets/admin_recovery_key.txt
 secrets/zalo_webhook_secret.txt
 ```
 
-Đọc mật khẩu admin khởi tạo và cất Recovery Key ở nơi offline/an toàn:
+Đọc **mật khẩu admin khởi tạo** và Recovery Key bootstrap ở lần cài đầu:
 
 ```bash
 cat secrets/admin_password.txt
 cat secrets/admin_recovery_key.txt
 ```
+
+Hai file trên là dữ liệu **bootstrap**. Sau khi đổi mật khẩu trong Settings, `admin_password.txt` **không được cập nhật**: mật khẩu hiện hành chỉ lưu dưới dạng Argon2id hash trong SQLite nên không thể `cat` để xem lại. Nếu quên mật khẩu, dùng Recovery Key để đặt mật khẩu mới. Sau khi xoay Recovery Key từ UI, khóa hiện hành được lưu ở `/data/secrets/admin_recovery_key`; với stack mount `/opt/hassmind/data:/data`, đọc bằng:
+
+```bash
+sudo cat /opt/hassmind/data/secrets/admin_recovery_key
+```
+
+`/opt/hassmind/secrets/admin_recovery_key.txt` vẫn là khóa bootstrap cũ và sẽ không còn hợp lệ sau khi rotate.
 
 Sửa `.env` tối thiểu:
 
@@ -131,9 +146,9 @@ Bạn sẽ được chuyển tới `/login`. Mặc định username là:
 admin
 ```
 
-Mật khẩu ban đầu là nội dung `secrets/admin_password.txt`. Sau lần đăng nhập đầu tiên, vào **Settings -> Tài khoản admin** để đổi mật khẩu.
+Mật khẩu ban đầu là nội dung `secrets/admin_password.txt` nếu bạn deploy bằng Compose/Docker secrets. Sau lần đăng nhập đầu tiên, vào **Settings -> Tài khoản admin** để đổi mật khẩu. Từ thời điểm đó file bootstrap này vẫn giữ giá trị cũ và **không thể dùng để xem mật khẩu hiện hành**, vì HassMind chỉ lưu Argon2id hash trong SQLite.
 
-Nếu quên mật khẩu, chọn **Quên mật khẩu?** trên trang login và dùng Recovery Key. Ban đầu khóa nằm trong `secrets/admin_recovery_key.txt`; nếu đã xoay tại **Settings -> Recovery Key** thì khóa runtime mới trong `/data/secrets/admin_recovery_key` có ưu tiên cao hơn. Khôi phục thành công sẽ thu hồi toàn bộ phiên cũ.
+Nếu quên mật khẩu, chọn **Quên mật khẩu?** trên trang login và dùng Recovery Key. Ban đầu khóa nằm trong `secrets/admin_recovery_key.txt`; nếu đã xoay tại **Settings -> Recovery Key** thì khóa runtime mới trong `/data/secrets/admin_recovery_key` có ưu tiên cao hơn. Với mount `/opt/hassmind/data:/data`, khóa hiện hành sau rotate đọc bằng `sudo cat /opt/hassmind/data/secrets/admin_recovery_key`. Khôi phục thành công sẽ thu hồi toàn bộ phiên cũ.
 
 Trong **Settings -> Recovery Key**, admin có thể tạo khóa mới sau khi xác nhận mật khẩu hiện tại. Khóa mới chỉ hiển thị một lần; hãy lưu ngay ở nơi offline/password manager. Khóa cũ bị vô hiệu ngay sau khi xoay.
 
@@ -614,7 +629,7 @@ Khuyến nghị: lần deploy đầu để các cờ gửi/xóa/download/auto-re
 ## 22. Quy trình nâng cấp từ HassMind v1 cũ
 
 1. Backup `data/hassmind.db`, `.env`, `config/`, `knowledge/` và secrets hiện có.
-2. Thay code bằng bản v1.2.1 này nhưng giữ `data/` cũ.
+2. Thay code bằng bản v1.2.2 này nhưng giữ `data/` cũ.
 3. Chạy `sudo ./setup.sh`. Script chỉ tạo secret còn thiếu, không ghi đè secret đang có. Bản này cần thêm `admin_password.txt` và `admin_recovery_key.txt`.
 4. Merge các biến mới từ `.env.example` vào `.env`, đặc biệt nhóm `ADMIN_*`, `RUNTIME_SECRET_DIR`, `LOG_SCRUB_EXISTING_ON_START` và `AUDIT_SCRUB_EXISTING_ON_START`.
 5. Deploy lại HassMind. Lần startup đầu sẽ tạo bảng admin/session mới, bootstrap tài khoản admin và best-effort scrub event/tool-audit + log file cũ.

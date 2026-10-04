@@ -47,6 +47,8 @@ HassMind không phụ thuộc email service để recovery. `admin_recovery_key`
 
 - Giữ `secrets/admin_recovery_key.txt` ngoài Git và backup mã hóa.
 - Trong Settings có thể xoay Recovery Key sau khi xác nhận mật khẩu admin. Khóa runtime mới được lưu tại `/data/secrets/admin_recovery_key` mode `0600` và có ưu tiên cao hơn bootstrap secret.
+- `secrets/admin_password.txt` là bootstrap-only. Khi đổi/reset mật khẩu, hệ thống chỉ cập nhật Argon2id hash trong SQLite; không ghi plaintext password mới trở lại secret file.
+- Sau khi rotate Recovery Key, `secrets/admin_recovery_key.txt`/Docker secret cũ không còn là khóa hiện hành; với bind mount `/opt/hassmind/data:/data`, root trên host có thể đọc khóa runtime ở `/opt/hassmind/data/secrets/admin_recovery_key`.
 - Recovery Key mới chỉ trả về một lần cho browser; khi rời Settings giá trị one-time bị xóa khỏi DOM.
 - Không gửi Recovery Key vào chat, issue tracker hoặc log.
 - Reset thành công sẽ thay password hash và xóa toàn bộ admin sessions.
