@@ -1,4 +1,13 @@
-# HassMind v1.2.8 — AI Agent riêng cho Home Assistant
+# HassMind v1.2.9 — AI Agent riêng cho Home Assistant
+
+
+## Mới trong v1.2.9
+
+- **Zalo mobile layout được tối ưu lại**: prompt kênh Zalo ưu tiên câu ngắn, mỗi bullet một ý, danh sách dài được tách thành bullet/numbered list lồng nhau thay vì dồn một dòng dài.
+- Formatter tự **in đậm nhãn ngắn** trong list ngay cả khi model quên `**...**`, ví dụ `Nhiệt độ:`, `Cửa:`, `Quạt:`.
+- Formatter tự tô màu trạng thái theo quy tắc bảo thủ khi model không chỉ định màu: xanh cho trạng thái hoạt động/tốt, cam cho mở/unavailable/cần chú ý, đỏ cho lỗi/cảnh báo/nguy hiểm. Màu model khai báo rõ luôn được ưu tiên.
+- Các style trùng/chồng cùng loại được merge trước khi gửi để giảm kích thước `styles[]` và tránh vùng format dư thừa.
+- Giữ nguyên UTF-16 offsets, list `lst_1/lst_2`, nested indent `ind_$`; không làm thay đổi API Zalo Server đang hoạt động ở v1.2.8.
 
 ## Mới trong v1.2.8
 
@@ -604,7 +613,7 @@ Khuyến nghị: lần deploy đầu để các cờ gửi/xóa/download/auto-re
 ## 22. Quy trình nâng cấp từ HassMind v1 cũ
 
 1. Backup `data/hassmind.db`, `.env`, `config/`, `knowledge/` và secrets hiện có.
-2. Thay code bằng bản v1.2.8 này nhưng giữ `data/` cũ.
+2. Thay code bằng bản v1.2.9 này nhưng giữ `data/` cũ.
 3. Chạy `sudo ./setup.sh`. Script chỉ tạo core secret còn thiếu, không ghi đè secret đang có. Nếu phát hiện Camera TTS/Zalo/Telegram secret từ bản cũ, script tự migrate một lần sang `data/secrets/integration_*`; runtime secret mới có sẵn sẽ không bị ghi đè. Integration credential cũng có thể nhập/sửa sau trong Web Admin.
 4. Merge các biến core mới từ `.env.example` vào `.env`. Không cần đưa Camera TTS/FaceDetect/Zalo/Wyoming vào stack nếu sẽ quản lý bằng Web Admin.
 5. Deploy lại HassMind. Lần startup đầu sẽ tạo bảng admin/session mới, bootstrap tài khoản admin và best-effort scrub event/tool-audit + log file cũ.

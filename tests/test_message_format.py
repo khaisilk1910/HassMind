@@ -77,6 +77,43 @@ class ZaloMessageFormatTests(unittest.TestCase):
         out = format_zalo_message(raw)
         self.assertEqual(out, "hello x {red}warning{/red}")
 
+
+    def test_plain_list_label_gets_bold_automatically(self):
+        content = build_zalo_message_content("- Dương lịch: Thứ Hai, ngày 02 tháng 11 năm 2026")
+        self.assertEqual(content["msg"], "Dương lịch: Thứ Hai, ngày 02 tháng 11 năm 2026")
+        bold = [x for x in content["styles"] if x["st"] == "b"]
+        self.assertTrue(bold)
+        self.assertEqual(bold[0]["start"], 0)
+        self.assertEqual(bold[0]["len"], len("Dương lịch:"))
+
+    def test_status_value_gets_conservative_auto_color(self):
+        content = build_zalo_message_content("- Cửa phòng: Đang mở")
+        orange = next(x for x in content["styles"] if x["st"] == "c_f27806")
+        self.assertEqual(content["msg"][orange["start"]:orange["start"] + orange["len"]], "Đang mở")
+
+        content = build_zalo_message_content("- Quạt: Bật")
+        green = next(x for x in content["styles"] if x["st"] == "c_15a85f")
+        self.assertEqual(content["msg"][green["start"]:green["start"] + green["len"]], "Bật")
+
+        content = build_zalo_message_content("- Kết nối: Lỗi")
+        red = next(x for x in content["styles"] if x["st"] == "c_db342e")
+        self.assertEqual(content["msg"][red["start"]:red["start"] + red["len"]], "Lỗi")
+
+    def test_explicit_color_is_not_overridden_by_auto_color(self):
+        content = build_zalo_message_content("- Cửa: {red}Đang mở{/red}")
+        codes = [x["st"] for x in content["styles"] if x["st"].startswith("c_")]
+        self.assertIn("c_db342e", codes)
+        self.assertNotIn("c_f27806", codes)
+
+    def test_long_non_list_sentence_before_colon_is_not_auto_bolded(self):
+        content = build_zalo_message_content("Ngày 24 tháng 9 năm 2026 Âm lịch tương ứng với:")
+        self.assertFalse(any(x["st"] == "b" for x in content["styles"]))
+
+    def test_duplicate_bold_spans_are_merged(self):
+        content = build_zalo_message_content("- **Trạng thái:** Bật")
+        bold = [x for x in content["styles"] if x["st"] == "b"]
+        self.assertEqual(len(bold), 1)
+
     def test_long_message_splits_on_boundaries(self):
         raw = "\n\n".join(f"### Muc {i}\n- **Trang thai:** `on`" for i in range(60))
         chunks = split_zalo_message(raw, limit=500)

@@ -15,13 +15,17 @@ logger = get_logger("agent")
 
 _ZALO_FORMAT_PROMPT = (
     "The current channel is Zalo through a server that supports a controlled rich-text dialect. "
-    "Format for mobile chat: use # or ## only for the main title, ### for section headings, **bold** for labels/status, "
-    "*italic* sparingly, - bullets with 2-space nested indentation, and 1. numbered steps when useful. "
-    "You may use {green}...{/green} for healthy/active/safe status, {orange}...{/orange} for attention/unavailable, "
-    "and {red}...{/red} only for warnings/errors. Use {big}...{/big} and {small}...{/small} sparingly. "
-    "Keep Home Assistant entity_id inside single backticks when technical detail is useful. "
+    "Optimize every reply for a narrow mobile screen. Use exactly one # or ## main title when a structured answer benefits from it; "
+    "include one relevant emoji in that title when natural. Use ### for short section headings and **bold** for labels. "
+    "Use - bullets with 2-space nested indentation, or 1. numbered items for sequences. Keep each bullet focused on one fact and, "
+    "when a bullet would contain a long comma-separated list, split it into nested bullets or numbered items so wrapped lines stay readable. "
+    "Prefer short labels such as **Nhiệt độ:**, **Cửa:**, **Điều hòa:** instead of long prose. "
+    "Color only the status/value, not the whole sentence: {green}...{/green} for healthy/active/safe, "
+    "{orange}...{/orange} for attention/unavailable/open/high, and {red}...{/red} only for warnings/errors/danger. "
+    "Do not color neutral explanatory text. Use *italic*, {big}, and {small} sparingly. "
+    "Keep Home Assistant entity_id inside single backticks only when technical detail is useful; omit entity IDs from the main summary unless requested. "
     "Do not emit Markdown tables, fenced code blocks, horizontal-rule markdown, raw HTML/XML, or <FollowUp> tags. "
-    "Prefer a concise summary first, then grouped sections; avoid excessive decoration or colors."
+    "Start with the result, then grouped details. Avoid repetitive headings, excessive decoration, and bullets longer than roughly 90 characters."
 )
 
 _READ_ONLY_TOOLS = {

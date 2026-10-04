@@ -1,48 +1,25 @@
-# HassMind v1.2.8 — QA report
+# HassMind v1.2.9 — QA report
 
 Date: 2026-10-04
 
 ## Scope
 
-Regression review after moving Zalo formatting from markup-only transport to compiled zca-js `msg + styles[]` transport.
+Regression review after polishing the confirmed-working v1.2.8 Zalo rich-text transport for mobile readability.
 
-## Root-cause verification
+## Zalo formatter / transport
 
-- v1.2.7 outbound body contained only `message.msg` with visible `#`, `**`, backticks and color tags: CONFIRMED.
-- The Zalo screenshot showed those delimiters literally, so the companion `/api/sendMessageByAccount` path was not parsing the markup before send: CONFIRMED from observed behavior.
-- zca-js `MessageContent` supports a plain `msg` plus explicit `styles[]`: transport fix implemented.
-
-## Rich-text compiler
-
-- Heading `#`/`##` -> `f_18` + `b`: PASS.
-- Heading `###` -> `b`: PASS.
-- Heading `####`..`######` -> `f_13`: PASS.
-- `**bold**`: PASS.
-- `*italic*`: PASS.
-- `***bold italic***`: PASS.
-- `__underline__`: PASS.
-- `~~strike~~`: PASS.
-- Backticks -> italic compatibility behavior: PASS.
-- red/orange/yellow/green tags -> official zca-js color codes: PASS.
-- big/small tags -> `f_18` / `f_13`: PASS.
-- unordered/ordered list -> `lst_1` / `lst_2`: PASS.
-- 1..8 leading spaces / nested lists -> `ind_$` + bounded `indentSize`: PASS.
-- blockquote -> italic: PASS.
-- Markdown link -> URL text: PASS.
-- tables/fences/FollowUp normalization retained: PASS.
-
-## Offset correctness
-
-- Style offsets are generated in JavaScript UTF-16 code units rather than Python code points: PASS.
-- Regression test with emoji + variation selector before a bold range: PASS.
-
-## Zalo transport
-
-- `/api/sendMessageByAccount` now receives `message: {msg, styles}`: PASS.
-- `msg` contains no supported formatting delimiters after compile: PASS.
-- Explicit HTTP 400/422 rejection of `styles` retries once with compiled plain text: PASS.
-- Timeout/5xx errors are not automatically retried, avoiding ambiguous duplicate sends: PASS.
-- Added `zalo_rich_text_compiled` and `zalo_rich_text_styles_rejected` diagnostics: PASS.
+- Main heading still compiles to `f_18` + `b`: PASS.
+- `###` and inline Markdown/Zalo styles remain supported: PASS.
+- unordered/ordered lists still compile to `lst_1` / `lst_2`: PASS.
+- nested 1..8-space indentation still compiles to `ind_$` + bounded `indentSize`: PASS.
+- UTF-16 offset regression with emoji/variation selector: PASS.
+- plain list label auto-bold: PASS.
+- long non-list sentence ending in `:` is not incorrectly auto-bolded: PASS.
+- green/orange/red conservative auto-status coloring: PASS.
+- explicit model color overrides auto color: PASS.
+- duplicate/overlapping identical style spans are merged: PASS.
+- `/api/sendMessageByAccount` still receives plain `msg` + `styles[]`: PASS.
+- HTTP 400/422 style rejection still falls back once to clean plain text: PASS.
 
 ## Existing regression suite
 
@@ -55,12 +32,13 @@ Regression review after moving Zalo formatting from markup-only transport to com
 ## Automated checks
 
 - Python `compileall`: PASS.
-- Unit test discovery: 29/29 PASS.
+- Unit test discovery: 34/34 PASS.
 - `setup.sh` syntax (`sh -n`): PASS.
 - JavaScript syntax (`node --check`): PASS.
-- YAML parse for root/config YAML files: PASS.
-- Version synchronized to `1.2.8`: PASS.
+- YAML parse for deployment/config YAML files: PASS.
+- ZIP integrity: PASS.
+- Version synchronized to `1.2.9`: PASS.
 
-## Limitation
+## End-to-end evidence
 
-The test environment does not have the user's authenticated Zalo companion server/account, so the final visual rendering in the real Zalo client cannot be end-to-end asserted here. The outbound payload is now aligned with zca-js MessageContent's explicit `styles[]` contract and includes a safe plain-text fallback for older companion validation schemas.
+The user-provided Zalo screenshot confirmed that the v1.2.8 `msg + styles[]` transport renders headings, bold text, bullets and nested bullets correctly in the real Zalo client. v1.2.9 keeps that transport contract and only improves generation/style enrichment before send.

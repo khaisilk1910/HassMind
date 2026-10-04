@@ -18,6 +18,14 @@ _TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\
 _INLINE_TAG_RE = re.compile(r"\{(red|orange|yellow|green|big|small)\}", re.IGNORECASE)
 _LINK_RE = re.compile(r"\[([^\]\n]+)\]\((https?://[^\s)]+)\)", re.IGNORECASE)
 
+_AUTO_LABEL_RE = re.compile(r"^([^:\n]{1,42}:)(?:\s+|$)")
+_COLOR_STYLE_PREFIX = "c_"
+_AUTO_STATUS_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"(?<!\w)(?:đang có người|đang đóng|đã đóng|bật|online|sẵn sàng|hoạt động bình thường|bình thường|thành công|rất tốt|tốt)(?!\w)", re.IGNORECASE), "c_15a85f"),
+    (re.compile(r"(?<!\w)(?:đang mở|mở|unavailable|không khả dụng|mất kết nối|cần chú ý|nhiệt độ cao|độ ẩm cao)(?!\w)", re.IGNORECASE), "c_f27806"),
+    (re.compile(r"(?<!\w)(?:cảnh báo|lỗi|nguy hiểm|thất bại|critical|alarm)(?!\w)", re.IGNORECASE), "c_db342e"),
+)
+
 # zca-js TextStyle values. Keep these strings in one place so transport code
 # does not need to know anything about the markup syntax used by the model.
 _ZALO_TAG_STYLES = {
@@ -274,6 +282,92 @@ def _parse_inline_markup(value: str) -> tuple[str, list[dict[str, Any]]]:
     return "".join(pieces), spans
 
 
+def _span_overlaps(span: dict[str, Any], start: int, end: int, *, style: str | None = None, style_prefix: str | None = None) -> bool:
+    span_start = int(span.get("start", 0))
+    span_end = int(span.get("end", 0))
+    if span_end <= start or span_start >= end:
+        return False
+    code = str(span.get("st") or "")
+    if style is not None and code != style:
+        return False
+    if style_prefix is not None and not code.startswith(style_prefix):
+        return False
+    return True
+
+
+def _auto_enhance_line_styles(
+    plain: str,
+    spans: list[dict[str, Any]],
+    *,
+    is_list: bool,
+    is_heading: bool,
+) -> list[dict[str, Any]]:
+    """Add conservative mobile-friendly emphasis when the model omitted it.
+
+    Explicit model styles always win. We only bold short list labels and color
+    well-known status/value phrases after a colon. This keeps rich Zalo output
+    readable without guessing the meaning of arbitrary prose.
+    """
+    if not plain or is_heading:
+        return spans
+
+    result = [dict(item) for item in spans]
+    label = _AUTO_LABEL_RE.match(plain)
+    value_start = 0
+    if label:
+        label_start, label_end = label.span(1)
+        value_start = label.end()
+        # Automatically emphasize labels mainly in list items. For non-list
+        # prose, only very short labels are treated as labels to avoid bolding
+        # sentences such as "Ngày ... tương ứng với:".
+        should_bold = is_list or label_end <= 24
+        if should_bold and not any(_span_overlaps(x, label_start, label_end, style="b") for x in result):
+            result.append({"start": label_start, "end": label_end, "st": "b"})
+    else:
+        # Whole-line coloring is intentionally limited to short standalone
+        # status lines. Long explanatory prose is left neutral.
+        if len(plain.strip()) > 36:
+            return result
+
+    search_start = value_start if label else 0
+    if search_start >= len(plain):
+        return result
+
+    for pattern, color in _AUTO_STATUS_RULES:
+        for match in pattern.finditer(plain, search_start):
+            start, end = match.span()
+            # Do not overwrite an explicit inline color from the model.
+            if any(_span_overlaps(x, start, end, style_prefix=_COLOR_STYLE_PREFIX) for x in result):
+                continue
+            result.append({"start": start, "end": end, "st": color})
+    return result
+
+
+def _merge_char_spans(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge duplicate/overlapping identical spans to keep Zalo payload small."""
+    ordered = sorted(
+        (dict(item) for item in spans),
+        key=lambda item: (str(item.get("st") or ""), int(item.get("indentSize") or 0), int(item.get("start") or 0), int(item.get("end") or 0)),
+    )
+    merged: list[dict[str, Any]] = []
+    for item in ordered:
+        start = int(item.get("start") or 0)
+        end = int(item.get("end") or 0)
+        if end <= start:
+            continue
+        if merged:
+            last = merged[-1]
+            if (
+                str(last.get("st") or "") == str(item.get("st") or "")
+                and int(last.get("indentSize") or 0) == int(item.get("indentSize") or 0)
+                and start <= int(last.get("end") or 0)
+            ):
+                last["end"] = max(int(last.get("end") or 0), end)
+                continue
+        merged.append(item)
+    return merged
+
+
 def _utf16_offsets(text: str) -> list[int]:
     """Map Python character boundaries to JavaScript UTF-16 code-unit offsets."""
     offsets = [0]
@@ -302,9 +396,12 @@ def build_zalo_message_content(value: str) -> dict[str, Any]:
         line = raw
         block_styles: list[str] = []
         indent_size = 0
+        is_list = False
+        is_heading = False
 
         heading = _HEADING_RE.match(line)
         if heading:
+            is_heading = True
             level = min(len(heading.group(1)), 6)
             line = heading.group(2)
             if level <= 2:
@@ -318,10 +415,12 @@ def build_zalo_message_content(value: str) -> dict[str, Any]:
             ordered = _ORDERED_RE.match(line)
             quote = _BLOCKQUOTE_RE.match(line)
             if unordered:
+                is_list = True
                 indent_size = min(8, len(unordered.group(1).replace("\t", "    ")))
                 line = unordered.group(2)
                 block_styles.append("lst_1")
             elif ordered:
+                is_list = True
                 indent_size = min(8, len(ordered.group(1).replace("\t", "    ")))
                 line = ordered.group(3)
                 block_styles.append("lst_2")
@@ -337,6 +436,9 @@ def build_zalo_message_content(value: str) -> dict[str, Any]:
                     line = line[leading:]
 
         line_plain, inline_spans = _parse_inline_markup(line)
+        inline_spans = _auto_enhance_line_styles(
+            line_plain, inline_spans, is_list=is_list, is_heading=is_heading
+        )
         line_start = char_offset
         plain_parts.append(line_plain)
         char_offset += len(line_plain)
@@ -364,6 +466,7 @@ def build_zalo_message_content(value: str) -> dict[str, Any]:
             char_offset += 1
 
     plain = "".join(plain_parts)
+    char_spans = _merge_char_spans(char_spans)
     offsets = _utf16_offsets(plain)
     styles: list[dict[str, Any]] = []
     seen: set[tuple[Any, ...]] = set()
