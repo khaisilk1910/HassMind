@@ -75,9 +75,16 @@ test('Stale approval error invalidates dry-run and safely displays the server er
   await h.run("knowledgeProposalAction('approve','stale')");assert.equal(h.run('knowledgeUI.dryRun'),null);assert.match(h.nodes.get('knowledgeDryRunResult').innerHTML,/File changed &lt;script&gt;/);assert.match(h.nodes.get('knowledgeProposalDetail').innerHTML,/data-action="knowledge-approve"[^>]*disabled/);
 });
 
-test('Invalid dry-run keeps approval disabled and escapes proposal diff/issues',async()=>{
-  const h=harness();h.run("knowledgeUI.selected={id:'bad',kind:'review',status:'pending',reason:'<img>',changes:[{path:'<script>',diff:'</pre><script>evil()</script>'}],issues:[{message:'<svg>'}]}" );h.respond(async()=>({body:{valid:false,issues:[{code:'schema',severity:'error',message:'<iframe>'}]}}));
-  await h.run("knowledgeProposalAction('dry-run','bad')");const output=h.nodes.get('knowledgeProposalDetail').innerHTML;assert.match(output,/data-action="knowledge-approve"[^>]*disabled/);assert.doesNotMatch(output,/<script>|<img>|<svg>|<iframe>/);assert.match(output,/&lt;iframe&gt;/);
+test('Review-only findings never offer approval and escape proposal diff/issues',async()=>{
+  const h=harness();h.run("knowledgeUI.selected={id:'bad',kind:'review',status:'pending',reason:'<img>',changes:[{path:'<script>',diff:'</pre><script>evil()</script>'}],issues:[{message:'<svg>'}]};renderKnowledgeProposal(knowledgeUI.selected)" );let output=h.nodes.get('knowledgeProposalDetail').innerHTML;assert.doesNotMatch(output,/data-action="knowledge-approve"/);assert.match(output,/không phải thay đổi có thể Approve/);
+  h.respond(async()=>({body:{valid:false,issues:[{code:'schema',severity:'error',message:'<iframe>'}]}}));await h.run("knowledgeProposalAction('dry-run','bad')");output=h.nodes.get('knowledgeProposalDetail').innerHTML;assert.doesNotMatch(output,/data-action="knowledge-approve"/);assert.doesNotMatch(output,/<script>|<img>|<svg>|<iframe>/);assert.match(output,/&lt;iframe&gt;/);
+});
+
+test('Conflict diagnostics show exact records and re-index warnings do not disable approval',async()=>{
+  const h=harness();h.run("knowledgeUI.selected={id:'r1',kind:'reindex',status:'pending',changes:[],issues:[{code:'entity_conflict',severity:'warning',path:'20-entities.yaml',entity_id:'light.room',conflict_fields:['name','area'],definitions:[{path:'20-entities.yaml',location:'entities[2]',entity_id:'light.room',name:'Đèn A',area_id:'bedroom',domain:'light'},{path:'20-entities.yaml',location:'entities[7]',entity_id:'light.room',name:'Đèn B',area_id:'living',domain:'light'}]}]};renderKnowledgeProposal(knowledgeUI.selected)");
+  let output=h.nodes.get('knowledgeProposalDetail').innerHTML;assert.match(output,/entities\[2\]/);assert.match(output,/entities\[7\]/);assert.match(output,/khác nhau ở: name, area/);assert.match(output,/Approve &amp; Re-index/);assert.match(output,/data-action="knowledge-approve"[^>]*disabled/);
+  h.respond(async(url)=>url.endsWith('/dry-run')?{body:{valid:true,warning_count:1,issues:[{code:'entity_conflict',severity:'warning',blocking:false,path:'20-entities.yaml',entity_id:'light.room',conflict_fields:['name'],definitions:[{path:'20-entities.yaml',location:'entities[2]',entity_id:'light.room',name:'Đèn A',area_id:'bedroom',domain:'light'},{path:'20-entities.yaml',location:'entities[7]',entity_id:'light.room',name:'Đèn B',area_id:'bedroom',domain:'light'}]}]}}:{body:{}});
+  await h.run("knowledgeProposalAction('dry-run','r1')");output=h.nodes.get('knowledgeProposalDetail').innerHTML;assert.doesNotMatch(output,/data-action="knowledge-approve"[^>]*disabled/);assert.match(output,/1 cảnh báo không chặn áp dụng/);
 });
 
 test('Rollback is available only for applied content proposals',()=>{

@@ -122,7 +122,7 @@ def _remove_live(value: Any, removed: list[str], prefix: str = "") -> Any:
     return value
 
 
-def _record(raw: Any, kind: str, path: str, index: int, diagnostics: list[dict], body: str = "") -> dict | None:
+def _record(raw: Any, kind: str, path: str, index: int, diagnostics: list[dict], body: str = "", location: str | None = None) -> dict | None:
     if isinstance(raw, str):
         raw = {"name": raw, "text": raw}
     if not isinstance(raw, dict):
@@ -132,7 +132,7 @@ def _record(raw: Any, kind: str, path: str, index: int, diagnostics: list[dict],
     declared = str(raw.get("kind", legacy_type if legacy_type in GROUPS or legacy_type in KINDS else kind)).casefold()
     kind = GROUPS.get(declared, declared)
     if kind not in KINDS:
-        diagnostics.append(_diag("schema_error", f"Unsupported record kind: {kind}", path, severity="error"))
+        diagnostics.append(_diag("schema_error", f"Unsupported record kind: {kind}", path, severity="error", location=location))
         return None
     identity = str(raw.get("id", raw.get("entity_id", raw.get("area_id", f"{kind}-{index}"))))
     record_id = f"{path}#{kind}:{identity}:{index}"
@@ -150,33 +150,36 @@ def _record(raw: Any, kind: str, path: str, index: int, diagnostics: list[dict],
                     cleaned.pop(field)
         if removed:
             diagnostics.append(_diag("realtime_fields", "Live state fields excluded; read current state from Home Assistant", path,
-                                     record_id=record_id, entity_id=raw.get("entity_id", raw.get("id")), fields=removed))
+                                     record_id=record_id, entity_id=raw.get("entity_id", raw.get("id")), fields=removed, location=location))
     entity_id = cleaned.get("entity_id", cleaned.get("id") if kind in {"entity", "scene", "script"} else None)
     if entity_id is not None:
         entity_id = str(entity_id).strip()
     if kind in {"entity", "scene", "script"} and (not entity_id or not ENTITY_RE.fullmatch(entity_id)):
         diagnostics.append(_diag("schema_error", "Entity, scene and script require a valid entity_id", path,
-                                 severity="error", record_id=record_id))
+                                 severity="error", record_id=record_id, location=location))
         return None
     declared_domain = cleaned.get("domain")
     if isinstance(declared_domain, (dict, list)):
-        diagnostics.append(_diag("schema_error", "domain must be text", path, severity="error", record_id=record_id))
+        diagnostics.append(_diag("schema_error", "domain must be text", path, severity="error", record_id=record_id, location=location))
         return None
     domain = str(declared_domain or (entity_id.split(".", 1)[0] if entity_id else "")).strip()
     issues: list[str] = []
     if entity_id and domain != entity_id.split(".", 1)[0]:
+        expected_domain = entity_id.split(".", 1)[0]
         issues.append("domain_conflict")
-        diagnostics.append(_diag("domain_conflict", "domain disagrees with entity_id prefix", path,
-                                 record_id=record_id, entity_id=entity_id, declared_domain=domain))
-        domain = entity_id.split(".", 1)[0]
+        diagnostics.append(_diag("domain_conflict", f"domain '{domain}' disagrees with entity_id prefix '{expected_domain}'", path,
+                                 record_id=record_id, entity_id=entity_id, declared_domain=domain,
+                                 expected_domain=expected_domain, location=location))
+        domain = expected_domain
     if kind in {"scene", "script"} and domain != kind:
         issues.append("domain_conflict")
         diagnostics.append(_diag("domain_conflict", f"A {kind} record must use the {kind} domain", path,
-                                 record_id=record_id, entity_id=entity_id))
+                                 record_id=record_id, entity_id=entity_id, declared_domain=domain,
+                                 expected_domain=kind, location=location))
     try:
         aliases = _aliases(cleaned.get("aliases", cleaned.get("alias")))
     except ValueError as exc:
-        diagnostics.append(_diag("schema_error", str(exc), path, severity="error", record_id=record_id))
+        diagnostics.append(_diag("schema_error", str(exc), path, severity="error", record_id=record_id, location=location))
         return None
     name = cleaned.get("name", cleaned.get("friendly_name", cleaned.get("title", identity)))
     area = cleaned.get("area", "")
@@ -184,7 +187,7 @@ def _record(raw: Any, kind: str, path: str, index: int, diagnostics: list[dict],
     if isinstance(area, dict):
         area_id, area = area.get("id", area_id), area.get("name", area.get("id", area_id))
     if any(isinstance(x, (dict, list)) for x in (name, area_id, area)):
-        diagnostics.append(_diag("schema_error", "name, area and area_id must be text", path, severity="error", record_id=record_id))
+        diagnostics.append(_diag("schema_error", "name, area and area_id must be text", path, severity="error", record_id=record_id, location=location))
         return None
     reserved = {"kind", "type", "entity_id", "id", "name", "friendly_name", "title", "alias", "aliases", "area", "area_id", "domain", "source"}
     metadata = json.loads(json.dumps({str(k): v for k, v in cleaned.items() if k not in reserved},
@@ -200,7 +203,7 @@ def _record(raw: Any, kind: str, path: str, index: int, diagnostics: list[dict],
     return {"record_id": record_id, "kind": kind, "entity_id": entity_id, "name": str(name),
             "aliases": aliases, "area": str(area), "area_id": str(area_id), "domain": domain,
             "source": source, "path": path, "text": text, "preview": (content or body or text)[:360],
-            "metadata": metadata, "issues": issues}
+            "metadata": metadata, "issues": issues, "location": location or f"record[{index}]"}
 
 
 def _members(value: Any, kind: str) -> list[Any]:
@@ -263,25 +266,39 @@ def parse_knowledge_text(path: str, text: str) -> dict:
             data, body, structured = yaml.safe_load(parts[1]), parts[2].strip(), True
         else:
             data = None
-        raw_records: list[tuple[Any, str]] = []
+        raw_records: list[tuple[Any, str, str]] = []
         is_registry = False
         def semantic(value):
             return isinstance(value, dict) and ("kind" in value or "entity_id" in value
                    or str(value.get("type", "")).casefold() in GROUPS)
+        def located_members(value, kind, base):
+            if isinstance(value, list):
+                return [(item, kind, f"{base}[{i}]") for i, item in enumerate(value)]
+            if isinstance(value, dict):
+                if any(k in value for k in ("entity_id", "name", "text", "content", "description", "aliases", "alias")):
+                    return [(value, kind, base)]
+                out = []
+                for key, item in value.items():
+                    member = {"id": key, **item} if isinstance(item, dict) else {"id": key, "text": str(item)}
+                    out.append((member, kind, f'{base}[{json.dumps(str(key), ensure_ascii=False)}]'))
+                return out
+            if isinstance(value, str):
+                return [(value, kind, base)]
+            raise ValueError(f"{kind} collection must be a list, object or text")
         if semantic(data):
             is_registry = True
-            raw_records = [(data, "entity" if "entity_id" in data else "reference")]
+            raw_records = [(data, "entity" if "entity_id" in data else "reference", "$")]
         elif isinstance(data, dict) and any(k in GROUPS for k in data):
             is_registry = True
             for group, value in data.items():
                 if group in GROUPS:
-                    raw_records.extend((v, GROUPS[group]) for v in _members(value, GROUPS[group]))
+                    raw_records.extend(located_members(value, GROUPS[group], group))
         elif isinstance(data, dict) and data and all(ENTITY_RE.fullmatch(str(k)) for k in data):
             is_registry = True
-            raw_records = [(v, "entity") for v in _members(data, "entity")]
+            raw_records = located_members(data, "entity", "entities")
         elif isinstance(data, list) and any(semantic(v) for v in data):
             is_registry = True
-            raw_records = [(v, "entity" if isinstance(v, dict) and "entity_id" in v else "reference") for v in data]
+            raw_records = [(v, "entity" if isinstance(v, dict) and "entity_id" in v else "reference", f"[{i}]") for i, v in enumerate(data)]
         if len(raw_records) > 10000:
             raise ValueError("File exceeds maximum 10000 registry records")
         if is_registry and isinstance(data, dict) and "schema_version" in data and str(data["schema_version"]) not in {"1", "1.0"}:
@@ -289,13 +306,13 @@ def parse_knowledge_text(path: str, text: str) -> dict:
         defaults, alias_map = _document_defaults(data, diagnostics, path)
         records = []
         if is_registry:
-            for i, (raw, kind) in enumerate(raw_records):
+            for i, (raw, kind, location) in enumerate(raw_records):
                 if kind in {"entity", "scene", "script"} and isinstance(raw, dict):
                     raw = {**defaults, **raw}
                     entity_id = str(raw.get("entity_id", raw.get("id", "")))
                     if entity_id in alias_map:
                         raw["aliases"] = _aliases(raw.get("aliases", raw.get("alias"))) + alias_map[entity_id]
-                result = _record(raw, kind, path, i, diagnostics, body)
+                result = _record(raw, kind, path, i, diagnostics, body, location)
                 if result:
                     records.append(result)
             known_ids = {r["entity_id"] for r in records if r["entity_id"]}
@@ -306,47 +323,85 @@ def parse_knowledge_text(path: str, text: str) -> dict:
                 records.append({"record_id": f"{path}#reference:{i}", "kind": "reference", "entity_id": None,
                                 "name": Path(path).stem, "aliases": [], "area": "", "area_id": "", "domain": "",
                                 "source": path, "path": path, "text": part, "preview": part[:360],
-                                "metadata": {"legacy": True}, "issues": []})
+                                "metadata": {"legacy": True}, "issues": [], "location": f"chunk[{i}]"})
         return {"records": records, "diagnostics": diagnostics}
     except (ValueError, TypeError, yaml.YAMLError, RecursionError) as exc:
         return {"records": [], "diagnostics": [_diag("schema_error", str(exc)[:500], path, severity="error")]}
 
 
+def _conflict_ref(record: dict) -> dict:
+    return {"path": record.get("path", ""), "location": record.get("location", ""),
+            "record_id": record.get("record_id", ""), "entity_id": record.get("entity_id"),
+            "name": record.get("name", ""), "area": record.get("area", ""),
+            "area_id": record.get("area_id", ""), "domain": record.get("domain", ""),
+            "aliases": list(record.get("aliases") or [])}
+
+
 def _cross_validate(records: list[dict]) -> list[dict]:
-    diagnostics, aliases, entities, areas, area_labels = [], {}, {}, {}, {}
+    diagnostics, aliases, alias_labels, entities, areas, area_labels, area_label_text = [], {}, {}, {}, {}, {}, {}
     for r in records:
         if r["kind"] == "area":
             for label in [r["area_id"], r["name"], *r["aliases"]]:
-                if normalize(label):
-                    area_labels.setdefault(normalize(label), []).append(r)
+                normalized = normalize(label)
+                if normalized:
+                    area_labels.setdefault(normalized, []).append(r)
+                    area_label_text.setdefault(normalized, set()).add(str(label))
             if r["area_id"]:
                 areas[normalize(r["area_id"])] = r
         if r["entity_id"] and r["kind"] in {"entity", "scene", "script"}:
             entities.setdefault(r["entity_id"], []).append(r)
             for alias in r["aliases"]:
-                aliases.setdefault(normalize(alias), []).append(r)
+                normalized = normalize(alias)
+                if normalized:
+                    aliases.setdefault(normalized, []).append(r)
+                    alias_labels.setdefault(normalized, set()).add(str(alias))
     for entity_id, definitions in entities.items():
         signatures = {(normalize(r["name"]), normalize(r["area_id"] or r["area"]), r["domain"]) for r in definitions}
         if len(signatures) > 1:
             for r in definitions:
                 r["issues"].append("entity_conflict")
-                diagnostics.append(_diag("entity_conflict", "Entity has conflicting names, areas or domains", r["path"],
-                                         entity_id=entity_id, record_id=r["record_id"]))
+            field_values = {
+                "name": {normalize(r["name"]) for r in definitions},
+                "area": {normalize(r["area_id"] or r["area"]) for r in definitions},
+                "domain": {r["domain"] for r in definitions},
+            }
+            conflict_fields = [field for field, values in field_values.items() if len(values) > 1]
+            refs = [_conflict_ref(r) for r in definitions]
+            diagnostics.append(_diag(
+                "entity_conflict",
+                f"Entity '{entity_id}' has conflicting definitions in {len(definitions)} locations; differing fields: {', '.join(conflict_fields)}",
+                definitions[0]["path"], entity_id=entity_id, location=definitions[0].get("location"),
+                conflict_fields=conflict_fields, definitions=refs))
     for alias, members in aliases.items():
         if len({r["entity_id"] for r in members}) > 1:
-            diagnostics.append(_diag("alias_conflict", "Alias maps to multiple entities; use area/domain to disambiguate", members[0]["path"],
-                                     alias=alias, entity_ids=sorted({r["entity_id"] for r in members})))
+            entity_ids = sorted({r["entity_id"] for r in members})
+            display_alias = sorted(alias_labels.get(alias) or {alias}, key=lambda value: (normalize(value), value))[0]
+            diagnostics.append(_diag(
+                "alias_conflict",
+                f"Alias '{display_alias}' maps to multiple entities: {', '.join(entity_ids)}; use area/domain to disambiguate",
+                members[0]["path"], alias=display_alias, normalized_alias=alias, entity_ids=entity_ids, location=members[0].get("location"),
+                definitions=[_conflict_ref(r) for r in members]))
     for label, members in area_labels.items():
         if len({r["area_id"] for r in members}) > 1:
-            diagnostics.append(_diag("area_alias_conflict", "Area label maps to multiple area IDs", members[0]["path"],
-                                     alias=label, area_ids=sorted({r["area_id"] for r in members})))
+            area_ids = sorted({r["area_id"] for r in members})
+            display_label = sorted(area_label_text.get(label) or {label}, key=lambda value: (normalize(value), value))[0]
+            diagnostics.append(_diag(
+                "area_alias_conflict",
+                f"Area label '{display_label}' maps to multiple area IDs: {', '.join(area_ids)}",
+                members[0]["path"], alias=display_label, normalized_alias=label, area_ids=area_ids, location=members[0].get("location"),
+                definitions=[_conflict_ref(r) for r in members]))
     for r in records:
         if r["entity_id"] and r["area_id"] and r["area"] and normalize(r["area_id"]) in areas:
             a = areas[normalize(r["area_id"])]
-            if normalize(r["area"]) not in {normalize(a["name"]), *map(normalize, a["aliases"]), normalize(a["area_id"])}:
+            accepted_labels = list(dict.fromkeys([a["area_id"], a["name"], *a["aliases"]]))
+            if normalize(r["area"]) not in set(map(normalize, accepted_labels)):
                 r["issues"].append("area_conflict")
-                diagnostics.append(_diag("area_conflict", "Area label disagrees with declared area_id", r["path"],
-                                         entity_id=r["entity_id"], record_id=r["record_id"]))
+                diagnostics.append(_diag(
+                    "area_conflict",
+                    f"Entity '{r['entity_id']}' uses area '{r['area']}' but area_id '{r['area_id']}' accepts: {', '.join(accepted_labels)}",
+                    r["path"], entity_id=r["entity_id"], record_id=r["record_id"], location=r.get("location"),
+                    actual_area=r["area"], area_id=r["area_id"], accepted_labels=accepted_labels,
+                    area_definition=_conflict_ref(a)))
     return diagnostics
 
 

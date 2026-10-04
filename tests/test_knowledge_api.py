@@ -121,6 +121,22 @@ class KnowledgeAPITests(unittest.TestCase):
         self.assertEqual(len(file.json()['sha256']),64)
         self.assertEqual(self.client.get('/api/knowledge/file',params={'path':'../escape.txt'},headers=self.csrf).status_code,409)
 
+    def test_reindex_proposal_with_conflict_warning_can_be_approved(self):
+        (self.root/'duplicate.yaml').write_text('entities:\n  - entity_id: light.test\n    name: Đèn tên khác\n    area: Phòng khách\n',encoding='utf-8')
+        scan=self.client.post('/api/knowledge/scan',json={},headers=self.token)
+        self.assertEqual(scan.status_code,200,scan.text)
+        proposal=next(p for p in scan.json()['proposals'] if p['kind']=='reindex')
+        dry=self.client.post(f'/api/knowledge/proposals/{proposal["id"]}/dry-run',json={},headers=self.token)
+        self.assertEqual(dry.status_code,200,dry.text)
+        self.assertTrue(dry.json()['valid'])
+        conflict=next(i for i in dry.json()['issues'] if i['code']=='entity_conflict')
+        self.assertFalse(conflict['blocking'])
+        self.assertGreaterEqual(len(conflict['definitions']),2)
+        self.login()
+        approved=self.client.post(f'/api/knowledge/proposals/{proposal["id"]}/approve',json={},headers=self.csrf)
+        self.assertEqual(approved.status_code,200,approved.text)
+        self.assertEqual(approved.json()['status'],'applied')
+
     def test_startup_shutdown_smoke_without_external_services(self):
         class HA:
             async def listen_events(self,callback,stop): await stop.wait()

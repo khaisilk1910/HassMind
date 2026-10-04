@@ -138,6 +138,14 @@ class KnowledgeRegistryTests(unittest.TestCase):
         result = rag.reindex_knowledge()
         codes = {d["code"] for d in result["warnings"]}
         self.assertTrue({"entity_conflict", "area_conflict"}.issubset(codes))
+        conflict = next(d for d in result["warnings"] if d["code"] == "entity_conflict")
+        self.assertEqual(conflict["entity_id"], "light.bedroom")
+        self.assertTrue({"name", "area"}.issubset(conflict["conflict_fields"]))
+        self.assertEqual({d["path"] for d in conflict["definitions"]}, {"one.json", "two.json"})
+        self.assertTrue(all(d["location"] for d in conflict["definitions"]))
+        area_conflict = next(d for d in result["warnings"] if d["code"] == "area_conflict")
+        self.assertEqual(area_conflict["actual_area"], "Phòng khách")
+        self.assertIn("Phòng ngủ", area_conflict["accepted_labels"])
         self.assertFalse(rag.resolve_entity("Đèn")["safe_for_control"])
 
     def test_index_error_preserves_previous_catalog_and_hash(self):

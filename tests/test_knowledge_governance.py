@@ -126,6 +126,33 @@ class KnowledgeGovernanceTests(unittest.TestCase):
         third=asyncio.run(kg.scan_knowledge())
         self.assertIn('devices.yaml',third['changes']['deleted'])
 
+    def test_reindex_warning_conflicts_are_detailed_but_do_not_block_approval(self):
+        self.write('conflict.yaml', '''entities:\n  - entity_id: light.same\n    name: Đèn một\n    area: Phòng ngủ\n  - entity_id: light.same\n    name: Đèn hai\n    area: Phòng khách\n''')
+        scan=asyncio.run(kg.scan_knowledge())
+        proposal=next(p for p in scan['proposals'] if p['kind']=='reindex')
+        dry=kg.dry_run(proposal['id'])
+        self.assertTrue(dry['valid'])
+        conflict=next(i for i in dry['issues'] if i['code']=='entity_conflict')
+        self.assertFalse(conflict['blocking'])
+        self.assertEqual(conflict['entity_id'],'light.same')
+        self.assertEqual({d['location'] for d in conflict['definitions']},{'entities[0]','entities[1]'})
+        applied=kg.approve(proposal['id'],'admin')
+        self.assertEqual(applied['status'],'applied')
+        self.assertTrue(any(w['code']=='entity_conflict' for w in applied['index']['warnings']))
+
+    def test_content_conflict_blocks_only_when_changed_file_participates(self):
+        self.write('conflict.yaml', '''entities:\n  - entity_id: light.same\n    name: Đèn một\n  - entity_id: light.same\n    name: Đèn hai\n''')
+        rag.reindex_knowledge()
+        unrelated=kg.create_proposal([{'path':'reference.md','new_content':'safe text\n'}],'unrelated correction')
+        dry=kg.dry_run(unrelated['id'])
+        self.assertTrue(dry['valid'])
+        self.assertTrue(any(i['code']=='entity_conflict' and not i['blocking'] for i in dry['issues']))
+        kg.approve(unrelated['id'],'admin')
+        changed=kg.create_proposal([{'path':'conflict.yaml','new_content':'''entities:\n  - entity_id: light.same\n    name: Đèn một\n  - entity_id: light.same\n    name: Đèn ba\n'''}],'conflicting correction')
+        blocked=kg.dry_run(changed['id'])
+        self.assertFalse(blocked['valid'])
+        self.assertTrue(any(i['code']=='entity_conflict' and i['blocking'] for i in blocked['issues']))
+
     def test_rejected_automatic_draft_not_recreated(self):
         p=self.draft()
         kg.reject(p['id'],'admin')

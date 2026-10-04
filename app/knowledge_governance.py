@@ -189,28 +189,73 @@ def create_proposal(changes, reason, *, kind="content", issues=None, fingerprint
 
 def _dry_run_unlocked(proposal):
     issues = []
+    blockers = []
+
+    def add_issue(issue, *, blocking=False):
+        item = dict(issue)
+        item["blocking"] = bool(blocking)
+        issues.append(item)
+        if blocking:
+            blockers.append(item)
+
+    def conflict_touches_changed_path(issue, changed_paths):
+        if issue.get("path") in changed_paths:
+            return True
+        for key in ("definitions", "members"):
+            for ref in issue.get(key) or []:
+                if isinstance(ref, dict) and ref.get("path") in changed_paths:
+                    return True
+        area_definition = issue.get("area_definition")
+        return isinstance(area_definition, dict) and area_definition.get("path") in changed_paths
+
     snapshot = rag.inspect_knowledge()
     if proposal["status"] != "pending":
-        issues.append({"code": "proposal_status", "message": "Proposal is not pending"})
+        add_issue({"code": "proposal_status", "severity": "error", "message": "Proposal is not pending"}, blocking=True)
     if snapshot["fingerprint"] != proposal["fingerprint"]:
-        issues.append({"code": "stale_proposal", "message": "Knowledge changed since this draft; scan/create a fresh proposal"})
+        add_issue({"code": "stale_proposal", "severity": "error", "message": "Knowledge changed since this draft; scan/create a fresh proposal"}, blocking=True)
     if proposal["kind"] == "review":
-        issues.append({"code": "manual_correction_required", "message": "Review findings and create a concrete corrected draft before approval"})
+        add_issue({"code": "manual_correction_required", "severity": "warning", "message": "Review proposals are findings only. Create a concrete corrected draft before approval."}, blocking=True)
     changed_paths = {c["path"] for c in proposal["changes"]}
     prospective = [r for r in snapshot["records"] if r["path"] not in changed_paths]
-    issues.extend(d for d in snapshot["diagnostics"] if d.get("severity") == "error" and d.get("path") not in changed_paths)
+
+    # Existing hard parse/read errors always block because a successful apply must
+    # finish with a healthy index. Cross-record ambiguity is warning-level and
+    # blocks only a content draft that actually touches the conflicting records.
+    for diagnostic in snapshot["diagnostics"]:
+        if diagnostic.get("path") in changed_paths:
+            continue
+        is_error = diagnostic.get("severity") == "error"
+        if is_error or proposal["kind"] in {"reindex", "review"}:
+            add_issue(diagnostic, blocking=is_error)
+
     for change in proposal["changes"]:
         try:
             if _current_hash(change["path"]) != change["expected_hash"]:
-                issues.append({"code": "stale_file", "path": change["path"], "message": "File hash no longer matches"})
+                add_issue({"code": "stale_file", "severity": "error", "path": change["path"], "message": "File hash no longer matches the proposal base"}, blocking=True)
             if change["operation"] == "upsert":
                 parsed = rag.parse_knowledge_text(change["path"], change["new_content"])
-                issues.extend(d for d in parsed["diagnostics"] if d.get("severity") == "error" or d.get("code") in _BLOCKING_CODES)
+                for diagnostic in parsed["diagnostics"]:
+                    blocking = diagnostic.get("severity") == "error" or diagnostic.get("code") in _BLOCKING_CODES
+                    add_issue(diagnostic, blocking=blocking)
                 prospective.extend(parsed["records"])
         except (ValueError, OSError, UnicodeError) as exc:
-            issues.append({"code": "invalid_change", "path": change["path"], "message": str(exc)})
-    issues.extend(d for d in rag.validate_catalog(prospective) if d.get("severity") == "error" or d.get("code") in _BLOCKING_CODES)
-    return {"id": proposal["id"], "valid": not issues, "issues": issues, "changes": proposal["changes"], "kind": proposal["kind"]}
+            add_issue({"code": "invalid_change", "severity": "error", "path": change["path"], "message": str(exc)}, blocking=True)
+
+    if proposal["kind"] == "content":
+        for diagnostic in rag.validate_catalog(prospective):
+            is_error = diagnostic.get("severity") == "error"
+            is_touched_conflict = diagnostic.get("code") in _BLOCKING_CODES and conflict_touches_changed_path(diagnostic, changed_paths)
+            # Keep unrelated ambiguity visible but do not prevent an otherwise
+            # safe draft from being applied. It remains unsafe for entity control
+            # until corrected, as enforced by the registry resolver.
+            add_issue(diagnostic, blocking=is_error or is_touched_conflict)
+
+    # Re-index proposals contain no content mutation. Warning-level registry
+    # ambiguity is intentionally reviewable but not an index failure; re-indexing
+    # is allowed so the current files can become the active searchable catalog.
+    return {"id": proposal["id"], "valid": not blockers, "issues": issues, "blocking_issues": blockers,
+            "warning_count": sum(1 for i in issues if not i.get("blocking")),
+            "changes": proposal["changes"], "kind": proposal["kind"]}
 
 
 def dry_run(pid):
