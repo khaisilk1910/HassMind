@@ -355,7 +355,7 @@ class HomeAssistantClient:
         *,
         target: dict[str, Any] | None = None,
     ):
-        assert_service_allowed(domain, service)
+        assert_service_allowed(domain, service, target=target, data=data or {})
         return await self.call_service_raw(domain, service, data, target=target)
 
     async def notify(self, message: str, title: str = "HassMind", actions: list[dict] | None = None):

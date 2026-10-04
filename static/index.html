@@ -4,15 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="color-scheme" content="dark">
-  <title>HassMind v1.3.9</title>
+  <title>HassMind v1.4.0</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/app.css?v=1.3.9">
-  <script src="/static/app.js?v=1.3.9" defer></script>
+  <link rel="stylesheet" href="/static/app.css?v=1.4.0">
+  <script src="/static/app.js?v=1.4.0" defer></script>
 </head>
 <body>
 <div class="app">
   <header class="topbar">
-    <div class="brand"><img class="brand-logo" src="/favicon.svg" alt="HassMind"><div><div class="brand-title">HassMind</div><div class="version">v1.3.9 · Skill Dry Run & Prompt Library</div></div></div>
+    <div class="brand"><img class="brand-logo" src="/favicon.svg" alt="HassMind"><div><div class="brand-title">HassMind</div><div class="version">v1.4.0 · Bedroom Climate Comfort</div></div></div>
     <div id="healthPill" class="health-pill"><span class="health-dot"></span><span id="healthText">Đang kiểm tra…</span></div>
     <div class="top-spacer"></div>
     <div class="user-chip"><div id="userAvatar" class="user-avatar">A</div><span id="currentUser">admin</span><button id="logoutBtn" class="btn small" type="button">Đăng xuất</button></div>
@@ -51,7 +51,7 @@
     <section id="chat" class="panel">
       <div class="page-head"><div><h1 class="page-title">Chat với HassMind</h1><p class="page-sub">Mỗi lỗi API có Request ID để tra trực tiếp trong Logs.</p></div><button class="btn" data-action="new-session" type="button">Phiên mới</button></div>
       <div class="help-box"><div class="help-cell"><strong>Mục đích</strong><span>Ra lệnh và hỏi trạng thái Home Assistant qua agent.</span></div><div class="help-cell"><strong>Cách dùng</strong><span>Mô tả mục tiêu rõ ràng; thao tác nhạy cảm vẫn đi qua policy và approval.</span></div><div class="help-cell"><strong>Ví dụ</strong><span>“Kiểm tra nhiệt độ phòng khách, điều hòa và cho tôi biết có gì bất thường.”</span></div></div>
-      <details id="skillPromptExamples" class="chat-skill-prompts mb-14"><summary><span>Câu hỏi mẫu cho Skills</span><span class="badge info">21 mẫu</span></summary><div class="chat-skill-prompts-body"><div class="row between skill-prompt-toolbar"><div class="small-text muted">Nhấn “Chèn câu hỏi” để đưa mẫu vào ô Chat; bạn có thể sửa lại trước khi gửi.</div><input id="skillPromptSearch" class="input skill-prompt-search" placeholder="Tìm skill hoặc nội dung…"></div><div id="skillPromptList" class="skill-prompt-list"><div class="empty">Đang tải câu mẫu…</div></div></div></details>
+      <details id="skillPromptExamples" class="chat-skill-prompts mb-14"><summary><span>Câu hỏi mẫu cho Skills</span><span class="badge info">22 mẫu</span></summary><div class="chat-skill-prompts-body"><div class="row between skill-prompt-toolbar"><div class="small-text muted">Nhấn “Chèn câu hỏi” để đưa mẫu vào ô Chat; bạn có thể sửa lại trước khi gửi.</div><input id="skillPromptSearch" class="input skill-prompt-search" placeholder="Tìm skill hoặc nội dung…"></div><div id="skillPromptList" class="skill-prompt-list"><div class="empty">Đang tải câu mẫu…</div></div></div></details>
       <div class="chat-shell"><div class="card chat-box" id="chatbox"><div class="chat-empty" id="chatEmpty"><div><strong>HassMind sẵn sàng</strong><div class="small-text mt-10">Ctrl/⌘ + Enter để gửi.</div></div></div></div><div class="card composer"><textarea id="chatinput" class="textarea" placeholder="Nhập yêu cầu…"></textarea><div class="composer-foot"><div id="session" class="session mono"></div><button id="sendBtn" class="btn primary" type="button">Gửi</button></div></div></div>
     </section>
 

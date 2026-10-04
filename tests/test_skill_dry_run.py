@@ -111,6 +111,33 @@ class SkillScenarioDryRunTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("skill_list", result["expected_tools"])
         self.assertIn("chưa thực thi", result["response_preview"])
 
+    async def test_dry_run_marks_allowlisted_bedroom_fan_script_as_allowed_without_executing(self):
+        runtime = _Runtime()
+        agent = Agent.__new__(Agent)
+        agent.runtime = runtime
+        agent.system_prompt = "You are HassMind."
+        agent.client = _Client([
+            _Response(tool_calls=[_ToolCall("a1", "ha_call_service", {
+                "domain": "script",
+                "service": "turn_on",
+                "target": {"entity_id": "script.fan_light_pn_kn_fan_3"},
+                "data": {},
+            })]),
+            _Response(content="Dry run: dự kiến đặt quạt phòng ngủ số 3, chưa thực thi."),
+        ])
+        schemas = [{"type": "function", "function": {"name": "ha_call_service", "parameters": {"type": "object", "properties": {}}}}]
+        with patch("app.agent.schemas", return_value=schemas):
+            result = await agent.dry_run_skill(
+                "presence-aware-control",
+                "Mô phỏng đặt quạt phòng ngủ số 3.",
+            )
+
+        self.assertEqual(runtime.calls, [])
+        self.assertEqual(result["execution"]["actions_executed"], 0)
+        self.assertEqual(result["policy"]["status"], "allowed")
+        self.assertEqual(result["planned_actions"][0]["policy"]["status"], "allowed")
+        self.assertIn("script.turn_on", result["planned_actions"][0]["summary"])
+
     async def test_dry_run_reports_policy_block_without_executing_action(self):
         runtime = _Runtime()
         agent = Agent.__new__(Agent)

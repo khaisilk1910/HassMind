@@ -70,6 +70,9 @@ class Settings(BaseSettings):
 
     # Core safety policy
     allow_service_domains: str = "light,switch,fan,climate,media_player,scene,input_boolean,input_number,input_select,number,select"
+    # Script execution stays blocked by domain by default. Only exact script entities
+    # listed here may be called through script.turn_on, with empty data.
+    allow_script_entities: str = "script.fan_light_pn_kn_fan_1,script.fan_light_pn_kn_fan_2,script.fan_light_pn_kn_fan_3,script.fan_light_pn_kn_fan_4,script.fan_light_pn_kn_fan_5,script.fan_light_pn_kn_fan_6"
     deny_service_domains: str = "shell_command,hassio,homeassistant,lock,alarm_control_panel,cover,update,button"
     approval_ttl_minutes: int = 120
     auto_apply_after_approval: bool = True
@@ -276,6 +279,10 @@ class Settings(BaseSettings):
     @property
     def denied_domains(self) -> set[str]:
         return {x.strip() for x in self.deny_service_domains.split(",") if x.strip()}
+
+    @property
+    def allowed_script_entity_ids(self) -> set[str]:
+        return {x.strip() for x in self.allow_script_entities.split(",") if x.strip()}
 
     @property
     def telegram_allowed_ids(self) -> set[str]:

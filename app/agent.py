@@ -215,7 +215,12 @@ class Agent:
                 _integration_id, custom_action = target
 
             if name == "ha_call_service":
-                assert_service_allowed(str(args.get("domain") or ""), str(args.get("service") or ""))
+                assert_service_allowed(
+                    str(args.get("domain") or ""),
+                    str(args.get("service") or ""),
+                    target=args.get("target") or None,
+                    data=args.get("data") or {},
+                )
                 assert_knowledge_target_safe(args, domain=str(args.get("domain") or ""))
             elif name in {"ha_tts_speak", "yt_dlp_play", "mcp_call"}:
                 assert_knowledge_target_safe(args)

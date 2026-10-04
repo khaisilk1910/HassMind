@@ -1,4 +1,15 @@
-# HassMind v1.3.9 — AI Agent riêng cho Home Assistant
+# HassMind v1.4.0 — AI Agent riêng cho Home Assistant
+
+## Mới trong v1.4.0
+
+- Thêm built-in skill **`bedroom-climate-comfort`** dành riêng cho Phòng ngủ và Phòng Sóc Chíp, dùng đúng entity_id người vận hành đã xác nhận.
+- Skill đọc batch nhiệt độ, độ ẩm, presence, climate và quạt; chỉ tự điều khiển phòng đang có người; có comfort bands, humidity bias, hysteresis/anti-chatter, giới hạn setpoint 25–27°C và xác minh state sau action.
+- Phòng ngủ hỗ trợ quạt trần 6 tốc độ qua 6 script đã xác nhận; Phòng Sóc Chíp hỗ trợ preset `off/low/medium/high`.
+- Bổ sung policy **`ALLOW_SCRIPT_ENTITIES`**: vẫn chặn toàn bộ domain `script` theo mặc định, chỉ cho phép `script.turn_on` với exact entity nằm trong allowlist, target trực tiếp và không có variables/data.
+- Chat prompt library tăng lên **22 mẫu**; Scenario Dry Run có thể mô phỏng skill mới mà không thực thi action.
+- Asset/version bump lên `1.4.0`.
+
+Đọc [changelog 1.4.0](CHANGELOG_V1.4.0.md) và [QA 1.4.0](QA_V1.4.0.md).
 
 ## Mới trong v1.3.9
 
@@ -382,7 +393,7 @@ Không lưu password/token trong knowledge.
 
 ## 10. Skills
 
-HassMind v1.3.9 có trang **Skills** trong Web Admin để tạo, sửa, test cấu trúc, bật/tắt, xóa user skill, xem version, rollback và **Dry Run bằng tình huống**.
+HassMind v1.4.0 có trang **Skills** trong Web Admin để tạo, sửa, test cấu trúc, bật/tắt, xóa user skill, xem version, rollback và **Dry Run bằng tình huống**.
 
 - Built-in skills nằm trong `/app/config/skills` và được xem là read-only.
 - Khi sửa built-in, HassMind tạo override trong `/data/skills`.
@@ -401,9 +412,9 @@ Hai chức năng này có mục đích khác nhau:
 
 Kết quả Dry Run cho biết: skill đã cố định, read tools đã chạy, tool/action dự kiến, policy hiện tại, số action thực thi (`0`), thời gian/round và AI response preview. Với Custom HTTP Integration, chỉ action `mode=read` + `method=GET` mới được phép chạy trong Dry Run; các method còn lại luôn bị suppress dù bị gắn nhãn read.
 
-### 21 câu hỏi mẫu trên Chat
+### 22 câu hỏi mẫu trên Chat
 
-Trang **Chat** có khối thu gọn **Câu hỏi mẫu cho Skills**. Mở khối này, tìm theo tên/mô tả skill rồi bấm **Dùng câu này** để điền prompt vào ô chat. Thư viện hiện bao phủ đủ 21 built-in skills: router, presence, lighting, climate, device health, troubleshoot device, automation review/designer, Knowledge curator, notification, security, energy, battery, night mode, arrival/departure, air quality, water leak, integration orchestration, daily report, self-maintenance và incident diagnosis.
+Trang **Chat** có khối thu gọn **Câu hỏi mẫu cho Skills**. Mở khối này, tìm theo tên/mô tả skill rồi bấm **Dùng câu này** để điền prompt vào ô chat. Thư viện hiện bao phủ đủ 22 built-in skills: router, presence, lighting, climate, **bedroom-climate-comfort**, device health, troubleshoot device, automation review/designer, Knowledge curator, notification, security, energy, battery, night mode, arrival/departure, air quality, water leak, integration orchestration, daily report, self-maintenance và incident diagnosis.
 
 Skill dùng YAML frontmatter tối thiểu:
 

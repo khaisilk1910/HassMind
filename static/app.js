@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION='1.3.9';
+const APP_VERSION='1.4.0';
 const $=id=>document.getElementById(id);
 function makeSessionId(){if(globalThis.crypto&&typeof globalThis.crypto.randomUUID==='function')return globalThis.crypto.randomUUID();return 'web-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,12)}
 const uiState={sessionId:localStorage.getItem('hassmind_session')||makeSessionId(),activeTab:'overview',csrf:'',user:null,passwordMinLength:14};
@@ -128,6 +128,7 @@ const SKILL_PROMPT_EXAMPLES=[
   {skill:'presence-aware-control',prompt:'Hãy dùng skill presence-aware-control kiểm tra các phòng không có người nhưng vẫn còn đèn hoặc quạt đang bật. Chưa tắt gì, chỉ báo cáo trước.'},
   {skill:'lighting-optimizer',prompt:'Hãy dùng skill lighting-optimizer kiểm tra ánh sáng các khu vực theo trạng thái đèn, lux, thời gian và hiện diện. Đề xuất tối ưu nhưng chưa điều khiển thiết bị.'},
   {skill:'climate-comfort',prompt:'Hãy dùng skill climate-comfort kiểm tra nhiệt độ, độ ẩm, điều hòa và quạt ở các phòng đang có người. Đề xuất điều chỉnh tối thiểu để dễ chịu hơn, chưa thực hiện action.'},
+  {skill:'bedroom-climate-comfort',prompt:'Hãy dùng skill bedroom-climate-comfort kiểm tra nhiệt độ, độ ẩm, presence, điều hòa và quạt trần của Phòng ngủ và Phòng Sóc Chíp; tự điều chỉnh theo comfort bands nếu có người, tuân thủ hysteresis và chỉ báo những action thực sự đã làm.'},
   {skill:'device-health-monitor',prompt:'Hãy dùng skill device-health-monitor kiểm tra toàn bộ thiết bị Home Assistant và chỉ báo những thiết bị cần chú ý như unavailable, unknown, pin yếu hoặc lâu không cập nhật.'},
   {skill:'troubleshoot-device',prompt:'Hãy dùng skill troubleshoot-device chẩn đoán thiết bị tôi đang gặp lỗi. Kiểm tra state, attributes, history/event liên quan và nêu nguyên nhân khả dĩ trước khi đề xuất xử lý.'},
   {skill:'automation-review',prompt:'Rà soát toàn bộ automation bằng automation-review. Tìm automation trùng chức năng, xung đột hoặc có trigger/condition không hợp lý. Không thay đổi gì nếu chưa được duyệt.'},

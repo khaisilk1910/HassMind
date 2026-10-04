@@ -12,15 +12,15 @@ def _example_names():
     return re.findall(r"\{skill:'([^']+)'", block)
 
 
-def test_chat_has_collapsible_21_skill_prompt_library():
+def test_chat_has_collapsible_22_skill_prompt_library():
     names = _example_names()
     builtins = sorted(path.stem for path in (ROOT / "config" / "skills").glob("*.md"))
-    assert len(names) == 21
-    assert len(set(names)) == 21
+    assert len(names) == 22
+    assert len(set(names)) == 22
     assert sorted(names) == builtins
     assert 'id="skillPromptExamples"' in HTML
     assert 'id="skillPromptList"' in HTML
-    assert '21 mẫu' in HTML
+    assert '22 mẫu' in HTML
     assert ".skill-prompt-list{" in CSS
 
 

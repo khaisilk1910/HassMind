@@ -206,15 +206,15 @@ test('Skills manager loads disabled skills, renders source/version, and validate
 });
 
 
-test('Chat skill prompt library covers all 21 built-in skills and can insert a prompt',()=>{
+test('Chat skill prompt library covers all 22 built-in skills and can insert a prompt',()=>{
   const h=harness();
   const count=h.run('SKILL_PROMPT_EXAMPLES.length');
   const unique=h.run('new Set(SKILL_PROMPT_EXAMPLES.map(x=>x.skill)).size');
-  assert.equal(count,21);assert.equal(unique,21);
+  assert.equal(count,22);assert.equal(unique,22);
   h.run('renderSkillPromptExamples()');
   const output=h.nodes.get('skillPromptList').innerHTML;
-  assert.equal((output.match(/data-action="chat-use-skill-example"/g)||[]).length,21);
-  assert.match(output,/presence-aware-control/);assert.match(output,/incident-diagnosis/);
+  assert.equal((output.match(/data-action="chat-use-skill-example"/g)||[]).length,22);
+  assert.match(output,/presence-aware-control/);assert.match(output,/bedroom-climate-comfort/);assert.match(output,/incident-diagnosis/);
   h.run("useChatSkillExample('presence-aware-control')");
   assert.match(h.nodes.get('chatinput').value,/presence-aware-control/);
 });

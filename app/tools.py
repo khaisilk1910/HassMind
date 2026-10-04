@@ -73,7 +73,7 @@ def schemas() -> list[dict]:
         _fn("ha_get_state", "Get one exact entity state and attributes. For multiple entities use ha_get_states.", {"entity_id": {"type": "string"}}, ["entity_id"]),
         _fn("ha_history", "Get recent Home Assistant history for an entity. start_time may be ISO8601.", {"entity_id": {"type": "string"}, "start_time": {"type": "string"}}, ["entity_id"]),
         _fn("ha_recent_events", "Read recent events captured by HassMind, including Home Assistant and enabled companion webhooks.", {"limit": {"type": "integer", "minimum": 1, "maximum": 100}}),
-        _fn("ha_call_service", "Call a Home Assistant action only if its domain is in the direct-action allowlist. For a Knowledge entity use knowledge_resolve first; fuzzy/ambiguous/unconfirmed candidates are blocked. Use target for entity/device/area selectors and data for action parameters.", {
+        _fn("ha_call_service", "Call a Home Assistant action only if policy permits it. Normal domains must be in the direct-action allowlist; script.turn_on is a special case allowed only for exact entity_id values in ALLOW_SCRIPT_ENTITIES with empty data. For a Knowledge entity use knowledge_resolve first; fuzzy/ambiguous/unconfirmed candidates are blocked. Use target for entity/device/area selectors and data for action parameters.", {
             "domain": {"type": "string"},
             "service": {"type": "string"},
             "target": {
