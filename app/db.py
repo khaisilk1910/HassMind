@@ -210,12 +210,16 @@ def init_db():
               health_path TEXT NOT NULL DEFAULT '/health',
               auth_type TEXT NOT NULL DEFAULT 'none',
               auth_header TEXT NOT NULL DEFAULT 'X-API-Key',
+              actions_json TEXT NOT NULL DEFAULT '[]',
               created_at TEXT NOT NULL,
               updated_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_custom_integrations_name ON custom_integrations(name);
             """
         )
+        custom_columns = {row["name"] for row in c.execute("PRAGMA table_info(custom_integrations)").fetchall()}
+        if "actions_json" not in custom_columns:
+            c.execute("ALTER TABLE custom_integrations ADD COLUMN actions_json TEXT NOT NULL DEFAULT '[]'")
         try:
             c.execute("CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(chunk_id UNINDEXED, path, text)")
             c.execute("CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(fact_id UNINDEXED, text, tags)")

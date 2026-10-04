@@ -65,12 +65,12 @@ from .rag import reindex_knowledge, search_knowledge
 from .scheduler import scheduler_loop, set_job_enabled
 from .settings import settings
 from .skills import list_skills
-from .telegram import telegram_loop
+from .telegram import telegram_supervisor
 from .tools import ToolRuntime
 
 os.umask(0o077)
 
-APP_VERSION = "1.2.5"
+APP_VERSION = "1.2.6"
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 setup_logging()
@@ -367,7 +367,7 @@ async def lifespan(app: FastAPI):
         tasks = [
             asyncio.create_task(ha.listen_events(event_callback, stop_event), name="ha-events"),
             asyncio.create_task(scheduler_loop(stop_event, run_prompt), name="scheduler"),
-            asyncio.create_task(telegram_loop(stop_event, lambda sid, text, src: agent.chat(sid, text, src)), name="telegram"),
+            asyncio.create_task(telegram_supervisor(stop_event, lambda sid, text, src: agent.chat(sid, text, src)), name="telegram-supervisor"),
         ]
         await _sync_zalo_webhook_registration_task()
         info(
@@ -584,6 +584,7 @@ class CustomIntegrationIn(BaseModel):
     auth_header: str = Field(default="X-API-Key", max_length=128)
     secret: str = Field(default="", max_length=4096)
     clear_secret: bool = False
+    actions: list[dict[str, Any]] = Field(default_factory=list)
 
 
 @app.get("/")
@@ -850,6 +851,7 @@ async def diagnostics():
             "openai_base_url": settings.openai_base_url,
             "openai_model": settings.openai_model,
             "searxng_url": settings.searxng_url,
+            "telegram_enabled": settings.telegram_enabled,
             "camera_tts_enabled": settings.camera_tts_enabled,
             "camera_tts_url": settings.camera_tts_url,
             "facedetect_enabled": settings.facedetect_enabled,
@@ -1038,6 +1040,7 @@ async def integration_status():
             "camera_tts_actions": settings.camera_tts_allow_actions,
             "zalo_send": settings.zalo_allow_send,
             "zalo_agent_reply": settings.zalo_agent_reply_enabled,
+            "telegram_enabled": settings.telegram_enabled,
             "shopping_mutations": settings.shopping_allow_mutations,
             "shopping_delete": settings.shopping_allow_delete,
             "yt_dlp_playback": settings.ytdlp_allow_playback,

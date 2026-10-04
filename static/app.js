@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION='1.2.5';
+const APP_VERSION='1.2.6';
 const $=id=>document.getElementById(id);
 function makeSessionId(){if(globalThis.crypto&&typeof globalThis.crypto.randomUUID==='function')return globalThis.crypto.randomUUID();return 'web-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,12)}
 const uiState={sessionId:localStorage.getItem('hassmind_session')||makeSessionId(),activeTab:'overview',csrf:'',user:null,passwordMinLength:14};
@@ -135,7 +135,7 @@ function integrationField(integrationId,field){
   return `<div class="field"><label for="${esc(id)}">${label}</label><input id="${esc(id)}" data-field="${esc(field.name)}" class="input${field.type==='url'?' mono':''}" type="${type}" value="${esc(field.value??'')}" placeholder="${esc(field.placeholder||'')}"${extra}></div>`
 }
 function integrationSummary(item,enabled,custom=false){
-  return `<summary class="integration-summary"><div class="integration-summary-main"><span class="integration-icon">${esc(item.icon||'🔌')}</span><div class="integration-summary-copy"><div class="integration-summary-title">${esc(item.name)}</div><div class="integration-summary-description">${esc(item.description||'')}</div>${custom?`<div class="integration-summary-meta mono">${esc(item.id)} · Custom HTTP</div>`:''}</div></div><div class="integration-summary-side"><span class="badge ${enabled?'ok':'warn'}">${enabled?'enabled':'disabled'}</span><span class="integration-chevron" aria-hidden="true">⌄</span></div></summary>`
+  return `<summary class="integration-summary"><div class="integration-summary-main"><span class="integration-icon">${esc(item.icon||'🔌')}</span><div class="integration-summary-copy"><div class="integration-summary-title">${esc(item.name)}</div><div class="integration-summary-description">${esc(item.description||'')}</div>${custom?`<div class="integration-summary-meta mono">${esc(item.id)} · Custom HTTP · ${Number(item.action_count||0)} API actions · ${Number(item.agent_action_count||0)} agent tools</div>`:''}</div></div><div class="integration-summary-side"><span class="badge ${enabled?'ok':'warn'}">${enabled?'enabled':'disabled'}</span><span class="integration-chevron" aria-hidden="true">⌄</span></div></summary>`
 }
 function integrationEditor(item){
   const enabled=item.fields.find(f=>f.name==='enabled')?.value!==false;
@@ -156,6 +156,7 @@ function customIntegrationEditor(item){
     <div class="field"><label for="${esc(sid)}-secret">Credential ${configured}</label><input id="${esc(sid)}-secret" data-custom-field="secret" class="input mono" type="password" value="" autocomplete="new-password" placeholder="${item.secret_configured?'Để trống để giữ credential hiện tại':'Nhập token / API key'}"><div class="field-hint">Lưu riêng trong /data/secrets; API không trả secret về trình duyệt.</div></div>
     <label class="integration-toggle" for="${esc(sid)}-clear"><span>Xóa credential đang lưu</span><input id="${esc(sid)}-clear" data-custom-field="clear_secret" type="checkbox"></label>
     <div class="field integration-field-full"><label for="${esc(sid)}-description">Mô tả</label><textarea id="${esc(sid)}-description" data-custom-field="description" class="textarea" maxlength="600">${esc(item.description||'')}</textarea></div>
+    <details class="integration-actions-editor integration-field-full"><summary>API Actions / Agent Tools <span class="badge info">${Number(item.action_count||0)}</span></summary><div class="integration-actions-body"><div class="field-hint">Declare fixed API operations here. The Agent never chooses an arbitrary URL or method. Only actions with <span class="mono">enabled=true</span> and <span class="mono">agent_enabled=true</span> are exposed as tools.</div><div class="field mt-10"><label>Actions JSON</label><textarea data-custom-actions-json class="textarea mono custom-actions-json" spellcheck="false">${esc(JSON.stringify(item.actions||[],null,2))}</textarea><div class="field-hint">Fields: id, name, description, enabled, agent_enabled, method, path, mode (read/write), request_target (auto/query/json), input_schema. Use {param} in path and declare the same param in input_schema.properties.</div></div></div></details>
   </div><div class="integration-editor-footer"><span class="small-text muted">Nguồn: <span class="mono">web_admin</span></span><div class="row"><button class="btn bad small" data-action="integration-delete-custom" data-id="${esc(item.id)}" type="button">Xóa Integration</button><button class="btn primary small" type="submit">Lưu & áp dụng</button></div></div></form></details>`
 }
 function customIntegrationCreatePanel(){
@@ -170,11 +171,15 @@ function customIntegrationCreatePanel(){
     <div class="field"><label>Credential / token</label><input data-custom-field="secret" class="input mono" type="password" autocomplete="new-password" placeholder="Có thể để trống nếu không cần auth"></div>
     <label class="integration-toggle"><span>Bật ngay sau khi tạo</span><input data-custom-field="enabled" type="checkbox" checked></label>
     <div class="field integration-field-full"><label>Mô tả</label><textarea data-custom-field="description" class="textarea" maxlength="600" placeholder="Integration này dùng để làm gì..."></textarea></div>
-  </div><div class="integration-add-note">🔒 Custom Integration chỉ thực hiện health-check HTTP. HassMind không tự tạo quyền gọi API/Action cho AI; các action vẫn cần adapter typed riêng để giữ an toàn.</div><div class="row end mt-14"><button class="btn" data-action="integration-add-cancel" type="button">Đóng</button><button class="btn primary" type="submit">Tạo Integration</button></div></form></details>`
+    <details class="integration-actions-editor integration-field-full"><summary>API Actions / Agent Tools</summary><div class="integration-actions-body"><div class="field-hint">Optional. Start with [] for health-only. Add fixed actions when this API has functions HassMind should read or execute.</div><div class="field mt-10"><label>Actions JSON</label><textarea data-custom-actions-json class="textarea mono custom-actions-json" spellcheck="false">[]</textarea><div class="field-hint">Example action: {"id":"get-status","name":"Get status","enabled":true,"agent_enabled":true,"method":"GET","path":"/api/status","mode":"read","request_target":"auto","input_schema":{"type":"object","properties":{},"required":[],"additionalProperties":false}}</div></div></div></details>
+  </div><div class="integration-add-note">🔒 Custom Integration supports health-check plus operator-declared API Actions. Agent access is opt-in per action and disabled by default.</div><div class="row end mt-14"><button class="btn" data-action="integration-add-cancel" type="button">Đóng</button><button class="btn primary" type="submit">Tạo Integration</button></div></form></details>`
 }
 function customIntegrationPayload(form){
   const values={};
   form.querySelectorAll('[data-custom-field]').forEach(el=>{values[el.dataset.customField]=el.type==='checkbox'?el.checked:el.value});
+  const actionsBox=form.querySelector('[data-custom-actions-json]');
+  try{values.actions=JSON.parse(actionsBox?.value||'[]')}catch(e){throw new Error('Actions JSON is invalid: '+e.message)}
+  if(!Array.isArray(values.actions))throw new Error('Actions JSON must be an array.');
   return values
 }
 async function saveIntegration(id,form){

@@ -1,14 +1,14 @@
-# HassMind v1.2.5 — AI Agent riêng cho Home Assistant
+# HassMind v1.2.6 — AI Agent riêng cho Home Assistant
 
 
-## Mới trong v1.2.5
+## Moi trong v1.2.6
 
-- Zalo dùng formatter plain-text riêng: tự bỏ Markdown (`#`, `*`, backtick, code fence) và chuyển `<FollowUp>` thành gợi ý văn bản dễ đọc.
-- Câu trả lời dài trên Zalo được chia ở ranh giới đoạn, tránh cắt cụt giữa nội dung.
-- Thêm `ha_search_states` và `ha_get_states` để truy vấn nhiều trạng thái trong một snapshot thay vì gọi từng entity.
-- Cache trạng thái Home Assistant được giữ đồng bộ bằng WebSocket `state_changed`; REST là fallback khi stream mất kết nối.
-- Các tool chỉ-đọc trong cùng một vòng model được chạy song song khi an toàn.
-- Context mặc định giảm còn 24 message; Zalo 12 message để giảm token và thời gian phản hồi. Có thể chỉnh qua `.env`.
+- Telegram now appears in Web Admin -> Integrations with enable/disable, Bot Token and Allowed Chat IDs. Runtime token is stored under `/data/secrets`; the polling supervisor hot-reloads changes without a container restart.
+- Integration health now checks Telegram Bot API `getMe`, so token/network problems are visible in the same status area instead of only in Runtime Logs.
+- Custom HTTP Integrations can declare fixed API Actions. Each action has method, relative path, read/write mode, request target and JSON Schema parameters. Only actions explicitly marked `agent_enabled=true` become Agent tools.
+- Custom API Actions do not give the model a generic HTTP tunnel: Base URL/method/path are fixed by Web Admin; the model can only fill schema-declared arguments.
+- Zalo formatting now preserves and normalizes the rich-text dialect supported by the user's Zalo Server: headings, bold/italic, underline/strike, links, color/size tags, bullets, numbering, blockquotes and indentation. Unsupported tables/fences/UI tags are converted to readable supported text.
+- The Zalo channel prompt now uses green for healthy/active state, orange for attention/unavailable and red only for warnings/errors, with restrained mobile-friendly formatting.
 
 ## Mới trong v1.2.4
 
@@ -16,7 +16,7 @@
 - Custom Integration hỗ trợ Base URL, health path, bật/tắt, mô tả/icon, authentication kiểu Bearer token hoặc API-key header. Credential vẫn lưu riêng dưới `/data/secrets` và API chỉ trả trạng thái đã cấu hình.
 - IntegrationHub tự nạp/reconfigure Custom Integration và đưa health status vào trang Integrations mà không cần sửa stack hoặc restart container sau mỗi lần chỉnh cấu hình.
 - Toàn bộ card cấu hình Integration chuyển sang giao diện **thu gọn mặc định**; nhấn card để mở. Layout mới dùng 3/2/1 cột theo kích thước màn hình, tách rõ adapter tích hợp sẵn, Custom Integrations, Health Status và Effective Policy.
-- Custom HTTP Integration chỉ cung cấp health monitoring. Quyền/tool/action cho AI vẫn yêu cầu typed adapter trong code để không tạo một HTTP tunnel tùy ý cho model.
+- Từ v1.2.6, Custom HTTP Integration có thể khai báo **API Actions / Agent Tools** cố định. Base URL, HTTP method và relative path do admin định nghĩa; model chỉ được điền các tham số đã khai báo trong JSON Schema. Action chỉ trở thành tool khi bật `agent_enabled=true`.
 
 ## Mới trong v1.2.3
 
@@ -587,8 +587,8 @@ Khuyến nghị: lần deploy đầu để các cờ gửi/xóa/download/auto-re
 ## 22. Quy trình nâng cấp từ HassMind v1 cũ
 
 1. Backup `data/hassmind.db`, `.env`, `config/`, `knowledge/` và secrets hiện có.
-2. Thay code bằng bản v1.2.5 này nhưng giữ `data/` cũ.
-3. Chạy `sudo ./setup.sh`. Script chỉ tạo core secret còn thiếu, không ghi đè secret đang có. Nếu phát hiện Camera TTS/Zalo secret từ bản cũ, script tự migrate một lần sang `data/secrets/integration_*`; runtime secret mới có sẵn sẽ không bị ghi đè. Integration credential cũng có thể nhập/sửa sau trong Web Admin.
+2. Thay code bằng bản v1.2.6 này nhưng giữ `data/` cũ.
+3. Chạy `sudo ./setup.sh`. Script chỉ tạo core secret còn thiếu, không ghi đè secret đang có. Nếu phát hiện Camera TTS/Zalo/Telegram secret từ bản cũ, script tự migrate một lần sang `data/secrets/integration_*`; runtime secret mới có sẵn sẽ không bị ghi đè. Integration credential cũng có thể nhập/sửa sau trong Web Admin.
 4. Merge các biến core mới từ `.env.example` vào `.env`. Không cần đưa Camera TTS/FaceDetect/Zalo/Wyoming vào stack nếu sẽ quản lý bằng Web Admin.
 5. Deploy lại HassMind. Lần startup đầu sẽ tạo bảng admin/session mới, bootstrap tài khoản admin và best-effort scrub event/tool-audit + log file cũ.
 6. Truy cập `/`, đăng nhập bằng password trong `secrets/admin_password.txt`, sau đó đổi mật khẩu ở **Settings**.

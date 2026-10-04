@@ -8,9 +8,10 @@ from .camera_tts import CameraTTSClient
 from .facedetect import FaceDetectClient
 from .generic import GenericHTTPIntegrationClient
 from .zalo import ZaloClient
-from ..custom_integrations import custom_runtime_integrations
+from ..custom_integrations import custom_action_tool_name, custom_runtime_integrations
 from ..observability import get_logger, info, warning
 from ..settings import settings
+from ..telegram import telegram_health
 
 logger = get_logger("integrations")
 
@@ -22,6 +23,7 @@ class IntegrationHub:
         self.zalo: ZaloClient | None = None
         self.custom: dict[str, GenericHTTPIntegrationClient] = {}
         self.custom_meta: dict[str, dict[str, Any]] = {}
+        self.custom_tools: dict[str, tuple[str, dict[str, Any]]] = {}
         self._build_clients()
         info(
             logger,
@@ -64,6 +66,7 @@ class IntegrationHub:
 
         self.custom = {}
         self.custom_meta = {}
+        self.custom_tools = {}
         for item in custom_runtime_integrations():
             integration_id = str(item["id"])
             self.custom_meta[integration_id] = item
@@ -75,6 +78,10 @@ class IntegrationHub:
                 timeout=timeout,
                 headers=self._custom_headers(item),
             )
+            for action in item.get("actions") or []:
+                if action.get("enabled") and action.get("agent_enabled"):
+                    tool_name = custom_action_tool_name(integration_id, str(action.get("id") or ""))
+                    self.custom_tools[tool_name] = (integration_id, action)
 
     def _all_clients(self) -> list[Any]:
         return [
@@ -106,8 +113,19 @@ class IntegrationHub:
         self.zalo = None
         self.custom = {}
         self.custom_meta = {}
+        self.custom_tools = {}
         await asyncio.gather(*(client.close() for client in clients), return_exceptions=True)
         info(logger, "integration_hub_closed", clients=len(clients))
+
+    async def call_custom_tool(self, tool_name: str, args: dict[str, Any]) -> Any:
+        target = self.custom_tools.get(tool_name)
+        if target is None:
+            raise KeyError(f"Unknown or disabled custom integration tool: {tool_name}")
+        integration_id, action = target
+        client = self.custom.get(integration_id)
+        if client is None:
+            raise RuntimeError(f"Custom integration {integration_id} is disabled")
+        return await client.call_action(action, args)
 
     async def _status_one(self, name: str, enabled: bool, fn: Callable[[], Awaitable[Any]] | None) -> tuple[str, dict[str, Any]]:
         if not enabled or fn is None:
@@ -116,9 +134,13 @@ class IntegrationHub:
         try:
             data = await fn()
             status = "ok"
+            ok = True
             if isinstance(data, dict):
                 status = str(data.get("status") or ("ok" if data.get("ok", True) else "error"))
-            value = {"enabled": True, "ok": status not in {"error", "offline"}, "status": status, "data": data}
+                ok = bool(data.get("ok", status not in {"error", "offline", "unreachable", "missing_token"}))
+            else:
+                ok = status not in {"error", "offline", "unreachable", "missing_token"}
+            value = {"enabled": True, "ok": ok, "status": status, "data": data}
             info(logger, "integration_health_completed", integration=name, status=status, duration_ms=round((perf_counter() - started) * 1000, 2))
             return name, value
         except Exception as exc:
@@ -150,6 +172,11 @@ class IntegrationHub:
 
     async def status(self) -> dict[str, Any]:
         jobs = [
+            self._status_one(
+                "telegram",
+                settings.telegram_enabled,
+                (lambda: telegram_health(settings.integration_health_timeout)) if settings.telegram_enabled else None,
+            ),
             self._status_one(
                 "camera_tts",
                 settings.camera_tts_enabled,
@@ -194,4 +221,6 @@ class IntegrationHub:
                 out[key]["name"] = item.get("name")
                 out[key]["base_url"] = item.get("base_url")
                 out[key]["health_path"] = item.get("health_path")
+                out[key]["actions"] = len(item.get("actions") or [])
+                out[key]["agent_actions"] = sum(1 for action in (item.get("actions") or []) if action.get("enabled") and action.get("agent_enabled"))
         return out

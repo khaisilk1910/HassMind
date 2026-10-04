@@ -5,6 +5,7 @@ from time import perf_counter
 
 from openai import AsyncOpenAI
 
+from .custom_integrations import custom_tool_is_read_only
 from .db import add_message, get_messages, add_tool_audit
 from .observability import exception, get_logger, info, log_context, preview, warning
 from .settings import settings
@@ -13,9 +14,14 @@ from .tools import ToolRuntime, schemas
 logger = get_logger("agent")
 
 _ZALO_FORMAT_PROMPT = (
-    "Kênh hiện tại là Zalo và chỉ hiển thị plain text. Không dùng Markdown (#, *, backtick, fenced code), "
-    "không xuất HTML/XML hoặc thẻ <FollowUp>. Trình bày dễ đọc bằng emoji vừa phải, dòng trống và bullet Unicode •/◦. "
-    "Giữ nguyên entity_id Home Assistant khi cần nêu chi tiết kỹ thuật."
+    "The current channel is Zalo through a server that supports a controlled rich-text dialect. "
+    "Format for mobile chat: use # or ## only for the main title, ### for section headings, **bold** for labels/status, "
+    "*italic* sparingly, - bullets with 2-space nested indentation, and 1. numbered steps when useful. "
+    "You may use {green}...{/green} for healthy/active/safe status, {orange}...{/orange} for attention/unavailable, "
+    "and {red}...{/red} only for warnings/errors. Use {big}...{/big} and {small}...{/small} sparingly. "
+    "Keep Home Assistant entity_id inside single backticks when technical detail is useful. "
+    "Do not emit Markdown tables, fenced code blocks, horizontal-rule markdown, raw HTML/XML, or <FollowUp> tags. "
+    "Prefer a concise summary first, then grouped sections; avoid excessive decoration or colors."
 )
 
 _READ_ONLY_TOOLS = {
@@ -31,6 +37,8 @@ _READ_ONLY_PREFIXES = ("facedetect_",)
 
 
 def _is_read_only_tool(name: str) -> bool:
+    if name.startswith("ci_"):
+        return custom_tool_is_read_only(name)
     return name in _READ_ONLY_TOOLS or any(name.startswith(prefix) for prefix in _READ_ONLY_PREFIXES)
 
 

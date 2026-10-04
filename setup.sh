@@ -39,6 +39,7 @@ mkdir -p data/logs data/secrets knowledge secrets
 # v1.2.3 migration: integration secrets now live under /data so future adapters
 # do not require Docker secret declarations in the stack. Existing values are
 # copied once and the old files are left untouched for rollback.
+migrate_legacy_integration_secret secrets/telegram_bot_token.txt data/secrets/integration_telegram_bot_token
 migrate_legacy_integration_secret secrets/camera_tts_api_key.txt data/secrets/integration_camera_tts_api_key
 migrate_legacy_integration_secret secrets/zalo_password.txt data/secrets/integration_zalo_password
 migrate_legacy_integration_secret secrets/zalo_webhook_secret.txt data/secrets/integration_zalo_webhook_secret

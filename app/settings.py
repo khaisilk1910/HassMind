@@ -75,6 +75,7 @@ class Settings(BaseSettings):
     event_retention: int = 5000
 
     searxng_url: str = ""
+    telegram_enabled: bool = True
     telegram_bot_token_file: str = "/run/secrets/telegram_bot_token"
     telegram_bot_token: str = ""
     telegram_allowed_chat_ids: str = ""
@@ -213,7 +214,11 @@ class Settings(BaseSettings):
         return "missing"
 
     def read_telegram_token(self) -> str:
-        return self._read_optional(self.telegram_bot_token_file) or self.telegram_bot_token
+        return (
+            self.read_runtime_secret("integration_telegram_bot_token")
+            or self._read_optional(self.telegram_bot_token_file)
+            or self.telegram_bot_token
+        )
 
     def read_camera_tts_key(self) -> str:
         return (
@@ -241,7 +246,7 @@ class Settings(BaseSettings):
             self._read_optional(self.ha_token_file), self.ha_token,
             self._read_optional(self.openai_api_key_file), self.openai_api_key,
             self.read_runtime_secret(self.runtime_api_token_name), self._read_optional(self.api_token_file), self.api_token,
-            self._read_optional(self.telegram_bot_token_file), self.telegram_bot_token,
+            self.read_runtime_secret("integration_telegram_bot_token"), self._read_optional(self.telegram_bot_token_file), self.telegram_bot_token,
             self.read_runtime_secret("integration_camera_tts_api_key"), self._read_optional(self.camera_tts_api_key_file), self.camera_tts_api_key,
             self.read_runtime_secret("integration_zalo_password"), self._read_optional(self.zalo_password_file), self.zalo_password,
             self.read_runtime_secret("integration_zalo_webhook_secret"), self._read_optional(self.zalo_webhook_secret_file), self.zalo_webhook_secret,

@@ -60,6 +60,17 @@ INTEGRATION_CATALOG: dict[str, dict[str, Any]] = {
             {"name": "agent_allowed_thread_ids", "setting": "zalo_agent_allowed_thread_ids", "type": "text", "label": "Allowed thread IDs", "placeholder": "id1,id2 hoặc *"},
         ],
     },
+    "telegram": {
+        "name": "Telegram Bot",
+        "icon": "\U0001f4e8",
+        "kind": "messaging",
+        "description": "Nh\u1eadn tin nh\u1eafn Telegram, chuy\u1ec3n v\u00e0o HassMind Agent v\u00e0 tr\u1ea3 l\u1eddi qua Bot API.",
+        "fields": [
+            {"name": "enabled", "setting": "telegram_enabled", "type": "boolean", "label": "B\u1eadt integration"},
+            {"name": "bot_token", "type": "secret", "label": "Bot token", "secret_name": "integration_telegram_bot_token", "secret_reader": "read_telegram_token"},
+            {"name": "allowed_chat_ids", "setting": "telegram_allowed_chat_ids", "type": "text", "label": "Allowed chat IDs", "placeholder": "123456789,-1001234567890; \u0111\u1ec3 tr\u1ed1ng = cho ph\u00e9p m\u1ecdi chat"},
+        ],
+    },
     "wyoming": {
         "name": "Wyoming Vietnamese TTS",
         "icon": "🗣️",

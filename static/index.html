@@ -4,15 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="color-scheme" content="dark">
-  <title>HassMind v1.2.5</title>
+  <title>HassMind v1.2.6</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/app.css?v=1.2.5">
-  <script src="/static/app.js?v=1.2.5" defer></script>
+  <link rel="stylesheet" href="/static/app.css?v=1.2.6">
+  <script src="/static/app.js?v=1.2.6" defer></script>
 </head>
 <body>
 <div class="app">
   <header class="topbar">
-    <div class="brand"><img class="brand-logo" src="/favicon.svg" alt="HassMind"><div><div class="brand-title">HassMind</div><div class="version">v1.2.5 · Observability & Secure Admin</div></div></div>
+    <div class="brand"><img class="brand-logo" src="/favicon.svg" alt="HassMind"><div><div class="brand-title">HassMind</div><div class="version">v1.2.6 · Observability & Secure Admin</div></div></div>
     <div id="healthPill" class="health-pill"><span class="health-dot"></span><span id="healthText">Đang kiểm tra…</span></div>
     <div class="top-spacer"></div>
     <div class="user-chip"><div id="userAvatar" class="user-avatar">A</div><span id="currentUser">admin</span><button id="logoutBtn" class="btn small" type="button">Đăng xuất</button></div>
@@ -55,7 +55,7 @@
 
     <section id="integrations" class="panel">
       <div class="page-head"><div><h1 class="page-title">Integrations</h1><p class="page-sub">Quản lý adapter tích hợp sẵn và tự thêm Custom HTTP Integration trực tiếp từ Web Admin.</p></div><div class="row"><button class="btn primary" data-action="integration-add" type="button">＋ Thêm Integration</button><button class="btn" data-action="integrations-refresh" type="button">Làm mới</button></div></div>
-      <div class="help-box"><div class="help-cell"><strong>Mục đích</strong><span>Quản lý Camera TTS, FaceDetect, Zalo, Wyoming, HA custom components và các HTTP Integration do bạn tự thêm.</span></div><div class="help-cell"><strong>Cách dùng</strong><span>Các thẻ mặc định thu gọn. Nhấn vào Integration để mở cấu hình; secret lưu trong /data/secrets và không hiển thị lại.</span></div><div class="help-cell"><strong>Custom Integration</strong><span>Nhấn Thêm Integration để khai báo URL, health path và authentication. Action/tool cho AI vẫn cần adapter typed riêng để bảo đảm an toàn.</span></div></div>
+      <div class="help-box"><div class="help-cell"><strong>Mục đích</strong><span>Quản lý Camera TTS, FaceDetect, Zalo, Telegram, Wyoming, HA custom components và các HTTP Integration do bạn tự thêm.</span></div><div class="help-cell"><strong>Cách dùng</strong><span>Các thẻ mặc định thu gọn. Nhấn vào Integration để mở cấu hình; secret lưu trong /data/secrets và không hiển thị lại.</span></div><div class="help-cell"><strong>Custom Integration</strong><span>Nhấn Thêm Integration để khai báo URL, health, authentication và API Actions. Chỉ action được bật quyền Agent mới trở thành tool; URL/method/path luôn cố định theo Web Admin.</span></div></div>
       <div id="integrationsBox" class="grid"><div class="card card-pad span-12"><div class="empty">Chưa tải.</div></div></div>
     </section>
 

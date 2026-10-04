@@ -1,6 +1,7 @@
 from typing import Any
 
 from .approvals import apply_approval, create_approval, get_approval, notify_approval, propose_rollback
+from .custom_integrations import custom_action_tool_specs
 from .db import add_memory, recent_events, search_memory
 from .event_engine import create_event_rule
 from .ha import HomeAssistantClient
@@ -70,7 +71,7 @@ def schemas() -> list[dict]:
     ]
 
     # Companion-container tools are only advertised when their adapter is enabled.
-    if any((settings.camera_tts_enabled, settings.facedetect_enabled, settings.zalo_enabled, settings.wyoming_enabled)):
+    if any((settings.telegram_enabled, settings.camera_tts_enabled, settings.facedetect_enabled, settings.zalo_enabled, settings.wyoming_enabled)):
         tools.append(_fn("integrations_status", "Check connectivity/status of enabled HassMind companion-container adapters.", {}))
 
     if settings.camera_tts_enabled:
@@ -165,6 +166,19 @@ def schemas() -> list[dict]:
             "media_player_entity_id": {"type": "string"}, "message": {"type": "string"},
             "tts_entity_id": {"type": "string"}, "language": {"type": "string"}, "options": {"type": "object"},
         }, ["media_player_entity_id", "message"]))
+
+    for spec in custom_action_tool_specs():
+        action = spec["action"]
+        mode = str(action.get("mode") or "read")
+        description = str(action.get("description") or action.get("name") or action.get("id"))
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": spec["tool_name"],
+                "description": f"Custom Integration {spec['integration_name']}: {description}. HTTP action mode={mode}; endpoint is fixed by Web Admin.",
+                "parameters": action.get("input_schema") or {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+            },
+        })
 
     return tools
 
@@ -355,5 +369,8 @@ class ToolRuntime:
             return await self.ha_integrations.tts_speak(
                 args["media_player_entity_id"], args["message"], args.get("tts_entity_id") or "", args.get("language") or "", args.get("options") or None
             )
+
+        if name.startswith("ci_"):
+            return await self.integrations.call_custom_tool(name, args)
 
         raise KeyError(f"Unknown tool: {name}")
