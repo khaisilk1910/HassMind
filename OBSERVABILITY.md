@@ -81,3 +81,10 @@ For current-state latency diagnostics, look for:
 - `zalo_agent_reply_completed.outbound_chunks`: number of Zalo messages used for a long answer.
 
 If `llm_request_completed.duration_ms` dominates while HA tool calls are already fast, changing HA cache settings will not materially reduce total time; tune the OpenAI-compatible model/provider or shorten conversation/output instead.
+
+## v1.2.8 Zalo rich-text events
+
+- `zalo_rich_text_compiled`: outbound Zalo markup was compiled to clean `msg` + zca-js `styles[]`; inspect `styles_count` to confirm rich formatting was generated.
+- `zalo_rich_text_styles_rejected`: the companion server explicitly rejected `styles` with HTTP 400/422, so HassMind retried once with already-clean plain text.
+
+If the Zalo client still shows raw `#` or `**` on v1.2.8, verify the running image version first. A genuine v1.2.8 rich-text send should have `styles_count > 0` for formatted content and the JSON request body should contain `message.styles`.

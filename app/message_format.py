@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import re
+from typing import Any
 
 _FOLLOWUP_RE = re.compile(r"<FollowUp\b(?P<attrs>[^>]*)/?>", re.IGNORECASE | re.DOTALL)
 _ATTR_RE = re.compile(r"([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*([\"'])(.*?)\2", re.DOTALL)
@@ -14,6 +15,19 @@ _BLOCKQUOTE_RE = re.compile(r"^(\s*)>\s?(.*)$")
 _RAW_HTML_RE = re.compile(r"</?[A-Za-z][^>]*>")
 _COLOR_SIZE_TAG_RE = re.compile(r"\{/?(?:red|orange|yellow|green|big|small)\}", re.IGNORECASE)
 _TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$")
+_INLINE_TAG_RE = re.compile(r"\{(red|orange|yellow|green|big|small)\}", re.IGNORECASE)
+_LINK_RE = re.compile(r"\[([^\]\n]+)\]\((https?://[^\s)]+)\)", re.IGNORECASE)
+
+# zca-js TextStyle values. Keep these strings in one place so transport code
+# does not need to know anything about the markup syntax used by the model.
+_ZALO_TAG_STYLES = {
+    "red": "c_db342e",
+    "orange": "c_f27806",
+    "yellow": "c_f7b503",
+    "green": "c_15a85f",
+    "big": "f_18",
+    "small": "f_13",
+}
 
 
 def _followup_to_text(match: re.Match[str]) -> str:
@@ -21,16 +35,16 @@ def _followup_to_text(match: re.Match[str]) -> str:
     label = attrs.get("label", "").strip()
     if not label:
         return ""
-    return f"\n\n{{green}}**\U0001f4a1 G\u1ee3i \u00fd:**{{/green}} {label}\n"
+    return f"\n\n{{green}}**\U0001f4a1 Gợi ý:**{{/green}} {label}\n"
 
 
-def _sanitize_inline(text: str) -> str:
-    # The Zalo server supports the delimiters below. Keep them, but normalize
-    # malformed legacy double/multiple backticks and remove unsupported HTML.
+def _sanitize_inline(text: str, *, strip: bool = True) -> str:
+    # The Zalo dialect allows one pair of backticks. Normalize accidental
+    # Markdown double/multiple backticks before the rich-text compiler runs.
     text = re.sub(r"`{2,}([^`\n]+?)`{2,}", r"`\1`", text)
     text = re.sub(r"\\([#*`_~>+\-])", r"\1", text)
     text = _RAW_HTML_RE.sub("", text)
-    return text.strip()
+    return text.strip() if strip else text
 
 
 def _split_table_row(line: str) -> list[str]:
@@ -68,13 +82,11 @@ def _convert_tables(lines: list[str]) -> list[str]:
 
 
 def format_zalo_message(value: str) -> str:
-    """Normalize model output to the rich-text dialect supported by Zalo Server.
+    """Normalize model output to the supported Zalo rich-text dialect.
 
-    Supported syntax is intentionally preserved: headings, bold/italic,
-    underline/strike, inline backticks, links, color/size tags, bullets,
-    numbered lists, blockquotes and indentation. Unsupported constructs such as
-    fenced code, Markdown tables, horizontal rules and UI tags are converted to
-    safe readable equivalents.
+    This function deliberately keeps supported markup. `build_zalo_message_content`
+    then compiles that markup into zca-js `msg` + `styles[]`, so Zalo never needs
+    to understand Markdown itself.
     """
     text = html.unescape(str(value or ""))
     text = text.replace("\r\n", "\n").replace("\r", "\n")
@@ -118,12 +130,13 @@ def format_zalo_message(value: str) -> str:
             output.append(f"{indent}> {_sanitize_inline(quote.group(2))}")
             continue
 
-        output.append(_sanitize_inline(line))
+        output.append(_sanitize_inline(line, strip=False))
 
     result = "\n".join(output)
     result = re.sub(r"</?FollowUp\b[^>]*>", "", result, flags=re.IGNORECASE | re.DOTALL)
+
     # Remove unknown brace-style pseudo tags while preserving the six tags that
-    # Zalo Server explicitly supports.
+    # the user's Zalo Server / zca-js formatting contract supports.
     placeholders: list[str] = []
 
     def keep_tag(match: re.Match[str]) -> str:
@@ -136,11 +149,253 @@ def format_zalo_message(value: str) -> str:
         result = result.replace(f"\x00ZT{index}\x00", tag)
     result = re.sub(r"[ \t]+\n", "\n", result)
     result = re.sub(r"\n{3,}", "\n\n", result)
-    return result.strip()
+    return result.strip("\n")
+
+
+def _parse_inline_markup(value: str) -> tuple[str, list[dict[str, Any]]]:
+    """Compile supported inline markup to plain text + char-index style spans.
+
+    Span offsets returned here are Python character offsets. They are converted
+    to UTF-16 code-unit offsets only after the complete message has been built.
+    """
+    pieces: list[str] = []
+    spans: list[dict[str, Any]] = []
+    char_pos = 0
+
+    def append_plain(text: str) -> tuple[int, int]:
+        nonlocal char_pos
+        if not text:
+            return char_pos, char_pos
+        start = char_pos
+        pieces.append(text)
+        char_pos += len(text)
+        return start, char_pos
+
+    def append_parsed(inner_plain: str, inner_spans: list[dict[str, Any]], extra_styles: tuple[str, ...] = ()) -> None:
+        nonlocal char_pos
+        base = char_pos
+        pieces.append(inner_plain)
+        char_pos += len(inner_plain)
+        for span in inner_spans:
+            shifted = dict(span)
+            shifted["start"] = base + int(span["start"])
+            shifted["end"] = base + int(span["end"])
+            spans.append(shifted)
+        if inner_plain:
+            for style in extra_styles:
+                spans.append({"start": base, "end": char_pos, "st": style})
+
+    i = 0
+    while i < len(value):
+        # Backslash escape: retain the escaped character but drop the slash.
+        if value[i] == "\\" and i + 1 < len(value) and value[i + 1] in "#*`_~>+-{}[]":
+            append_plain(value[i + 1])
+            i += 2
+            continue
+
+        # {green}...{/green}, {big}...{/big}, etc. Nested different tags are
+        # naturally supported by the recursive parse of the inner content.
+        tag_match = _INLINE_TAG_RE.match(value, i)
+        if tag_match:
+            name = tag_match.group(1).lower()
+            close_tag = f"{{/{name}}}"
+            close_at = value.lower().find(close_tag, tag_match.end())
+            if close_at >= 0:
+                inner_plain, inner_spans = _parse_inline_markup(value[tag_match.end():close_at])
+                append_parsed(inner_plain, inner_spans, (_ZALO_TAG_STYLES[name],))
+                i = close_at + len(close_tag)
+                continue
+
+        # Bold + italic before bold/single-italic detection.
+        if value.startswith("***", i):
+            close_at = value.find("***", i + 3)
+            if close_at >= 0:
+                inner_plain, inner_spans = _parse_inline_markup(value[i + 3:close_at])
+                append_parsed(inner_plain, inner_spans, ("b", "i"))
+                i = close_at + 3
+                continue
+
+        if value.startswith("**", i):
+            close_at = value.find("**", i + 2)
+            if close_at >= 0:
+                inner_plain, inner_spans = _parse_inline_markup(value[i + 2:close_at])
+                append_parsed(inner_plain, inner_spans, ("b",))
+                i = close_at + 2
+                continue
+
+        if value.startswith("__", i):
+            close_at = value.find("__", i + 2)
+            if close_at >= 0:
+                inner_plain, inner_spans = _parse_inline_markup(value[i + 2:close_at])
+                append_parsed(inner_plain, inner_spans, ("u",))
+                i = close_at + 2
+                continue
+
+        if value.startswith("~~", i):
+            close_at = value.find("~~", i + 2)
+            if close_at >= 0:
+                inner_plain, inner_spans = _parse_inline_markup(value[i + 2:close_at])
+                append_parsed(inner_plain, inner_spans, ("s",))
+                i = close_at + 2
+                continue
+
+        # Legacy Zalo behavior: single-backtick content is italic and is not
+        # parsed recursively for Markdown inside the code span.
+        if value[i] == "`":
+            close_at = value.find("`", i + 1)
+            if close_at >= 0:
+                raw = value[i + 1:close_at]
+                start, end = append_plain(raw)
+                if end > start:
+                    spans.append({"start": start, "end": end, "st": "i"})
+                i = close_at + 1
+                continue
+
+        link_match = _LINK_RE.match(value, i)
+        if link_match:
+            # Compatibility contract supplied by the Zalo Server: the label is
+            # replaced by the URL in the outgoing text.
+            append_plain(link_match.group(2))
+            i = link_match.end()
+            continue
+
+        # Single-star italic. Do not consume a star that belongs to ** or ***.
+        if value[i] == "*" and not value.startswith("**", i):
+            close_at = value.find("*", i + 1)
+            if close_at >= 0:
+                inner_plain, inner_spans = _parse_inline_markup(value[i + 1:close_at])
+                append_parsed(inner_plain, inner_spans, ("i",))
+                i = close_at + 1
+                continue
+
+        append_plain(value[i])
+        i += 1
+
+    return "".join(pieces), spans
+
+
+def _utf16_offsets(text: str) -> list[int]:
+    """Map Python character boundaries to JavaScript UTF-16 code-unit offsets."""
+    offsets = [0]
+    total = 0
+    for char in text:
+        total += 2 if ord(char) > 0xFFFF else 1
+        offsets.append(total)
+    return offsets
+
+
+def build_zalo_message_content(value: str) -> dict[str, Any]:
+    """Return a zca-js MessageContent-compatible `{msg, styles}` object.
+
+    The model may produce the supported Zalo markup syntax, but this compiler
+    removes all visible markup delimiters and expresses formatting as zca-js
+    style ranges. This is robust even when the companion Zalo Server endpoint
+    does *not* perform Markdown parsing itself.
+    """
+    markup = format_zalo_message(value)
+    lines = markup.split("\n") if markup else []
+    plain_parts: list[str] = []
+    char_spans: list[dict[str, Any]] = []
+    char_offset = 0
+
+    for index, raw in enumerate(lines):
+        line = raw
+        block_styles: list[str] = []
+        indent_size = 0
+
+        heading = _HEADING_RE.match(line)
+        if heading:
+            level = min(len(heading.group(1)), 6)
+            line = heading.group(2)
+            if level <= 2:
+                block_styles.extend(("f_18", "b"))
+            elif level == 3:
+                block_styles.append("b")
+            else:
+                block_styles.append("f_13")
+        else:
+            unordered = _UNORDERED_RE.match(line)
+            ordered = _ORDERED_RE.match(line)
+            quote = _BLOCKQUOTE_RE.match(line)
+            if unordered:
+                indent_size = min(8, len(unordered.group(1).replace("\t", "    ")))
+                line = unordered.group(2)
+                block_styles.append("lst_1")
+            elif ordered:
+                indent_size = min(8, len(ordered.group(1).replace("\t", "    ")))
+                line = ordered.group(3)
+                block_styles.append("lst_2")
+            elif quote:
+                indent_size = min(8, len(quote.group(1).replace("\t", "    ")))
+                line = quote.group(2)
+                block_styles.append("i")
+            else:
+                leading = len(line) - len(line.lstrip(" \t"))
+                if leading:
+                    prefix = line[:leading].replace("\t", "    ")
+                    indent_size = min(8, len(prefix))
+                    line = line[leading:]
+
+        line_plain, inline_spans = _parse_inline_markup(line)
+        line_start = char_offset
+        plain_parts.append(line_plain)
+        char_offset += len(line_plain)
+        line_end = char_offset
+
+        for span in inline_spans:
+            shifted = dict(span)
+            shifted["start"] = line_start + int(span["start"])
+            shifted["end"] = line_start + int(span["end"])
+            char_spans.append(shifted)
+
+        if line_end > line_start:
+            for style in block_styles:
+                char_spans.append({"start": line_start, "end": line_end, "st": style})
+            if indent_size:
+                char_spans.append({
+                    "start": line_start,
+                    "end": line_end,
+                    "st": "ind_$",
+                    "indentSize": indent_size,
+                })
+
+        if index < len(lines) - 1:
+            plain_parts.append("\n")
+            char_offset += 1
+
+    plain = "".join(plain_parts)
+    offsets = _utf16_offsets(plain)
+    styles: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+
+    for span in char_spans:
+        start_char = max(0, min(len(plain), int(span["start"])))
+        end_char = max(start_char, min(len(plain), int(span["end"])))
+        if end_char <= start_char:
+            continue
+        item: dict[str, Any] = {
+            "start": offsets[start_char],
+            "len": offsets[end_char] - offsets[start_char],
+            "st": str(span["st"]),
+        }
+        if item["st"] == "ind_$":
+            item["indentSize"] = max(1, min(8, int(span.get("indentSize") or 1)))
+        key = (item["start"], item["len"], item["st"], item.get("indentSize"))
+        if key in seen:
+            continue
+        seen.add(key)
+        styles.append(item)
+
+    styles.sort(key=lambda item: (int(item["start"]), -int(item["len"]), str(item["st"])))
+    return {"msg": plain, "styles": styles}
 
 
 def split_zalo_message(value: str, limit: int = 3900) -> list[str]:
-    """Format and split a long answer, preferring whole Zalo sections."""
+    """Format and split a long answer, preferring whole Zalo sections.
+
+    The returned chunks are still markup. Each chunk is compiled independently
+    to `msg + styles[]` immediately before it is sent to Zalo Server.
+    """
     text = format_zalo_message(value)
     limit = max(200, int(limit))
     if not text:

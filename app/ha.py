@@ -14,6 +14,8 @@ from .settings import settings
 EventCallback = Callable[[dict[str, Any]], Awaitable[None]]
 logger = get_logger("home_assistant")
 
+_SERVICE_TARGET_KEYS = {"entity_id", "device_id", "area_id", "floor_id", "label_id"}
+
 
 class HomeAssistantClient:
     def __init__(self):
@@ -155,17 +157,64 @@ class HomeAssistantClient:
     async def services(self):
         return await self._get("/api/services")
 
-    async def call_service_raw(self, domain: str, service: str, data: dict, *, return_response: bool = False):
+    @staticmethod
+    def _normalize_target(target: dict[str, Any] | None) -> dict[str, Any]:
+        if not target:
+            return {}
+        if not isinstance(target, dict):
+            raise ValueError("Home Assistant service target must be an object")
+        unknown = set(target) - _SERVICE_TARGET_KEYS
+        if unknown:
+            raise ValueError(f"Unsupported Home Assistant target keys: {', '.join(sorted(unknown))}")
+        return {key: value for key, value in target.items() if value not in (None, "", [])}
+
+    async def call_service_raw(
+        self,
+        domain: str,
+        service: str,
+        data: dict | None = None,
+        *,
+        target: dict[str, Any] | None = None,
+        return_response: bool = False,
+    ):
+        """Call a Home Assistant action through the REST services endpoint.
+
+        Home Assistant's YAML/UI action model separates ``target`` from ``data``.
+        The REST endpoint accepts target selectors (entity_id/device_id/area_id/...)
+        at the top level of the JSON service payload, so HassMind keeps the public
+        action shape explicit and flattens it only at the transport boundary.
+        """
+        domain = str(domain or "").strip()
+        service = str(service or "").strip()
+        if not domain or not service:
+            raise ValueError("Home Assistant service domain and service are required")
+        if not isinstance(data or {}, dict):
+            raise ValueError("Home Assistant service data must be an object")
+
+        payload = dict(data or {})
+        clean_target = self._normalize_target(target)
+        for key, value in clean_target.items():
+            if key in payload and payload[key] != value:
+                raise ValueError(f"Conflicting Home Assistant target field: {key}")
+            payload[key] = value
+
         params = {"return_response": ""} if return_response else None
-        result = await self._post(f"/api/services/{domain}/{service}", data, params=params)
+        result = await self._post(f"/api/services/{domain}/{service}", payload, params=params)
         # Avoid returning a pre-action snapshot if a follow-up status check happens
         # before Home Assistant's state_changed event reaches our WebSocket listener.
         self.invalidate_state_cache()
         return result
 
-    async def call_service(self, domain: str, service: str, data: dict):
+    async def call_service(
+        self,
+        domain: str,
+        service: str,
+        data: dict | None = None,
+        *,
+        target: dict[str, Any] | None = None,
+    ):
         assert_service_allowed(domain, service)
-        return await self.call_service_raw(domain, service, data)
+        return await self.call_service_raw(domain, service, data, target=target)
 
     async def notify(self, message: str, title: str = "HassMind", actions: list[dict] | None = None):
         if not settings.ha_notify_service:
@@ -196,12 +245,18 @@ class HomeAssistantClient:
         scheme = "wss" if p.scheme == "https" else "ws"
         return f"{scheme}://{p.netloc}/api/websocket"
 
+    def _ws_max_size(self) -> int:
+        # websockets defaults to 1 MiB, which is too small for entity_registry/list
+        # on medium/large Home Assistant installations. Keep a bounded ceiling.
+        configured = int(settings.ha_ws_max_size)
+        return min(max(configured, 1024 * 1024), 64 * 1024 * 1024)
+
     async def ws_command(self, command: dict) -> Any:
         started = perf_counter()
         command_type = str(command.get("type", "unknown"))
         info(logger, "ha_ws_command_started", command_type=command_type, command=preview(command))
         try:
-            async with websockets.connect(self.ws_url(), open_timeout=10, close_timeout=5) as ws:
+            async with websockets.connect(self.ws_url(), open_timeout=10, close_timeout=5, max_size=self._ws_max_size()) as ws:
                 hello = json.loads(await ws.recv())
                 if hello.get("type") != "auth_required":
                     raise RuntimeError(f"Unexpected HA WS hello: {hello}")
@@ -252,6 +307,7 @@ class HomeAssistantClient:
                     close_timeout=5,
                     ping_interval=30,
                     ping_timeout=20,
+                    max_size=self._ws_max_size(),
                 ) as ws:
                     hello = json.loads(await ws.recv())
                     if hello.get("type") != "auth_required":

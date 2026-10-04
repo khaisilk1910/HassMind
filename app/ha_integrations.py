@@ -5,7 +5,10 @@ from typing import Any
 from urllib.parse import quote
 
 from .ha import HomeAssistantClient
+from .observability import get_logger, info, warning
 from .settings import settings
+
+logger = get_logger("ha_integrations")
 
 
 class HAIntegrationBridge:
@@ -202,6 +205,67 @@ class HAIntegrationBridge:
 
     # Home Assistant TTS is the compatibility boundary for the Wyoming server.
     # This avoids embedding the Wyoming wire protocol in HassMind itself.
+    async def _resolve_tts_entity(self, requested: str = "") -> str:
+        """Resolve a TTS entity without downloading the full entity registry normally.
+
+        The previous implementation called config/entity_registry/list for every
+        TTS request. Large HA installations can return a WebSocket frame above the
+        websockets library's default 1 MiB limit. Current-state discovery is much
+        smaller and is normally served from HassMind's live HA state cache.
+        """
+        configured = str(settings.wyoming_tts_entity_id or "").strip()
+        entity = str(requested or "").strip() or configured
+        if entity:
+            if not entity.startswith("tts."):
+                raise ValueError(f"TTS entity must start with 'tts.': {entity}")
+            info(
+                logger,
+                "ha_tts_entity_resolved",
+                source="tool" if str(requested or "").strip() else "web_admin",
+                entity_id=entity,
+            )
+            return entity
+
+        states = await self.ha.states()
+        state_candidates = sorted({
+            str(item.get("entity_id"))
+            for item in states
+            if isinstance(item, dict) and str(item.get("entity_id") or "").startswith("tts.")
+        })
+        if len(state_candidates) == 1:
+            info(logger, "ha_tts_entity_resolved", source="state_snapshot", entity_id=state_candidates[0])
+            return state_candidates[0]
+
+        # Only use the registry as a last resort when there are multiple TTS
+        # entities and no explicit Web Admin setting. ha.py raises the WS frame
+        # ceiling for this bounded fallback.
+        if state_candidates:
+            warning(
+                logger,
+                "ha_tts_registry_fallback",
+                message="Multiple TTS entities found; falling back to entity registry. Configure a TTS entity in Web Admin to avoid this lookup.",
+                candidates=state_candidates,
+            )
+            registry = await self.ha.entity_registry()
+            candidate_set = set(state_candidates)
+            tts_entries = [
+                e for e in registry
+                if str(e.get("entity_id") or "") in candidate_set
+            ]
+            wyoming_entries = [
+                e for e in tts_entries
+                if str(e.get("platform") or "").lower() == "wyoming"
+            ]
+            if len(wyoming_entries) == 1:
+                resolved = str(wyoming_entries[0]["entity_id"])
+                info(logger, "ha_tts_entity_resolved", source="entity_registry", entity_id=resolved)
+                return resolved
+
+        raise ValueError(
+            "Unable to choose a unique Home Assistant TTS entity. "
+            f"Configure Wyoming -> Home Assistant TTS entity in Web Admin; candidates={state_candidates}"
+        )
+
     async def tts_speak(
         self,
         media_player_entity_id: str,
@@ -209,28 +273,45 @@ class HAIntegrationBridge:
         tts_entity_id: str = "",
         language: str = "",
         options: dict[str, Any] | None = None,
+        cache: bool | None = None,
     ) -> Any:
         if not settings.wyoming_allow_tts:
             raise PermissionError("Wyoming/HA TTS actions are disabled by WYOMING_ALLOW_TTS")
 
-        entity = tts_entity_id.strip()
-        if not entity:
-            registry = await self.ha.entity_registry()
-            tts_entries = [e for e in registry if str(e.get("entity_id") or "").startswith("tts.")]
-            wyoming_entries = [e for e in tts_entries if str(e.get("platform") or "").lower() == "wyoming"]
-            candidates = wyoming_entries or tts_entries
-            if len(candidates) != 1:
-                ids = [e.get("entity_id") for e in candidates]
-                raise ValueError(f"Specify tts_entity_id; candidates={ids}")
-            entity = str(candidates[0]["entity_id"])
+        media_player = str(media_player_entity_id or "").strip()
+        text = str(message or "").strip()
+        if not media_player.startswith("media_player."):
+            raise ValueError("media_player_entity_id must start with 'media_player.'")
+        if not text:
+            raise ValueError("TTS message must not be empty")
 
+        entity = await self._resolve_tts_entity(tts_entity_id)
         data: dict[str, Any] = {
-            "entity_id": entity,
-            "media_player_entity_id": media_player_entity_id,
-            "message": message,
+            "media_player_entity_id": media_player,
+            "message": text,
         }
         if language:
             data["language"] = language
         if options:
             data["options"] = options
-        return await self.ha.call_service_raw("tts", "speak", data)
+        if cache is not None:
+            data["cache"] = bool(cache)
+
+        # Match the modern HA action model exactly:
+        # action: tts.speak
+        # target: {entity_id: tts.*}
+        # data: {media_player_entity_id, message, ...}
+        # HomeAssistantClient flattens target selectors only at the REST boundary.
+        info(
+            logger,
+            "ha_tts_action_call",
+            tts_entity_id=entity,
+            media_player_entity_id=media_player,
+            message_length=len(text),
+            cache=data.get("cache", "default"),
+            has_language=bool(language),
+            option_keys=sorted((options or {}).keys()),
+        )
+        return await self.ha.call_service_raw(
+            "tts", "speak", data, target={"entity_id": entity}
+        )

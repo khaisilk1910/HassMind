@@ -1,7 +1,24 @@
-# HassMind v1.2.6 — AI Agent riêng cho Home Assistant
+# HassMind v1.2.8 — AI Agent riêng cho Home Assistant
+
+## Mới trong v1.2.8
+
+- **Sửa dứt điểm rich text Zalo ở transport**: HassMind không còn chỉ gửi chuỗi `#`, `**...**`, `{green}...{/green}` rồi trông chờ Zalo Server tự parse. Backend biên dịch markup thành `message.msg` sạch + `message.styles[]` đúng cấu trúc `zca-js`.
+- Hỗ trợ style: bold, italic, bold+italic, underline, strike, heading `f_18/f_13`, red/orange/yellow/green, unordered/ordered list, blockquote và indent.
+- Offset `start/len` của Zalo được tính theo **UTF-16 code units**, nên emoji/variation selector không làm lệch vùng in đậm/màu/list.
+- Cú pháp Markdown/Zalo được loại khỏi `msg` trước khi gửi; vì vậy ngay cả khi companion server cũ từ chối `styles[]`, fallback chỉ gửi plain text sạch, không còn hiện `#`/`**` thô.
+- Markdown table/fenced code/`<FollowUp>` tiếp tục được normalize trước khi compile style.
+
+## Mới trong v1.2.7
+
+- Sửa `ha_tts_speak` bị `ConnectionClosedError: frame exceeds limit`: bình thường không tải toàn bộ Entity Registry qua WebSocket nữa.
+- Thêm trường **Home Assistant TTS entity** trong Web Admin -> Integrations -> Wyoming Vietnamese TTS. Nên cấu hình rõ, ví dụ `tts.piper`.
+- `tts.speak` dùng mô hình action hiện đại: TTS entity ở `target`, `media_player_entity_id/message/...` ở `data`; transport REST chỉ flatten target tại biên API.
+- `ha_call_service` hỗ trợ `target` riêng thay vì bắt model nhét tất cả vào `data`.
+- Tăng trần frame WebSocket HA mặc định lên 16 MiB (có giới hạn tối đa 64 MiB), áp dụng cho cả custom WS commands và event listener.
+- Thêm log `ha_tts_entity_resolved`, `ha_tts_registry_fallback`, `ha_tts_action_call` để chẩn đoán TTS.
 
 
-## Moi trong v1.2.6
+## Mới trong v1.2.6
 
 - Telegram now appears in Web Admin -> Integrations with enable/disable, Bot Token and Allowed Chat IDs. Runtime token is stored under `/data/secrets`; the polling supervisor hot-reloads changes without a container restart.
 - Integration health now checks Telegram Bot API `getMe`, so token/network problems are visible in the same status area instead of only in Runtime Logs.
@@ -587,7 +604,7 @@ Khuyến nghị: lần deploy đầu để các cờ gửi/xóa/download/auto-re
 ## 22. Quy trình nâng cấp từ HassMind v1 cũ
 
 1. Backup `data/hassmind.db`, `.env`, `config/`, `knowledge/` và secrets hiện có.
-2. Thay code bằng bản v1.2.6 này nhưng giữ `data/` cũ.
+2. Thay code bằng bản v1.2.8 này nhưng giữ `data/` cũ.
 3. Chạy `sudo ./setup.sh`. Script chỉ tạo core secret còn thiếu, không ghi đè secret đang có. Nếu phát hiện Camera TTS/Zalo/Telegram secret từ bản cũ, script tự migrate một lần sang `data/secrets/integration_*`; runtime secret mới có sẵn sẽ không bị ghi đè. Integration credential cũng có thể nhập/sửa sau trong Web Admin.
 4. Merge các biến core mới từ `.env.example` vào `.env`. Không cần đưa Camera TTS/FaceDetect/Zalo/Wyoming vào stack nếu sẽ quản lý bằng Web Admin.
 5. Deploy lại HassMind. Lần startup đầu sẽ tạo bảng admin/session mới, bootstrap tài khoản admin và best-effort scrub event/tool-audit + log file cũ.

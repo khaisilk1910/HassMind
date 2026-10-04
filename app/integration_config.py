@@ -81,6 +81,7 @@ INTEGRATION_CATALOG: dict[str, dict[str, Any]] = {
             {"name": "host", "setting": "wyoming_host", "type": "text", "label": "Host", "placeholder": "127.0.0.1"},
             {"name": "port", "setting": "wyoming_port", "type": "integer", "label": "Port", "min": 1, "max": 65535},
             {"name": "allow_tts", "setting": "wyoming_allow_tts", "type": "boolean", "label": "Cho phép TTS"},
+            {"name": "tts_entity_id", "setting": "wyoming_tts_entity_id", "type": "text", "label": "Home Assistant TTS entity", "placeholder": "tts.piper (khuyến nghị cấu hình để phát nhanh và ổn định)"},
         ],
     },
     "ha_custom": {

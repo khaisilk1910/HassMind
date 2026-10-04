@@ -50,7 +50,22 @@ def schemas() -> list[dict]:
         _fn("ha_get_state", "Get one exact entity state and attributes. For multiple entities use ha_get_states.", {"entity_id": {"type": "string"}}, ["entity_id"]),
         _fn("ha_history", "Get recent Home Assistant history for an entity. start_time may be ISO8601.", {"entity_id": {"type": "string"}, "start_time": {"type": "string"}}, ["entity_id"]),
         _fn("ha_recent_events", "Read recent events captured by HassMind, including Home Assistant and enabled companion webhooks.", {"limit": {"type": "integer", "minimum": 1, "maximum": 100}}),
-        _fn("ha_call_service", "Call a Home Assistant service only if its domain is in the direct-action allowlist.", {"domain": {"type": "string"}, "service": {"type": "string"}, "data": {"type": "object"}}, ["domain", "service", "data"]),
+        _fn("ha_call_service", "Call a Home Assistant action only if its domain is in the direct-action allowlist. Use target for entity/device/area selectors and data for action parameters.", {
+            "domain": {"type": "string"},
+            "service": {"type": "string"},
+            "target": {
+                "type": "object",
+                "properties": {
+                    "entity_id": {"type": "string"},
+                    "device_id": {"type": "string"},
+                    "area_id": {"type": "string"},
+                    "floor_id": {"type": "string"},
+                    "label_id": {"type": "string"},
+                },
+                "additionalProperties": False,
+            },
+            "data": {"type": "object"},
+        }, ["domain", "service"]),
         _fn("ha_entity_registry", "List Home Assistant entity-registry entries; useful for resolving automation/script unique IDs.", {"domain": {"type": "string"}}),
         _fn("ha_get_config", "Read an automation/script config by config ID (not necessarily entity_id).", {"kind": {"type": "string", "enum": ["automation", "script"]}, "target_id": {"type": "string"}}, ["kind", "target_id"]),
         _fn("ha_propose_config_change", "Create a human approval proposal for an automation/script replacement. It does not apply immediately.", {"kind": {"type": "string", "enum": ["automation", "script"]}, "target_id": {"type": "string"}, "new_config": {"type": "object"}, "reason": {"type": "string"}}, ["kind", "target_id", "new_config", "reason"]),
@@ -162,9 +177,10 @@ def schemas() -> list[dict]:
         ])
 
     if settings.wyoming_enabled:
-        tools.append(_fn("ha_tts_speak", "Speak text through Home Assistant TTS, preferring the Wyoming TTS entity when uniquely identifiable.", {
+        tools.append(_fn("ha_tts_speak", "Speak text through Home Assistant tts.speak. Uses the configured Wyoming TTS entity first and avoids large entity-registry discovery during normal calls.", {
             "media_player_entity_id": {"type": "string"}, "message": {"type": "string"},
             "tts_entity_id": {"type": "string"}, "language": {"type": "string"}, "options": {"type": "object"},
+            "cache": {"type": "boolean"},
         }, ["media_player_entity_id", "message"]))
 
     for spec in custom_action_tool_specs():
@@ -230,7 +246,7 @@ class ToolRuntime:
         if name == "ha_recent_events":
             return recent_events(int(args.get("limit", 25)))
         if name == "ha_call_service":
-            return await self.ha.call_service(args["domain"], args["service"], args["data"])
+            return await self.ha.call_service(args["domain"], args["service"], args.get("data") or {}, target=args.get("target") or None)
         if name == "ha_entity_registry":
             entries = await self.ha.entity_registry()
             domain = args.get("domain")
@@ -367,7 +383,12 @@ class ToolRuntime:
             return await self.ha_integrations.ytdlp_job(args["job_id"])
         if name == "ha_tts_speak":
             return await self.ha_integrations.tts_speak(
-                args["media_player_entity_id"], args["message"], args.get("tts_entity_id") or "", args.get("language") or "", args.get("options") or None
+                args["media_player_entity_id"],
+                args["message"],
+                args.get("tts_entity_id") or "",
+                args.get("language") or "",
+                args.get("options") or None,
+                args.get("cache") if "cache" in args else None,
             )
 
         if name.startswith("ci_"):

@@ -5,7 +5,10 @@ from typing import Any
 from urllib.parse import quote
 
 from .base import IntegrationError, JsonHttpClient
-from ..message_format import format_zalo_message
+from ..message_format import build_zalo_message_content
+from ..observability import get_logger, info, warning
+
+logger = get_logger("zalo")
 
 
 class ZaloClient(JsonHttpClient):
@@ -74,16 +77,39 @@ class ZaloClient(JsonHttpClient):
     ) -> Any:
         await self.ensure_login()
         selected = await self._select_account(account_selection)
-        clean_message = format_zalo_message(message)
+        message_content = build_zalo_message_content(message)
+        info(
+            logger,
+            "zalo_rich_text_compiled",
+            msg_chars=len(str(message_content.get("msg") or "")),
+            styles_count=len(message_content.get("styles") or []),
+        )
         body: dict[str, Any] = {
-            "message": {"msg": clean_message},
+            "message": message_content,
             "threadId": str(thread_id).removeprefix("zalo:"),
             "type": int(thread_type),
             "accountSelection": str(selected),
         }
         if ttl is not None and ttl != "":
             body["ttl"] = ttl
-        return await self.request("POST", "/api/sendMessageByAccount", json=body)
+        try:
+            return await self.request("POST", "/api/sendMessageByAccount", json=body)
+        except IntegrationError as exc:
+            # Older companion servers may validate `message` as msg-only. If
+            # they explicitly reject the new styles field, retry once with the
+            # already-compiled plain text. Do not retry timeouts/5xx because an
+            # ambiguous transport failure could duplicate a message.
+            detail = str(exc)
+            if message_content.get("styles") and ("HTTP 400 " in detail or "HTTP 422 " in detail):
+                warning(
+                    logger,
+                    "zalo_rich_text_styles_rejected",
+                    message="Zalo companion rejected styles; retrying once with compiled plain text",
+                )
+                fallback = dict(body)
+                fallback["message"] = {"msg": message_content["msg"]}
+                return await self.request("POST", "/api/sendMessageByAccount", json=fallback)
+            raise
 
     async def get_webhook_account(self, own_id: str) -> dict[str, Any] | None:
         await self.ensure_login()

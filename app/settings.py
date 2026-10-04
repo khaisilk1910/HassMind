@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     zalo_history_messages: int = 12
     parallel_read_tools: bool = True
     ha_state_cache_ttl: float = 1.5
+    # Home Assistant can return large WebSocket frames for entity registries or custom commands.
+    # Keep a finite ceiling to avoid unbounded memory while allowing realistic HA installations.
+    ha_ws_max_size: int = 16 * 1024 * 1024
 
     # HassMind API/UI
     agent_name: str = "HassMind"
@@ -116,6 +119,9 @@ class Settings(BaseSettings):
     wyoming_host: str = "127.0.0.1"
     wyoming_port: int = 10300
     wyoming_allow_tts: bool = True
+    # Preferred Home Assistant TTS entity (for example tts.piper). When set,
+    # TTS never needs to download the full HA entity registry for discovery.
+    wyoming_tts_entity_id: str = ""
 
     # Home Assistant custom-component adapters
     ha_custom_integrations_enabled: bool = True
