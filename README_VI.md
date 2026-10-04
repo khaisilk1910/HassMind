@@ -1,4 +1,15 @@
-# HassMind v1.3.5 — AI Agent riêng cho Home Assistant
+# HassMind v1.3.6 — AI Agent riêng cho Home Assistant
+
+## Mới trong v1.3.6
+
+- Chuẩn hóa kết quả **Luôn gửi kết quả**: loại bỏ wrapper lỗi kiểu `*(Theo đúng yêu*(...)\*`, bỏ câu meta thừa và làm sạch trước cả khi gửi lẫn khi lưu `last_result`. Kết quả không có việc cần xử lý được trình bày tự nhiên, ví dụ `✅ Không phát hiện thiết bị nào cần xử lý.`
+- Scheduler và Event rules đều có **Khi nào gửi**: `Luôn gửi kết quả` hoặc `Chỉ gửi khi có nội dung cần báo`; rule cũ tự migrate với `notify_mode=always`.
+- Tool audit có bộ chọn 20/50/100/200/500 bản ghi và vùng cuộn riêng, không kéo dài toàn trang.
+- Scheduler/Event rules mặc định thu gọn chỉ còn tiêu đề; mở từng mục để xem nội dung. API/UI phân trang cố định **20 job/rule mỗi trang**.
+- Menu trái chuyển nhóm **Chẩn đoán** xuống sau **Tự động hóa**.
+- Tiếp tục dùng một pipeline notification tập trung: Điện thoại nhận plain text sạch Markdown với emoji/bullet; Zalo dùng rich-text compiler như phản hồi chat Zalo và hỗ trợ `thread_id`/fallback cấu hình hiện có.
+
+Đọc [changelog 1.3.6](CHANGELOG_V1.3.6.md) và [QA 1.3.6](QA_V1.3.6.md).
 
 ## Mới trong v1.3.5
 

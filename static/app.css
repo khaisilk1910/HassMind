@@ -80,3 +80,14 @@ details{border:1px solid var(--line);border-radius:10px;background:var(--surface
 .notification-grid{align-items:end}.notification-grid>.check{align-self:center}.notification-grid .field{min-width:0}
 #jobsBox .item-head,#rulesBox .item-head{flex-wrap:wrap}
 @media(max-width:720px){#knowledgeProposals{max-height:520px}.notification-grid{grid-template-columns:1fr}.notification-grid>*{grid-column:1/-1}}
+
+/* v1.3.6 bounded audit + compact paged automation lists */
+.audit-toolbar{grid-template-columns:minmax(180px,260px) auto;justify-content:start}.audit-toolbar .field{min-width:180px}
+.audit-scroll{max-height:calc(100vh - 330px);min-height:180px;overflow-y:auto;overscroll-behavior:contain;padding-right:5px;scrollbar-gutter:stable}
+.automation-item{padding:0;overflow:hidden;background:var(--surface)}
+.automation-item+ .automation-item{margin-top:0}
+.automation-summary{display:flex;align-items:center;gap:9px;flex-wrap:wrap;list-style:none;padding:12px 14px;background:var(--surface);min-height:48px}
+.automation-summary::-webkit-details-marker{display:none}.automation-summary::before{content:'▸';color:var(--muted);font-size:12px;transition:transform .15s ease}.automation-item[open]>.automation-summary::before{transform:rotate(90deg)}
+.automation-summary strong{margin-right:auto;min-width:180px;overflow-wrap:anywhere}.automation-body{padding:0 14px 14px;border-top:1px solid var(--line);background:rgba(8,12,17,.22)}.automation-body>p{margin:12px 0;line-height:1.5;overflow-wrap:anywhere}
+.pagination{display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;padding:8px 4px 2px}.pagination .small-text{min-width:140px;text-align:center}
+@media(max-width:720px){.audit-toolbar{grid-template-columns:1fr}.audit-scroll{max-height:60vh}.automation-summary strong{width:100%;margin-right:0}.pagination{justify-content:space-between}}

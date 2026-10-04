@@ -4,15 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="color-scheme" content="dark">
-  <title>HassMind v1.3.5</title>
+  <title>HassMind v1.3.6</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/app.css?v=1.3.5">
-  <script src="/static/app.js?v=1.3.5" defer></script>
+  <link rel="stylesheet" href="/static/app.css?v=1.3.6">
+  <script src="/static/app.js?v=1.3.6" defer></script>
 </head>
 <body>
 <div class="app">
   <header class="topbar">
-    <div class="brand"><img class="brand-logo" src="/favicon.svg" alt="HassMind"><div><div class="brand-title">HassMind</div><div class="version">v1.3.5 · Knowledge & Secure Admin</div></div></div>
+    <div class="brand"><img class="brand-logo" src="/favicon.svg" alt="HassMind"><div><div class="brand-title">HassMind</div><div class="version">v1.3.6 · Knowledge & Secure Admin</div></div></div>
     <div id="healthPill" class="health-pill"><span class="health-dot"></span><span id="healthText">Đang kiểm tra…</span></div>
     <div class="top-spacer"></div>
     <div class="user-chip"><div id="userAvatar" class="user-avatar">A</div><span id="currentUser">admin</span><button id="logoutBtn" class="btn small" type="button">Đăng xuất</button></div>
@@ -24,15 +24,15 @@
       <button class="nav-btn active" data-tab="overview" type="button"><span class="nav-icon">◫</span>Tổng quan</button>
       <button class="nav-btn" data-tab="chat" type="button"><span class="nav-icon">◉</span>Chat</button>
       <button class="nav-btn" data-tab="integrations" type="button"><span class="nav-icon">⇄</span>Integrations</button>
-      <div class="nav-label">Chẩn đoán</div>
-      <button class="nav-btn" data-tab="logs" type="button"><span class="nav-icon">≡</span>Logs</button>
-      <button class="nav-btn" data-tab="audit" type="button"><span class="nav-icon">⌁</span>Tool audit</button>
-      <button class="nav-btn" data-tab="events" type="button"><span class="nav-icon">↯</span>HA events</button>
       <div class="nav-label">Tự động hóa</div>
       <button class="nav-btn" data-tab="approvals" type="button"><span class="nav-icon">✓</span>Approvals</button>
       <button class="nav-btn" data-tab="jobs" type="button"><span class="nav-icon">◷</span>Scheduler</button>
       <button class="nav-btn" data-tab="rules" type="button"><span class="nav-icon">◇</span>Event rules</button>
       <button class="nav-btn" data-tab="knowledge" type="button"><span class="nav-icon">▤</span>Knowledge</button>
+      <div class="nav-label">Chẩn đoán</div>
+      <button class="nav-btn" data-tab="logs" type="button"><span class="nav-icon">≡</span>Logs</button>
+      <button class="nav-btn" data-tab="audit" type="button"><span class="nav-icon">⌁</span>Tool audit</button>
+      <button class="nav-btn" data-tab="events" type="button"><span class="nav-icon">↯</span>HA events</button>
       <div class="nav-label">Hệ thống</div>
       <button class="nav-btn" data-tab="settings" type="button"><span class="nav-icon">⚙</span>Settings</button>
       <button class="nav-btn" data-tab="about" type="button"><span class="nav-icon">ⓘ</span>Giới thiệu</button>
@@ -68,7 +68,9 @@
 
     <section id="audit" class="panel">
       <div class="page-head"><div><h1 class="page-title">Tool audit</h1><p class="page-sub">Lịch sử tool call, arguments, result và error lưu trong SQLite; dữ liệu nhạy cảm được redact trước khi ghi.</p></div><button class="btn" data-action="audit-refresh" type="button">Làm mới</button></div>
-      <div class="help-box"><div class="help-cell"><strong>Mục đích</strong><span>Biết agent đã gọi tool gì và kết quả ra sao.</span></div><div class="help-cell"><strong>Cách dùng</strong><span>Mở từng mục để kiểm tra arguments/result đã được làm sạch.</span></div><div class="help-cell"><strong>Ví dụ</strong><span>ha_call_service thất bại → xem error và đối chiếu entity/service đã gửi.</span></div></div><div id="auditBox" class="item-list"><div class="empty">Chưa tải.</div></div>
+      <div class="help-box"><div class="help-cell"><strong>Mục đích</strong><span>Biết agent đã gọi tool gì và kết quả ra sao.</span></div><div class="help-cell"><strong>Cách dùng</strong><span>Chọn số bản ghi cần xem, cuộn trong danh sách và mở từng mục để kiểm tra arguments/result đã được làm sạch.</span></div><div class="help-cell"><strong>Ví dụ</strong><span>ha_call_service thất bại → xem error và đối chiếu entity/service đã gửi.</span></div></div>
+      <div class="toolbar audit-toolbar"><div class="field"><label for="auditLimit">Số bản ghi hiển thị</label><select id="auditLimit" class="select"><option>20</option><option selected>50</option><option>100</option><option>200</option><option>500</option></select></div><span id="auditCount" class="muted small-text"></span></div>
+      <div id="auditBox" class="item-list audit-scroll"><div class="empty">Chưa tải.</div></div>
     </section>
 
     <section id="events" class="panel">
@@ -92,7 +94,7 @@
     <section id="rules" class="panel">
       <div class="page-head"><div><h1 class="page-title">Event rules</h1><p class="page-sub">Kích hoạt agent khi entity Home Assistant đổi trạng thái.</p></div><button class="btn" data-action="rules-refresh" type="button">Làm mới</button></div>
       <div class="help-box"><div class="help-cell"><strong>Mục đích</strong><span>Phản ứng tự động theo state_changed mà vẫn giữ policy của agent.</span></div><div class="help-cell"><strong>Cách dùng</strong><span>Tạo rule disabled, xác nhận entity/to_state/cooldown rồi bật.</span></div><div class="help-cell"><strong>Ví dụ</strong><span>binary_sensor.front_door → on → “Kiểm tra ngữ cảnh và thông báo nếu mở bất thường.”</span></div></div>
-      <form id="ruleForm" class="card card-pad mb-14"><div class="card-title"><h3 id="ruleFormTitle">Tạo Event rule</h3><span id="ruleEditBadge" class="badge info hidden">Đang sửa</span></div><div class="form-grid"><input id="rulename" class="input" placeholder="Tên rule" required><input id="ruleentity" class="input" placeholder="sensor.xxx" required><input id="rulestate" class="input" placeholder="to_state (trống = mọi state)"><input id="rulecooldown" class="input" value="300" placeholder="cooldown giây"><textarea id="ruleprompt" class="textarea full" placeholder="Prompt chạy khi entity đổi state" required></textarea><label class="check"><input id="ruleNotify" type="checkbox" checked> Gửi thông báo khi rule chạy</label><div class="field"><label for="ruleNotifyChannel">Kênh thông báo</label><select id="ruleNotifyChannel" class="select"><option value="mobile">Điện thoại</option><option value="zalo">Zalo</option></select></div><div id="ruleZaloThreadField" class="field zalo-thread-only hidden"><label for="ruleZaloThread">Zalo thread_id</label><input id="ruleZaloThread" class="input mono" placeholder="Để trống = dùng cấu hình Zalo"><div class="field-hint">Nếu trống, dùng Thread ID thông báo mặc định; nếu chưa có thì dùng Allowed thread ID đã cấu hình.</div></div><div class="full row end"><button id="ruleCancelEdit" class="btn hidden" type="button" data-action="rule-edit-cancel">Hủy sửa</button><button id="ruleSubmitBtn" class="btn primary" type="submit">Tạo rule</button></div></div></form><div id="rulesBox" class="item-list"></div>
+      <form id="ruleForm" class="card card-pad mb-14"><div class="card-title"><h3 id="ruleFormTitle">Tạo Event rule</h3><span id="ruleEditBadge" class="badge info hidden">Đang sửa</span></div><div class="form-grid"><input id="rulename" class="input" placeholder="Tên rule" required><input id="ruleentity" class="input" placeholder="sensor.xxx" required><input id="rulestate" class="input" placeholder="to_state (trống = mọi state)"><input id="rulecooldown" class="input" value="300" placeholder="cooldown giây"><textarea id="ruleprompt" class="textarea full" placeholder="Prompt chạy khi entity đổi state" required></textarea><label class="check"><input id="ruleNotify" type="checkbox" checked> Gửi thông báo khi rule chạy</label><div class="field"><label for="ruleNotifyChannel">Kênh thông báo</label><select id="ruleNotifyChannel" class="select"><option value="mobile">Điện thoại</option><option value="zalo">Zalo</option></select></div><div class="field"><label for="ruleNotifyMode">Khi nào gửi</label><select id="ruleNotifyMode" class="select"><option value="always">Luôn gửi kết quả</option><option value="actionable">Chỉ gửi khi có nội dung cần báo</option></select><div class="field-hint">Giống Scheduler: chế độ điều kiện chỉ gửi khi có kết quả cần thông báo.</div></div><div id="ruleZaloThreadField" class="field zalo-thread-only hidden"><label for="ruleZaloThread">Zalo thread_id</label><input id="ruleZaloThread" class="input mono" placeholder="Để trống = dùng cấu hình Zalo"><div class="field-hint">Nếu trống, dùng Thread ID thông báo mặc định; nếu chưa có thì dùng Allowed thread ID đã cấu hình.</div></div><div class="full row end"><button id="ruleCancelEdit" class="btn hidden" type="button" data-action="rule-edit-cancel">Hủy sửa</button><button id="ruleSubmitBtn" class="btn primary" type="submit">Tạo rule</button></div></div></form><div id="rulesBox" class="item-list"></div>
     </section>
 
     <section id="knowledge" class="panel">

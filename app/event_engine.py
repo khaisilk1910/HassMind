@@ -3,13 +3,22 @@ from time import perf_counter
 from typing import Awaitable, Callable
 
 from .db import conn, utcnow
-from .notifications import normalize_notification_channel
+from .notifications import actionable_notification_prompt, always_notification_prompt, normalize_notification_channel
 from .observability import exception, get_logger, info, log_context
 from .settings import settings
 from .time_utils import now as local_now, parse_datetime
 
 RunPrompt = Callable[[str, str, bool, str, str], Awaitable[str]]
 logger = get_logger("event_engine")
+VALID_NOTIFY_MODES = {"always", "actionable"}
+
+
+def _normalize_notify_mode(value: str | None) -> str:
+    mode = str(value or "always").strip().lower()
+    if mode not in VALID_NOTIFY_MODES:
+        raise ValueError("notify_mode must be always or actionable")
+    return mode
+
 
 
 def _clean_thread_id(value: str | None) -> str:
@@ -25,17 +34,19 @@ def create_event_rule(
     notify: bool = True,
     notify_channel: str = "mobile",
     zalo_thread_id: str = "",
+    notify_mode: str = "always",
 ) -> dict:
     channel = normalize_notification_channel(notify_channel)
+    mode = _normalize_notify_mode(notify_mode)
     cooldown = max(60, int(cooldown_seconds))
     thread_id = _clean_thread_id(zalo_thread_id)
     with conn() as c:
         cur = c.execute(
-            "INSERT INTO event_rules(name,entity_id,to_state,prompt,cooldown_seconds,enabled,notify,notify_channel,zalo_thread_id,created_at) VALUES(?,?,?,?,?,0,?,?,?,?)",
-            (name, entity_id, to_state, prompt, cooldown, 1 if notify else 0, channel, thread_id, utcnow()),
+            "INSERT INTO event_rules(name,entity_id,to_state,prompt,cooldown_seconds,enabled,notify,notify_channel,zalo_thread_id,notify_mode,created_at) VALUES(?,?,?,?,?,0,?,?,?,?,?)",
+            (name, entity_id, to_state, prompt, cooldown, 1 if notify else 0, channel, thread_id, mode, utcnow()),
         )
         rid = int(cur.lastrowid)
-    info(logger, "event_rule_created", rule_id=rid, name=name, entity_id=entity_id, to_state=to_state, cooldown_seconds=cooldown, notify=notify, notify_channel=channel)
+    info(logger, "event_rule_created", rule_id=rid, name=name, entity_id=entity_id, to_state=to_state, cooldown_seconds=cooldown, notify=notify, notify_channel=channel, notify_mode=mode)
     return {"id": rid, "enabled": False, "message": "Created disabled; enable it from the dashboard/API after review."}
 
 
@@ -50,8 +61,10 @@ def update_event_rule(
     notify: bool,
     notify_channel: str,
     zalo_thread_id: str = "",
+    notify_mode: str = "always",
 ) -> dict:
     channel = normalize_notification_channel(notify_channel)
+    mode = _normalize_notify_mode(notify_mode)
     cooldown = max(60, int(cooldown_seconds))
     thread_id = _clean_thread_id(zalo_thread_id)
     with conn() as c:
@@ -60,12 +73,12 @@ def update_event_rule(
             raise KeyError(rule_id)
         c.execute(
             """
-            UPDATE event_rules SET name=?,entity_id=?,to_state=?,prompt=?,cooldown_seconds=?,notify=?,notify_channel=?,zalo_thread_id=?
+            UPDATE event_rules SET name=?,entity_id=?,to_state=?,prompt=?,cooldown_seconds=?,notify=?,notify_channel=?,zalo_thread_id=?,notify_mode=?
             WHERE id=?
             """,
-            (name, entity_id, to_state, prompt, cooldown, 1 if notify else 0, channel, thread_id, rule_id),
+            (name, entity_id, to_state, prompt, cooldown, 1 if notify else 0, channel, thread_id, mode, rule_id),
         )
-    info(logger, "event_rule_updated", rule_id=rule_id, name=name, entity_id=entity_id, to_state=to_state, cooldown_seconds=cooldown, notify=notify, notify_channel=channel)
+    info(logger, "event_rule_updated", rule_id=rule_id, name=name, entity_id=entity_id, to_state=to_state, cooldown_seconds=cooldown, notify=notify, notify_channel=channel, notify_mode=mode)
     return {"id": rule_id, "enabled": bool(row["enabled"])}
 
 
@@ -107,10 +120,18 @@ async def handle_state_event(event: dict, run_prompt: RunPrompt):
         started = perf_counter()
         with log_context(session_id=sid, source="event_rule", component="event_engine"):
             try:
-                info(logger, "event_rule_triggered", rule_id=rule["id"], entity_id=entity_id, new_state=new_state, notify=bool(rule["notify"]), notify_channel=rule.get("notify_channel") or "mobile")
+                notify_mode = _normalize_notify_mode(rule.get("notify_mode"))
+                runtime_prompt = rule["prompt"] + context
+                if bool(rule["notify"]):
+                    runtime_prompt = (
+                        actionable_notification_prompt(runtime_prompt)
+                        if notify_mode == "actionable"
+                        else always_notification_prompt(runtime_prompt)
+                    )
+                info(logger, "event_rule_triggered", rule_id=rule["id"], entity_id=entity_id, new_state=new_state, notify=bool(rule["notify"]), notify_channel=rule.get("notify_channel") or "mobile", notify_mode=notify_mode)
                 await run_prompt(
                     sid,
-                    rule["prompt"] + context,
+                    runtime_prompt,
                     bool(rule["notify"]),
                     rule.get("notify_channel") or "mobile",
                     rule.get("zalo_thread_id") or "",

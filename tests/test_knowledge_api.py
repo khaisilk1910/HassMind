@@ -147,23 +147,38 @@ class KnowledgeAPITests(unittest.TestCase):
         self.assertEqual(read.status_code,200,read.text)
         self.assertEqual(read.json()['zalo_thread_id'],'notify-1')
 
-        job=self.client.post('/api/jobs',json={'name':'Night','prompt':'Report','schedule_type':'interval','schedule_value':'300','notify':True,'notify_channel':'zalo','zalo_thread_id':'job-thread'},headers=self.token)
+        job=self.client.post('/api/jobs',json={'name':'Night','prompt':'Report','schedule_type':'interval','schedule_value':'300','notify':True,'notify_channel':'zalo','zalo_thread_id':'job-thread','notify_mode':'actionable'},headers=self.token)
         self.assertEqual(job.status_code,200,job.text)
         jid=job.json()['id']
-        edited=self.client.put(f'/api/jobs/{jid}',json={'name':'Night edited','prompt':'Report carefully','schedule_type':'daily','schedule_value':'21:00','notify':False,'notify_channel':'mobile','zalo_thread_id':''},headers=self.token)
+        edited=self.client.put(f'/api/jobs/{jid}',json={'name':'Night edited','prompt':'Report carefully','schedule_type':'daily','schedule_value':'21:00','notify':False,'notify_channel':'mobile','zalo_thread_id':'','notify_mode':'actionable'},headers=self.token)
         self.assertEqual(edited.status_code,200,edited.text)
         job_row=next(x for x in self.client.get('/api/jobs',headers=self.token).json() if x['id']==jid)
         self.assertEqual(job_row['name'],'Night edited')
         self.assertEqual(job_row['notify_channel'],'mobile')
+        self.assertEqual(job_row['notify_mode'],'actionable')
 
-        rule=self.client.post('/api/event-rules',json={'name':'Door','entity_id':'binary_sensor.door','to_state':'on','prompt':'Check','cooldown_seconds':120,'notify':True,'notify_channel':'zalo','zalo_thread_id':'rule-thread'},headers=self.token)
+        rule=self.client.post('/api/event-rules',json={'name':'Door','entity_id':'binary_sensor.door','to_state':'on','prompt':'Check','cooldown_seconds':120,'notify':True,'notify_channel':'zalo','zalo_thread_id':'rule-thread','notify_mode':'actionable'},headers=self.token)
         self.assertEqual(rule.status_code,200,rule.text)
         rid=rule.json()['id']
-        edited=self.client.put(f'/api/event-rules/{rid}',json={'name':'Door edited','entity_id':'binary_sensor.front_door','to_state':'off','prompt':'Check front','cooldown_seconds':60,'notify':True,'notify_channel':'mobile','zalo_thread_id':''},headers=self.token)
+        edited=self.client.put(f'/api/event-rules/{rid}',json={'name':'Door edited','entity_id':'binary_sensor.front_door','to_state':'off','prompt':'Check front','cooldown_seconds':60,'notify':True,'notify_channel':'mobile','zalo_thread_id':'','notify_mode':'actionable'},headers=self.token)
         self.assertEqual(edited.status_code,200,edited.text)
         rule_row=next(x for x in self.client.get('/api/event-rules',headers=self.token).json() if x['id']==rid)
         self.assertEqual(rule_row['name'],'Door edited')
         self.assertEqual(rule_row['notify_channel'],'mobile')
+        self.assertEqual(rule_row['notify_mode'],'actionable')
+
+    def test_scheduler_and_event_rule_api_pages_are_fixed_at_twenty(self):
+        for i in range(21):
+            job=self.client.post('/api/jobs',json={'name':f'Job {i}','prompt':'Check','schedule_type':'interval','schedule_value':'300','notify':False},headers=self.token)
+            self.assertEqual(job.status_code,200,job.text)
+            rule=self.client.post('/api/event-rules',json={'name':f'Rule {i}','entity_id':f'binary_sensor.test_{i}','prompt':'Check','cooldown_seconds':60,'notify':False},headers=self.token)
+            self.assertEqual(rule.status_code,200,rule.text)
+        jobs=self.client.get('/api/jobs?page=1&page_size=100',headers=self.token)
+        rules=self.client.get('/api/event-rules?page=1&page_size=100',headers=self.token)
+        self.assertEqual(jobs.status_code,200,jobs.text);self.assertEqual(rules.status_code,200,rules.text)
+        self.assertEqual(jobs.json()['page_size'],20);self.assertEqual(rules.json()['page_size'],20)
+        self.assertEqual(len(jobs.json()['items']),20);self.assertEqual(len(rules.json()['items']),20)
+        self.assertEqual(jobs.json()['pages'],2);self.assertEqual(rules.json()['pages'],2)
 
     def test_startup_shutdown_smoke_without_external_services(self):
         class HA:

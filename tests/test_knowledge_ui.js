@@ -140,7 +140,22 @@ test('Changed scan fingerprint makes stale index warning visible',()=>{const h=h
 
 test('Review queue is scroll-bounded and notification controls exist for every notifying feature',()=>{
   assert.match(css,/#knowledgeProposals\s*\{[^}]*max-height:[^;}]+;[^}]*overflow-y:auto/s);
-  for(const id of ['approvalNotifyChannel','approvalZaloThread','jobNotifyChannel','jobNotifyMode','jobZaloThread','ruleNotifyChannel','ruleZaloThread','knowledgeNotifyChannel','knowledgeZaloThread'])assert.match(html,new RegExp('id="'+id+'"'));
+  for(const id of ['approvalNotifyChannel','approvalZaloThread','jobNotifyChannel','jobNotifyMode','jobZaloThread','ruleNotifyChannel','ruleNotifyMode','ruleZaloThread','knowledgeNotifyChannel','knowledgeZaloThread','auditLimit'])assert.match(html,new RegExp('id="'+id+'"'));
+});
+
+test('Tool audit is scroll bounded and selectable count reloads the requested limit',async()=>{
+  assert.match(css,/\.audit-scroll\s*\{[^}]*max-height:[^;}]+;[^}]*overflow-y:auto/s);
+  const h=harness();h.nodes.get('auditLimit').value='200';h.respond(async(url)=>({body:url==='/api/audit?limit=200'?[{id:1,tool_name:'ha_get_states',error:null}]:[]}));
+  await h.run('loadAudit()');assert.equal(h.calls[0].url,'/api/audit?limit=200');assert.equal(h.nodes.get('auditCount').textContent,'1 bản ghi');assert.match(h.nodes.get('auditBox').innerHTML,/ha_get_states/);
+});
+
+test('Scheduler and Event rules request 20-item pages and render collapsed title summaries',async()=>{
+  const h=harness();h.respond(async(url)=>({body:url.startsWith('/api/jobs?')?{items:[{id:21,name:'Job 21',prompt:'Hidden scheduler content',schedule_type:'daily',schedule_value:'09:00',notify:1,notify_channel:'mobile',notify_mode:'always',enabled:true}],page:2,page_size:20,total:41,pages:3}:{items:[{id:22,name:'Rule 22',entity_id:'binary_sensor.door',to_state:'on',prompt:'Hidden rule content',cooldown_seconds:120,notify:1,notify_channel:'zalo',notify_mode:'actionable',enabled:true}],page:2,page_size:20,total:41,pages:3}}));
+  await h.run('loadJobs(2)');await h.run('loadRules(2)');
+  assert.equal(h.calls[0].url,'/api/jobs?page=2&page_size=20');assert.equal(h.calls[1].url,'/api/event-rules?page=2&page_size=20');
+  assert.match(h.nodes.get('jobsBox').innerHTML,/<details class=\"item automation-item\"><summary class=\"automation-summary\"><strong>#21 · Job 21<\/strong>/);
+  assert.match(h.nodes.get('rulesBox').innerHTML,/<details class=\"item automation-item\"><summary class=\"automation-summary\"><strong>#22 · Rule 22<\/strong>/);
+  assert.doesNotMatch(h.nodes.get('jobsBox').innerHTML,/<details class=\"item automation-item\" open/);assert.match(h.nodes.get('jobsBox').innerHTML,/Trang 2\/3 · 41 job/);assert.match(h.nodes.get('rulesBox').innerHTML,/Trang 2\/3 · 41 rule/);
 });
 
 test('Scheduler edit loads persisted values and PUT saves notification route',async()=>{
@@ -151,10 +166,10 @@ test('Scheduler edit loads persisted values and PUT saves notification route',as
 });
 
 test('Event rule edit loads persisted values and PUT saves notification route',async()=>{
-  const h=harness();h.run("rulesCache=[{id:8,name:'Door',entity_id:'binary_sensor.door',to_state:'on',prompt:'Check',cooldown_seconds:120,notify:1,notify_channel:'zalo',zalo_thread_id:'thread-8',enabled:true}];editRule(8)");
-  assert.equal(h.nodes.get('rulename').value,'Door');assert.equal(h.nodes.get('ruleNotifyChannel').value,'zalo');assert.equal(h.nodes.get('ruleZaloThread').value,'thread-8');assert.equal(h.nodes.get('ruleSubmitBtn').textContent,'Lưu thay đổi');
+  const h=harness();h.run("rulesCache=[{id:8,name:'Door',entity_id:'binary_sensor.door',to_state:'on',prompt:'Check',cooldown_seconds:120,notify:1,notify_channel:'zalo',notify_mode:'actionable',zalo_thread_id:'thread-8',enabled:true}];editRule(8)");
+  assert.equal(h.nodes.get('rulename').value,'Door');assert.equal(h.nodes.get('ruleNotifyChannel').value,'zalo');assert.equal(h.nodes.get('ruleNotifyMode').value,'actionable');assert.equal(h.nodes.get('ruleZaloThread').value,'thread-8');assert.equal(h.nodes.get('ruleSubmitBtn').textContent,'Lưu thay đổi');
   h.nodes.get('rulename').value='Door edited';h.respond(async(url)=>({body:url==='/api/event-rules/8'?{id:8,enabled:true}:[]}));await h.run('saveRule()');
-  const call=h.calls.find(x=>x.url==='/api/event-rules/8');assert.ok(call);assert.equal(call.opt.method,'PUT');const body=JSON.parse(call.opt.body);assert.equal(body.name,'Door edited');assert.equal(body.notify_channel,'zalo');assert.equal(body.zalo_thread_id,'thread-8');
+  const call=h.calls.find(x=>x.url==='/api/event-rules/8');assert.ok(call);assert.equal(call.opt.method,'PUT');const body=JSON.parse(call.opt.body);assert.equal(body.name,'Door edited');assert.equal(body.notify_channel,'zalo');assert.equal(body.notify_mode,'actionable');assert.equal(body.zalo_thread_id,'thread-8');
 });
 
 test('Approval notification preference saves Zalo route and defaults empty select to mobile',async()=>{

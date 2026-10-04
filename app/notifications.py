@@ -12,6 +12,7 @@ from .settings import settings
 logger = get_logger("notifications")
 VALID_NOTIFICATION_CHANNELS = {"mobile", "zalo"}
 NO_NOTIFY_TOKEN = "__HASSMIND_NO_NOTIFY__"
+_REDUNDANT_RESULT_PREFIX_RE = re.compile(r"^\s*(?:\\?[*_~`]+\s*)?\(\s*Theo(?:\s+đúng)?\s+yêu(?:\s+cầu)?\s*(?:\)?\s*\\?[*_~`]+\s*)*\(?\s*", re.IGNORECASE)
 _FEATURE_RE = re.compile(r"^[a-z0-9_.-]{1,64}$")
 
 
@@ -26,17 +27,77 @@ def should_suppress_notification(value: str | None) -> bool:
     return str(value or "").strip() == NO_NOTIFY_TOKEN
 
 
-def actionable_notification_prompt(prompt: str) -> str:
-    """Add the private result contract used by conditional Scheduler jobs."""
+def _notification_output_contract() -> str:
+    return (
+        "Kết quả này sẽ được gửi trực tiếp cho người dùng dưới dạng thông báo. "
+        "Hãy trả lời ngắn gọn, trực tiếp vào kết quả thực tế; không mở đầu bằng các câu như "
+        "'Theo đúng yêu cầu', 'Theo yêu cầu của bạn' hoặc mô tả lại quy tắc gửi thông báo. "
+        "Không bọc toàn bộ câu trả lời trong ngoặc, dấu * hoặc các ký hiệu Markdown. "
+        "Nếu không phát hiện thiết bị/sự kiện cần xử lý, hãy nói rõ điều đó bằng một câu tự nhiên, ví dụ "
+        "'✅ Không phát hiện thiết bị nào cần xử lý.'"
+    )
+
+
+def always_notification_prompt(prompt: str) -> str:
+    """Add presentation guidance for results that are always delivered."""
     return (
         str(prompt or "").rstrip()
         + "\n\n---\n"
-        + "[HassMind Scheduler notification protocol]\n"
-        + "Job này dùng chế độ chỉ thông báo khi có kết quả cần báo. "
+        + "[HassMind notification output protocol]\n"
+        + _notification_output_contract()
+    )
+
+
+def actionable_notification_prompt(prompt: str) -> str:
+    """Add the private result contract used by conditional Scheduler/Event rules."""
+    return (
+        str(prompt or "").rstrip()
+        + "\n\n---\n"
+        + "[HassMind conditional notification protocol]\n"
+        + "Tác vụ này dùng chế độ chỉ thông báo khi có kết quả cần báo. "
           "Nếu sau khi kiểm tra/thực hiện tác vụ, theo đúng yêu cầu của người dùng không có nội dung nào được phép gửi thông báo, "
           f"hãy trả về DUY NHẤT chuỗi {NO_NOTIFY_TOKEN} và không thêm bất kỳ ký tự nào. "
-          "Chỉ dùng chuỗi này khi điều kiện im lặng trong prompt của người dùng thực sự được thỏa mãn."
+          "Chỉ dùng chuỗi này khi điều kiện im lặng trong prompt của người dùng thực sự được thỏa mãn. "
+        + _notification_output_contract()
     )
+
+
+def clean_notification_result(value: str | None) -> str:
+    """Remove transport-hostile wrappers without rewriting the result semantics.
+
+    Older model outputs occasionally started with malformed text such as
+    ``*(Theo đúng yêu*(Hệ thống ...).*``.  That leaked raw markup into mobile
+    notifications and made an otherwise useful result look broken.  We only
+    strip that redundant meta-prefix plus orphan boundary markers; all actual
+    result text is preserved.
+    """
+    text = str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        return ""
+    original = text
+    text = re.sub(r"\\([*_~`#])", r"\1", text)
+    match = _REDUNDANT_RESULT_PREFIX_RE.match(text)
+    stripped_meta = bool(match)
+    if match:
+        text = text[match.end():].lstrip()
+    text = re.sub(r"^(?:[*_~`]{1,3}\s*)+", "", text)
+    text = re.sub(r"(?:\s*[*_~`]{1,3})+$", "", text).strip()
+    if stripped_meta:
+        # The malformed prefix usually opens a parenthesis around the real
+        # result. Remove only that matching-looking final wrapper.
+        text = re.sub(r"\)\s*([.!?])?\s*$", lambda m: (m.group(1) or ""), text).strip()
+        text = re.sub(
+            r",?\s*(?:đúng\s+)?theo\s+(?:điều\s+kiện|yêu\s+cầu)\s+không\s+(?:được\s+)?gửi\s+thông\s+báo\s*([.!?]?)$",
+            lambda m: (m.group(1) or "."),
+            text,
+            flags=re.IGNORECASE,
+        ).strip()
+    if text and text[0] not in "#->" and not re.match(r"^[\u2600-\u27BF\U0001F300-\U0001FAFF]", text):
+        if re.search(r"\b(?:không phát hiện|không ghi nhận|không có .* cần xử lý|bình thường|hoàn tất|thành công)\b", text, re.IGNORECASE):
+            text = "✅ " + text
+        elif re.search(r"\b(?:cảnh báo|lỗi|thất bại|nguy hiểm|mất kết nối|không khả dụng)\b", text, re.IGNORECASE):
+            text = "⚠️ " + text
+    return text or original
 
 
 def normalize_notification_channel(value: str | None) -> str:
@@ -169,7 +230,8 @@ async def send_notification(
     if channel == "mobile":
         if ha is None:
             return {"skipped": True, "channel": "mobile", "reason": "Home Assistant client unavailable"}
-        mobile_message = format_mobile_notification(message)
+        clean_message = clean_notification_result(message)
+        mobile_message = format_mobile_notification(clean_message)
         mobile_title = format_mobile_notification_title(title)
         if actions:
             result = await ha.notify(mobile_message, title=mobile_title, actions=actions)
@@ -195,7 +257,7 @@ async def send_notification(
     # The same rich-text compiler used by normal Zalo chat replies is used by
     # ZaloClient.send_message. Keep source markup here; it will be compiled to
     # msg + zca-js styles and never shown as raw Markdown markers.
-    body = str(message or "").strip()
+    body = clean_notification_result(message)
     if actions:
         body = body + "\n\n💡 Mở Web Admin → Approvals để Duyệt hoặc Từ chối thay đổi."
     rich = f"# 📢 {title}\n\n{body}".strip()

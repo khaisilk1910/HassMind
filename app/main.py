@@ -39,14 +39,14 @@ from .auth import (
     session_from_request,
     require_session,
 )
-from .db import add_event, conn, get_messages, init_db, list_approvals, list_event_rules, list_jobs, normalize_stored_timestamps, recent_events, recent_tool_audit, scrub_sensitive_audit_history
+from .db import add_event, conn, get_messages, init_db, list_approvals, list_event_rules, list_event_rules_page, list_jobs, list_jobs_page, normalize_stored_timestamps, recent_events, recent_tool_audit, scrub_sensitive_audit_history
 from .event_engine import handle_state_event, set_rule_enabled, update_event_rule
 from .ha import HomeAssistantClient
 from .ha_integrations import HAIntegrationBridge
 from .integration_config import integration_config_view, load_runtime_integration_overrides, reset_integration_config, save_integration_config
 from .integrations import IntegrationHub
 from .message_format import split_zalo_message
-from .notifications import get_notification_preference, normalize_notification_channel, save_notification_preference, send_notification, should_suppress_notification
+from .notifications import clean_notification_result, get_notification_preference, normalize_notification_channel, save_notification_preference, send_notification, should_suppress_notification
 from .observability import (
     current_request_id,
     exception,
@@ -74,7 +74,7 @@ from .tools import ToolRuntime
 os.umask(0o077)
 configure_process_timezone()
 
-APP_VERSION = "1.3.5"
+APP_VERSION = "1.3.6"
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 setup_logging()
@@ -139,6 +139,7 @@ async def run_prompt(session_id: str, prompt: str, notify: bool, notify_channel:
         notification_ok: bool | None = None
         delivery_note = ""
         silent_result = bool(notify and should_suppress_notification(result))
+        display_result = result if silent_result or not notify else clean_notification_result(result)
         if silent_result:
             notification_ok = True
             info(logger, "system_notification_suppressed", reason="conditional_no_result", notify_channel=channel)
@@ -147,7 +148,7 @@ async def run_prompt(session_id: str, prompt: str, notify: bool, notify_channel:
                 notification_result = await send_notification(
                     ha,
                     integrations,
-                    result[:12000],
+                    display_result[:12000],
                     title=f"HassMind · {session_id}",
                     channel=channel,
                     zalo_thread_id=zalo_thread_id,
@@ -189,14 +190,14 @@ async def run_prompt(session_id: str, prompt: str, notify: bool, notify_channel:
         info(
             logger,
             "system_prompt_completed",
-            result_chars=len(result + delivery_note),
+            result_chars=len(display_result + delivery_note),
             notify=notify,
             notify_channel=channel,
             notification_ok=notification_ok,
         )
         if silent_result:
             return "🔕 Không có nội dung cần thông báo."
-        return result + delivery_note
+        return display_result + delivery_note
 
 
 async def event_callback(event: dict[str, Any]):
@@ -597,6 +598,7 @@ class RuleIn(BaseModel):
     notify: bool = True
     notify_channel: str = Field(default="mobile", pattern="^(mobile|zalo)$")
     zalo_thread_id: str = Field(default="", max_length=255)
+    notify_mode: str = Field(default="always", pattern="^(always|actionable)$")
 
 
 class NotificationPreferenceIn(BaseModel):
@@ -1238,8 +1240,8 @@ async def notification_preference_save(feature: str, body: NotificationPreferenc
 
 
 @app.get("/api/jobs", dependencies=[Depends(require_access)])
-async def jobs():
-    return list_jobs()
+async def jobs(page: int | None = Query(default=None, ge=1)):
+    return list_jobs() if page is None else list_jobs_page(page, 20)
 
 
 @app.post("/api/jobs", dependencies=[Depends(require_access)])
@@ -1291,14 +1293,14 @@ async def delete_job(job_id: int):
 
 
 @app.get("/api/event-rules", dependencies=[Depends(require_access)])
-async def rules():
-    return list_event_rules()
+async def rules(page: int | None = Query(default=None, ge=1)):
+    return list_event_rules() if page is None else list_event_rules_page(page, 20)
 
 
 @app.post("/api/event-rules", dependencies=[Depends(require_access)])
 async def create_rule_api(body: RuleIn):
     from .event_engine import create_event_rule
-    return create_event_rule(body.name, body.entity_id, body.to_state, body.prompt, body.cooldown_seconds, body.notify, body.notify_channel, body.zalo_thread_id)
+    return create_event_rule(body.name, body.entity_id, body.to_state, body.prompt, body.cooldown_seconds, body.notify, body.notify_channel, body.zalo_thread_id, body.notify_mode)
 
 
 @app.put("/api/event-rules/{rule_id}", dependencies=[Depends(require_access)])
@@ -1314,6 +1316,7 @@ async def update_rule_api(rule_id: int, body: RuleIn):
             notify=body.notify,
             notify_channel=body.notify_channel,
             zalo_thread_id=body.zalo_thread_id,
+            notify_mode=body.notify_mode,
         )
     except KeyError:
         raise HTTPException(404, "Event rule not found")

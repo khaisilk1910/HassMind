@@ -269,6 +269,7 @@ def init_db():
               notify INTEGER NOT NULL DEFAULT 1,
               notify_channel TEXT NOT NULL DEFAULT 'mobile',
               zalo_thread_id TEXT NOT NULL DEFAULT '',
+              notify_mode TEXT NOT NULL DEFAULT 'always',
               last_triggered TEXT,
               created_at TEXT NOT NULL
             );
@@ -386,6 +387,8 @@ def init_db():
             c.execute("ALTER TABLE event_rules ADD COLUMN notify_channel TEXT NOT NULL DEFAULT 'mobile'")
         if "zalo_thread_id" not in rule_columns:
             c.execute("ALTER TABLE event_rules ADD COLUMN zalo_thread_id TEXT NOT NULL DEFAULT ''")
+        if "notify_mode" not in rule_columns:
+            c.execute("ALTER TABLE event_rules ADD COLUMN notify_mode TEXT NOT NULL DEFAULT 'always'")
         custom_columns = {row["name"] for row in c.execute("PRAGMA table_info(custom_integrations)").fetchall()}
         if "actions_json" not in custom_columns:
             c.execute("ALTER TABLE custom_integrations ADD COLUMN actions_json TEXT NOT NULL DEFAULT '[]'")
@@ -445,6 +448,38 @@ def list_event_rules() -> list[dict[str, Any]]:
         rows = c.execute("SELECT * FROM event_rules ORDER BY id DESC").fetchall()
     return [dict(r) for r in rows]
 
+
+
+
+def _paged_rows(table: str, page: int = 1, page_size: int = 20) -> dict[str, Any]:
+    if table not in {"jobs", "event_rules"}:
+        raise ValueError("Unsupported paged table")
+    page = max(1, int(page))
+    page_size = min(100, max(1, int(page_size)))
+    with conn() as c:
+        total = int(c.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+        pages = max(1, (total + page_size - 1) // page_size)
+        page = min(page, pages)
+        offset = (page - 1) * page_size
+        rows = c.execute(
+            f"SELECT * FROM {table} ORDER BY id DESC LIMIT ? OFFSET ?",
+            (page_size, offset),
+        ).fetchall()
+    return {
+        "items": [dict(r) for r in rows],
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "pages": pages,
+    }
+
+
+def list_jobs_page(page: int = 1, page_size: int = 20) -> dict[str, Any]:
+    return _paged_rows("jobs", page, page_size)
+
+
+def list_event_rules_page(page: int = 1, page_size: int = 20) -> dict[str, Any]:
+    return _paged_rows("event_rules", page, page_size)
 
 def add_memory(text: str, tags: str = "", source: str = "user") -> int:
     with conn() as c:

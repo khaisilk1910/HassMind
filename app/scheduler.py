@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from time import perf_counter
 from typing import Awaitable, Callable
 from .db import conn, utcnow
-from .notifications import actionable_notification_prompt, normalize_notification_channel
+from .notifications import actionable_notification_prompt, always_notification_prompt, normalize_notification_channel
 from .observability import exception, get_logger, info, log_context
 from .settings import settings
 from .time_utils import local_tz, now as local_now, parse_datetime
@@ -147,8 +147,12 @@ async def scheduler_loop(stop: asyncio.Event, run_prompt: RunPrompt):
                     try:
                         notify_mode = _normalize_notify_mode(job.get("notify_mode"))
                         runtime_prompt = job["prompt"]
-                        if bool(job["notify"]) and notify_mode == "actionable":
-                            runtime_prompt = actionable_notification_prompt(runtime_prompt)
+                        if bool(job["notify"]):
+                            runtime_prompt = (
+                                actionable_notification_prompt(runtime_prompt)
+                                if notify_mode == "actionable"
+                                else always_notification_prompt(runtime_prompt)
+                            )
                         info(logger, "job_run_started", job_id=job["id"], name=job["name"], notify=bool(job["notify"]), notify_channel=job.get("notify_channel") or "mobile", notify_mode=notify_mode)
                         result = await run_prompt(
                             sid,

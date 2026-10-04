@@ -6,12 +6,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app import knowledge_governance as kg
-from app.db import conn, init_db
+from app.db import conn, init_db, list_event_rules_page, list_jobs_page
 from app.event_engine import create_event_rule, handle_state_event, set_rule_enabled, update_event_rule
 from app.integrations.zalo import ZaloClient
 from app.integration_config import load_runtime_integration_overrides, save_integration_config
 from app.message_format import format_mobile_notification, format_mobile_notification_title
 from app.notifications import (
+    clean_notification_result,
     get_notification_preference,
     resolve_zalo_thread_id,
     save_notification_preference,
@@ -241,7 +242,7 @@ class NotificationsAndEditingTests(unittest.TestCase):
             _next_run("interval", "29", now)
 
     def test_event_rule_create_and_edit_preserves_enabled_state_and_route(self):
-        created = create_event_rule("Door", "binary_sensor.door", "on", "Check door", 120, True, "zalo", "t2")
+        created = create_event_rule("Door", "binary_sensor.door", "on", "Check door", 120, True, "zalo", "t2", "actionable")
         rid = created["id"]
         set_rule_enabled(rid, True)
         updated = update_event_rule(
@@ -254,6 +255,7 @@ class NotificationsAndEditingTests(unittest.TestCase):
             notify=True,
             notify_channel="mobile",
             zalo_thread_id="",
+            notify_mode="always",
         )
         self.assertTrue(updated["enabled"])
         with conn() as c:
@@ -263,6 +265,28 @@ class NotificationsAndEditingTests(unittest.TestCase):
         self.assertEqual(row["entity_id"], "binary_sensor.front_door")
         self.assertEqual(row["cooldown_seconds"], 60)
         self.assertEqual(row["notify_channel"], "mobile")
+        self.assertEqual(row["notify_mode"], "always")
+
+    def test_notification_cleanup_repairs_malformed_always_result(self):
+        raw = r"*(Theo đúng yêu*(Hệ thống không ghi nhận đèn hoặc quạt nào đang bật tại khu vực vắng người cần thao tác tắt, đúng theo điều kiện không gửi thông báo).\*"
+        cleaned = clean_notification_result(raw)
+        self.assertEqual(cleaned, "✅ Hệ thống không ghi nhận đèn hoặc quạt nào đang bật tại khu vực vắng người cần thao tác tắt.")
+        mobile = format_mobile_notification(cleaned)
+        self.assertEqual(mobile, cleaned)
+        self.assertNotIn("*", mobile)
+        self.assertNotIn("Theo đúng yêu", mobile)
+
+    def test_scheduler_and_event_rule_pagination_is_fixed_at_twenty(self):
+        for i in range(25):
+            create_job(f"Job {i}", "Run", "interval", "300", False)
+            create_event_rule(f"Rule {i}", f"sensor.test_{i}", None, "Check", 60, False)
+        jobs = list_jobs_page(1, 20)
+        rules = list_event_rules_page(2, 20)
+        self.assertEqual(len(jobs["items"]), 20)
+        self.assertEqual(jobs["total"], 25)
+        self.assertEqual(jobs["pages"], 2)
+        self.assertEqual(len(rules["items"]), 5)
+        self.assertEqual(rules["page"], 2)
 
     def test_scheduler_runtime_passes_persisted_notification_route(self):
         created = create_job("Due", "Run due prompt", "interval", "300", True, "zalo", "runtime-job", "actionable")
@@ -285,7 +309,7 @@ class NotificationsAndEditingTests(unittest.TestCase):
         self.assertEqual(seen[0][2:], (True, "zalo", "runtime-job"))
 
     def test_event_runtime_passes_persisted_notification_route(self):
-        created = create_event_rule("Door", "binary_sensor.door", "on", "Check door", 60, True, "zalo", "runtime-rule")
+        created = create_event_rule("Door", "binary_sensor.door", "on", "Check door", 60, True, "zalo", "runtime-rule", "actionable")
         rid = created["id"]
         set_rule_enabled(rid, True)
         seen = []
@@ -299,6 +323,7 @@ class NotificationsAndEditingTests(unittest.TestCase):
         self.assertEqual(len(seen), 1)
         self.assertEqual(seen[0][0], f"event-rule:{rid}")
         self.assertTrue(seen[0][1].startswith("Check door"))
+        self.assertIn(NO_NOTIFY_TOKEN, seen[0][1])
         self.assertEqual(seen[0][2:], (True, "zalo", "runtime-rule"))
 
     def test_silent_notification_token_requires_exact_match(self):
@@ -345,7 +370,7 @@ class NotificationsAndEditingTests(unittest.TestCase):
             rule_cols = {row["name"] for row in c.execute("PRAGMA table_info(event_rules)")}
             pref = c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='notification_preferences'").fetchone()
         self.assertTrue({"notify_channel", "zalo_thread_id"} <= job_cols)
-        self.assertTrue({"notify_channel", "zalo_thread_id"} <= rule_cols)
+        self.assertTrue({"notify_channel", "zalo_thread_id", "notify_mode"} <= rule_cols)
         self.assertIsNotNone(pref)
 
 

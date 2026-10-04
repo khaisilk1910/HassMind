@@ -28,6 +28,21 @@ class ConditionalSchedulerNotifyTests(unittest.TestCase):
         finally:
             main.agent, main.ha, main.integrations = old_agent, old_ha, old_integrations
 
+    def test_run_prompt_cleans_malformed_always_result_before_send_and_storage(self):
+        old_agent, old_ha, old_integrations = main.agent, main.ha, main.integrations
+        try:
+            raw = r"*(Theo đúng yêu*(Hệ thống không ghi nhận đèn hoặc quạt nào đang bật tại khu vực vắng người cần thao tác tắt, đúng theo điều kiện không gửi thông báo).\*"
+            expected = "✅ Hệ thống không ghi nhận đèn hoặc quạt nào đang bật tại khu vực vắng người cần thao tác tắt."
+            main.agent = _Agent(raw)
+            main.ha = object()
+            main.integrations = object()
+            with patch.object(main, "send_notification", new=AsyncMock(return_value={"ok": True})) as send:
+                result = asyncio.run(main.run_prompt("job:100", "check", True, "mobile", ""))
+            self.assertEqual(result, expected)
+            self.assertEqual(send.await_args.args[2], expected)
+        finally:
+            main.agent, main.ha, main.integrations = old_agent, old_ha, old_integrations
+
     def test_run_prompt_still_sends_normal_result(self):
         old_agent, old_ha, old_integrations = main.agent, main.ha, main.integrations
         try:
