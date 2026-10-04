@@ -12,7 +12,7 @@ from app.skills import (
     read_skill,
     rollback_skill,
     set_skill_enabled,
-    test_skill,
+    test_skill as run_skill_test,
     update_skill,
     validate_skill_content,
 )
@@ -109,7 +109,7 @@ class SkillManagementTests(unittest.TestCase):
             checked["description"],
             checked["body"],
         )
-        report = test_skill("device-health-monitor")
+        report = run_skill_test("device-health-monitor")
         self.assertTrue(report["ok"])
         self.assertTrue(report["checks"]["name_matches"])
         self.assertTrue(report["checks"]["has_structure"])

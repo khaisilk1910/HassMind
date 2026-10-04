@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION='1.3.7';
+const APP_VERSION='1.3.8';
 const $=id=>document.getElementById(id);
 function makeSessionId(){if(globalThis.crypto&&typeof globalThis.crypto.randomUUID==='function')return globalThis.crypto.randomUUID();return 'web-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,12)}
 const uiState={sessionId:localStorage.getItem('hassmind_session')||makeSessionId(),activeTab:'overview',csrf:'',user:null,passwordMinLength:14};

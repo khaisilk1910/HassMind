@@ -1,15 +1,14 @@
-# HassMind v1.3.7 — AI Agent riêng cho Home Assistant
+# HassMind v1.3.8 — AI Agent riêng cho Home Assistant
 
-## Mới trong v1.3.7
+## Mới trong v1.3.8
 
-- Thêm **Skills Manager** trong Web Admin: tạo mới, sửa, kiểm tra, bật/tắt, xóa và xem lịch sử/rollback từng skill. Các thao tác ghi chỉ dành cho Admin và tiếp tục dùng CSRF/audit hiện có.
-- Tách skill thành hai lớp an toàn: `/app/config/skills` là **built-in read-only**, còn `/data/skills` là **user-managed read-write**. Khi cùng tên, bản trong `/data/skills` override built-in; xóa override sẽ tự trở về bản mặc định.
-- Thêm validation trước khi lưu/test: slug tên skill, YAML frontmatter `name` + `description`, kích thước tối đa, body không rỗng, cảnh báo cấu trúc; skill invalid/disabled không được agent sử dụng.
-- Thêm **version history + rollback** với snapshot trước thay đổi, ghi file atomic và quyền file/thư mục hạn chế. File skill dạng symbolic link bị từ chối để tránh đọc file ngoài thư mục quản lý.
-- Cài sẵn **21 skill Home Assistant** cho routing, presence, lighting, climate, device health, automation, Knowledge, notification, security, energy, battery, night mode, arrival/departure, air quality, leak response, integration, report, self-maintenance và incident diagnosis.
-- System prompt được nối với `skill_list`/`skill_read`: workflow lặp lại sẽ ưu tiên skill đang enabled và valid, trong khi state Home Assistant realtime vẫn luôn được đọc từ tool thay vì Knowledge/skill tĩnh.
+- **Hotfix giao diện Skills:** sửa lỗi hai card chính bị co thành cột rất hẹp trên desktop do thiếu CSS grid span `5/12` và `7/12`.
+- Bổ sung layout responsive an toàn: desktop rộng dùng `7/12 + 5/12`; màn hình <= 1280px tự xếp một cột để không bị chật bởi sidebar.
+- Thêm `min-width: 0`, giới hạn search box và `width: 100%` cho danh sách Skills để nút/textarea/scroll không làm vỡ grid.
+- Bump cache key CSS/JS lên `1.3.8` để trình duyệt lấy asset mới ngay sau deploy.
+- Giữ nguyên toàn bộ Managed Skills của v1.3.7: CRUD, Test, Enable/Disable, version history, rollback, `/data/skills`, validation và 21 skill Home Assistant built-in.
 
-Đọc [changelog 1.3.7](CHANGELOG_V1.3.7.md) và [QA 1.3.7](QA_V1.3.7.md).
+Đọc [changelog 1.3.8](CHANGELOG_V1.3.8.md) và [QA 1.3.8](QA_V1.3.8.md).
 
 ## Mới trong v1.3.6
 
@@ -372,7 +371,7 @@ Không lưu password/token trong knowledge.
 
 ## 10. Skills
 
-HassMind v1.3.7 có trang **Skills** trong Web Admin để tạo, sửa, test, bật/tắt, xóa user skill, xem version và rollback.
+HassMind v1.3.8 có trang **Skills** trong Web Admin để tạo, sửa, test, bật/tắt, xóa user skill, xem version và rollback.
 
 - Built-in skills nằm trong `/app/config/skills` và được xem là read-only.
 - Khi sửa built-in, HassMind tạo override trong `/data/skills`.
