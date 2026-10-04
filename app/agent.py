@@ -7,8 +7,9 @@ from openai import AsyncOpenAI
 
 from .custom_integrations import custom_tool_is_read_only
 from .db import add_message, get_messages, add_tool_audit
-from .ha import knowledge_control_context
-from .observability import exception, get_logger, info, log_context, preview, warning
+from .ha import assert_knowledge_target_safe, knowledge_control_context
+from .observability import exception, get_logger, info, log_context, preview, redact, warning
+from .policy import assert_service_allowed
 from .settings import settings
 from .tools import ToolRuntime, schemas
 
@@ -54,6 +55,17 @@ _READ_ONLY_TOOLS = {
     "shopping_list", "yt_dlp_search", "yt_dlp_get_job",
 }
 _READ_ONLY_PREFIXES = ("facedetect_",)
+
+_SKILL_DRY_RUN_PROMPT = (
+    "SKILL DRY RUN MODE. This is an administrator simulation. The selected skill workflow is provided "
+    "in a separate system message and must be followed only within normal HassMind safety policy. "
+    "Use read-only tools when useful to inspect real current state. You may propose non-read-only tool calls "
+    "when the workflow would normally need them, but the backend will intercept every such call and NEVER "
+    "execute it. Never claim that a service call, notification, proposal, schedule, memory mutation, integration "
+    "action, automation/script change, playback or TTS actually happened. Do not load or switch to another skill. "
+    "When enough evidence is available, return a concise response preview that clearly separates observed state "
+    "from planned actions and mentions that this is a dry run."
+)
 
 
 def _is_read_only_tool(name: str) -> bool:
@@ -139,6 +151,319 @@ class Agent:
             )
             content = json.dumps({"error": type(exc).__name__, "message": str(exc)}, ensure_ascii=False)
         return {"role": "tool", "tool_call_id": tc.id, "content": content}
+
+    @staticmethod
+    def _dry_run_action_summary(name: str, args: dict) -> str:
+        if name == "ha_call_service":
+            action = f"{args.get('domain', '?')}.{args.get('service', '?')}"
+            target = args.get("target") or {}
+            entity = target.get("entity_id") if isinstance(target, dict) else None
+            if entity:
+                return f"{action} -> {entity}"
+            return action
+        if name == "ha_propose_config_change":
+            return f"proposal {args.get('kind', '?')}:{args.get('target_id', '?')}"
+        if name == "ha_apply_approved_change":
+            return f"apply approved change {args.get('change_id', '?')}"
+        if name == "ha_propose_rollback":
+            return f"rollback proposal {args.get('change_id', '?')}"
+        if name == "schedule_propose":
+            return f"schedule proposal: {args.get('name', '')}".strip()
+        if name == "event_rule_propose":
+            return f"event rule proposal: {args.get('name', '')}".strip()
+        if name == "zalo_send_message":
+            return "send Zalo message"
+        if name == "ha_tts_speak":
+            return f"TTS -> {args.get('media_player_entity_id', '?')}"
+        if name.startswith("camera_tts_"):
+            return f"{name} -> {args.get('camera', '?')}"
+        if name in {"shopping_add", "shopping_edit", "shopping_delete"}:
+            return name.replace("_", " ")
+        if name in {"yt_dlp_play", "yt_dlp_download"}:
+            return name.replace("_", " ")
+        if name.startswith("ci_"):
+            return f"custom integration action {name}"
+        return name.replace("_", " ")
+
+    def _dry_run_is_safe_read(self, name: str) -> bool:
+        """Return True only for reads that cannot be a declared HTTP mutation.
+
+        Custom integrations are operator-defined. A custom action may be labelled
+        ``read`` while still using POST/PUT/PATCH/DELETE. Normal chat preserves the
+        configured mode, but scenario dry-run uses a stricter boundary: only a
+        custom action declared ``read`` *and* using GET may be executed.
+        """
+        if name.startswith("ci_"):
+            target = self.runtime.integrations.custom_tools.get(name)
+            if target is None:
+                return False
+            _integration_id, action = target
+            return (
+                str(action.get("mode") or "").lower() == "read"
+                and str(action.get("method") or "GET").upper() == "GET"
+            )
+        return _is_read_only_tool(name)
+
+    def _dry_run_policy_check(self, name: str, args: dict) -> tuple[str, str]:
+        """Evaluate side-effect tool policy without executing the tool."""
+        try:
+            custom_action = None
+            if name.startswith("ci_"):
+                target = self.runtime.integrations.custom_tools.get(name)
+                if target is None:
+                    raise PermissionError("Custom integration action is not enabled for the agent")
+                _integration_id, custom_action = target
+
+            if name == "ha_call_service":
+                assert_service_allowed(str(args.get("domain") or ""), str(args.get("service") or ""))
+                assert_knowledge_target_safe(args, domain=str(args.get("domain") or ""))
+            elif name in {"ha_tts_speak", "yt_dlp_play", "mcp_call"}:
+                assert_knowledge_target_safe(args)
+            elif custom_action is not None and str(custom_action.get("mode") or "").lower() != "read":
+                assert_knowledge_target_safe(args)
+
+            if name.startswith("camera_tts_") and name not in {"camera_tts_cameras", "camera_tts_job"}:
+                if self.runtime.integrations.camera_tts is None:
+                    raise RuntimeError("Camera TTS integration is disabled")
+                if not settings.camera_tts_allow_actions:
+                    raise PermissionError("Camera TTS actions are disabled by CAMERA_TTS_ALLOW_ACTIONS")
+            elif name == "zalo_send_message":
+                if self.runtime.integrations.zalo is None:
+                    raise RuntimeError("Zalo integration is disabled")
+                if not settings.zalo_allow_send:
+                    raise PermissionError("Zalo sending is disabled by ZALO_ALLOW_SEND")
+            elif name in {"shopping_add", "shopping_edit"}:
+                if not settings.shopping_allow_mutations:
+                    raise PermissionError("Shopping History mutations are disabled by SHOPPING_ALLOW_MUTATIONS")
+            elif name == "shopping_delete":
+                if not settings.shopping_allow_mutations:
+                    raise PermissionError("Shopping History mutations are disabled by SHOPPING_ALLOW_MUTATIONS")
+                if not settings.shopping_allow_delete:
+                    raise PermissionError("Shopping History delete is disabled by SHOPPING_ALLOW_DELETE")
+            elif name == "yt_dlp_play":
+                if not settings.ytdlp_allow_playback:
+                    raise PermissionError("yt-dlp playback is disabled by YTDLP_ALLOW_PLAYBACK")
+            elif name == "yt_dlp_download":
+                if not settings.ytdlp_allow_downloads:
+                    raise PermissionError("yt-dlp downloads are disabled by YTDLP_ALLOW_DOWNLOADS")
+            elif name == "ha_tts_speak":
+                if not settings.wyoming_allow_tts:
+                    raise PermissionError("Wyoming/HA TTS actions are disabled by WYOMING_ALLOW_TTS")
+
+            if custom_action is not None:
+                custom_mode = str(custom_action.get("mode") or "").lower()
+                custom_method = str(custom_action.get("method") or "GET").upper()
+                if custom_mode == "read" and custom_method != "GET":
+                    return (
+                        "conditional",
+                        f"Custom integration declares read mode but uses {custom_method}; dry-run suppresses it as a possible mutation",
+                    )
+
+            if name == "ha_apply_approved_change":
+                return "conditional", "Real execution still requires backend status=approved at apply time"
+            if name == "mcp_call":
+                return "conditional", "Generic MCP tool policy is rechecked by the target server at real execution time"
+            return "allowed", "Allowed by current HassMind policy; action suppressed by dry-run boundary"
+        except Exception as exc:
+            return "blocked", str(exc)
+
+    async def dry_run_skill(self, name: str, user_text: str) -> dict:
+        """Run a selected skill against live read-only evidence while suppressing all mutations."""
+        from .skills import read_skill
+
+        prompt = str(user_text or "").strip()
+        if not prompt:
+            raise ValueError("Dry-run prompt must not be empty")
+        skill = read_skill(name, include_disabled=True)
+        if not skill.get("valid", False):
+            raise ValueError("Skill is invalid; fix validation errors before scenario dry-run")
+
+        started = perf_counter()
+        tool_schemas = [
+            spec for spec in schemas()
+            if str((spec.get("function") or {}).get("name") or "") not in {"skill_list", "skill_read"}
+        ]
+        messages = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "system", "content": _KNOWLEDGE_SAFETY_PROMPT},
+            {"role": "system", "content": _SKILL_DRY_RUN_PROMPT},
+            {
+                "role": "system",
+                "content": (
+                    f"SELECTED SKILL: {skill['name']}\n"
+                    f"Version: {skill.get('version')}\n"
+                    f"Enabled in normal chat: {bool(skill.get('enabled', True))}\n\n"
+                    f"{skill.get('raw') or skill.get('body') or ''}"
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ]
+        trace: list[dict] = []
+        planned_actions: list[dict] = []
+        response_preview = ""
+        max_rounds = min(max(2, int(settings.max_tool_rounds)), 6)
+
+        with knowledge_control_context(prompt):
+            for round_index in range(1, max_rounds + 1):
+                resp = await self.client.chat.completions.create(
+                    model=settings.openai_model,
+                    messages=messages,
+                    tools=tool_schemas,
+                    tool_choice="auto",
+                )
+                msg = resp.choices[0].message
+                assistant_msg = {"role": "assistant", "content": msg.content or ""}
+                if msg.tool_calls:
+                    assistant_msg["tool_calls"] = [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                        }
+                        for tc in msg.tool_calls
+                    ]
+                messages.append(assistant_msg)
+
+                if not msg.tool_calls:
+                    response_preview = msg.content or ""
+                    break
+
+                for tc in list(msg.tool_calls):
+                    name_called = str(tc.function.name or "")
+                    try:
+                        args = json.loads(tc.function.arguments or "{}")
+                        if not isinstance(args, dict):
+                            raise ValueError("Tool arguments must be a JSON object")
+                    except Exception as exc:
+                        trace.append({
+                            "round": round_index,
+                            "tool": name_called,
+                            "kind": "invalid",
+                            "executed": False,
+                            "status": "error",
+                            "arguments": {},
+                            "error": f"{type(exc).__name__}: {exc}",
+                        })
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": json.dumps({"error": type(exc).__name__, "message": str(exc)}, ensure_ascii=False),
+                        })
+                        continue
+
+                    safe_args = redact(args)
+                    if self._dry_run_is_safe_read(name_called):
+                        read_started = perf_counter()
+                        try:
+                            result = await self.runtime.call(name_called, args)
+                            trace.append({
+                                "round": round_index,
+                                "tool": name_called,
+                                "kind": "read",
+                                "executed": True,
+                                "status": "ok",
+                                "arguments": safe_args,
+                                "duration_ms": round((perf_counter() - read_started) * 1000, 2),
+                            })
+                            content = json.dumps(result, ensure_ascii=False, default=str)
+                        except Exception as exc:
+                            trace.append({
+                                "round": round_index,
+                                "tool": name_called,
+                                "kind": "read",
+                                "executed": True,
+                                "status": "error",
+                                "arguments": safe_args,
+                                "duration_ms": round((perf_counter() - read_started) * 1000, 2),
+                                "error": f"{type(exc).__name__}: {exc}",
+                            })
+                            content = json.dumps({"error": type(exc).__name__, "message": str(exc)}, ensure_ascii=False)
+                        messages.append({"role": "tool", "tool_call_id": tc.id, "content": content})
+                        continue
+
+                    policy_status, policy_reason = self._dry_run_policy_check(name_called, args)
+                    action = {
+                        "round": round_index,
+                        "tool": name_called,
+                        "arguments": safe_args,
+                        "summary": self._dry_run_action_summary(name_called, args),
+                        "executed": False,
+                        "policy": {"status": policy_status, "reason": policy_reason},
+                    }
+                    planned_actions.append(action)
+                    trace.append({**action, "kind": "planned_action", "status": "suppressed"})
+                    info(
+                        logger,
+                        "skill_dry_run_action_suppressed",
+                        skill=skill["name"],
+                        tool=name_called,
+                        policy_status=policy_status,
+                        arguments=preview(args),
+                    )
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": json.dumps({
+                            "dry_run": True,
+                            "executed": False,
+                            "tool": name_called,
+                            "policy": {"status": policy_status, "reason": policy_reason},
+                            "message": "Action was not executed. Continue the simulation and produce a response preview.",
+                        }, ensure_ascii=False),
+                    })
+
+            if not response_preview:
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        "Tool phase is finished. Do not request more tools. Produce the final dry-run response preview now. "
+                        "State explicitly that no action was executed."
+                    ),
+                })
+                final_resp = await self.client.chat.completions.create(
+                    model=settings.openai_model,
+                    messages=messages,
+                )
+                response_preview = final_resp.choices[0].message.content or ""
+
+        statuses = [str((x.get("policy") or {}).get("status") or "") for x in planned_actions]
+        if any(x == "blocked" for x in statuses):
+            policy_status = "blocked"
+        elif any(x == "conditional" for x in statuses):
+            policy_status = "conditional"
+        elif planned_actions:
+            policy_status = "allowed"
+        else:
+            policy_status = "no_action"
+        policy_reasons = []
+        for item in planned_actions:
+            reason = str((item.get("policy") or {}).get("reason") or "")
+            if reason and reason not in policy_reasons:
+                policy_reasons.append(reason)
+
+        return {
+            "ok": True,
+            "dry_run": True,
+            "skill": {
+                "name": skill.get("name"),
+                "version": skill.get("version"),
+                "source": skill.get("source"),
+                "enabled": skill.get("enabled"),
+                "valid": skill.get("valid"),
+            },
+            "prompt": prompt,
+            "tools": trace,
+            "expected_tools": list(dict.fromkeys(str(x.get("tool") or "") for x in trace if x.get("tool"))),
+            "planned_actions": planned_actions,
+            "policy": {"status": policy_status, "reasons": policy_reasons},
+            "execution": {
+                "actions_executed": 0,
+                "read_tools_executed": sum(1 for x in trace if x.get("kind") == "read" and x.get("executed")),
+            },
+            "response_preview": response_preview,
+            "rounds": max([int(x.get("round") or 0) for x in trace] or [1]),
+            "duration_ms": round((perf_counter() - started) * 1000, 2),
+        }
 
     async def chat(self, session_id: str, user_text: str, source: str = "web") -> str:
         with knowledge_control_context(user_text):

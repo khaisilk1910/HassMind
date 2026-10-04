@@ -4,15 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="color-scheme" content="dark">
-  <title>HassMind v1.3.8</title>
+  <title>HassMind v1.3.9</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/app.css?v=1.3.8">
-  <script src="/static/app.js?v=1.3.8" defer></script>
+  <link rel="stylesheet" href="/static/app.css?v=1.3.9">
+  <script src="/static/app.js?v=1.3.9" defer></script>
 </head>
 <body>
 <div class="app">
   <header class="topbar">
-    <div class="brand"><img class="brand-logo" src="/favicon.svg" alt="HassMind"><div><div class="brand-title">HassMind</div><div class="version">v1.3.8 · Managed Skills & Knowledge</div></div></div>
+    <div class="brand"><img class="brand-logo" src="/favicon.svg" alt="HassMind"><div><div class="brand-title">HassMind</div><div class="version">v1.3.9 · Skill Dry Run & Prompt Library</div></div></div>
     <div id="healthPill" class="health-pill"><span class="health-dot"></span><span id="healthText">Đang kiểm tra…</span></div>
     <div class="top-spacer"></div>
     <div class="user-chip"><div id="userAvatar" class="user-avatar">A</div><span id="currentUser">admin</span><button id="logoutBtn" class="btn small" type="button">Đăng xuất</button></div>
@@ -51,6 +51,7 @@
     <section id="chat" class="panel">
       <div class="page-head"><div><h1 class="page-title">Chat với HassMind</h1><p class="page-sub">Mỗi lỗi API có Request ID để tra trực tiếp trong Logs.</p></div><button class="btn" data-action="new-session" type="button">Phiên mới</button></div>
       <div class="help-box"><div class="help-cell"><strong>Mục đích</strong><span>Ra lệnh và hỏi trạng thái Home Assistant qua agent.</span></div><div class="help-cell"><strong>Cách dùng</strong><span>Mô tả mục tiêu rõ ràng; thao tác nhạy cảm vẫn đi qua policy và approval.</span></div><div class="help-cell"><strong>Ví dụ</strong><span>“Kiểm tra nhiệt độ phòng khách, điều hòa và cho tôi biết có gì bất thường.”</span></div></div>
+      <details id="skillPromptExamples" class="chat-skill-prompts mb-14"><summary><span>Câu hỏi mẫu cho Skills</span><span class="badge info">21 mẫu</span></summary><div class="chat-skill-prompts-body"><div class="row between skill-prompt-toolbar"><div class="small-text muted">Nhấn “Chèn câu hỏi” để đưa mẫu vào ô Chat; bạn có thể sửa lại trước khi gửi.</div><input id="skillPromptSearch" class="input skill-prompt-search" placeholder="Tìm skill hoặc nội dung…"></div><div id="skillPromptList" class="skill-prompt-list"><div class="empty">Đang tải câu mẫu…</div></div></div></details>
       <div class="chat-shell"><div class="card chat-box" id="chatbox"><div class="chat-empty" id="chatEmpty"><div><strong>HassMind sẵn sàng</strong><div class="small-text mt-10">Ctrl/⌘ + Enter để gửi.</div></div></div></div><div class="card composer"><textarea id="chatinput" class="textarea" placeholder="Nhập yêu cầu…"></textarea><div class="composer-foot"><div id="session" class="session mono"></div><button id="sendBtn" class="btn primary" type="button">Gửi</button></div></div></div>
     </section>
 
@@ -133,6 +134,7 @@
 # Safety rules
 ..." required></textarea></div><label class="check mt-10"><input id="skillEnabled" type="checkbox" checked> Bật skill cho agent</label><div id="skillValidationBox" class="skill-validation mt-10"><div class="muted small-text">Chưa kiểm tra.</div></div><div class="row end mt-14"><button id="skillCancelBtn" class="btn hidden" data-action="skill-edit-cancel" type="button">Hủy sửa</button><button class="btn" data-action="skill-validate" type="button">Kiểm tra</button><button id="skillSaveBtn" class="btn primary" type="submit">Tạo skill</button></div></form>
         </div>
+        <div id="skillDryRunCard" class="card card-pad span-12 skill-dry-run-card"><div class="card-title"><div><h3>Test bằng tình huống</h3><span class="muted">Mô phỏng workflow bằng dữ liệu đọc thực tế; mọi tool có side effect đều bị chặn.</span></div><span class="badge ok">SAFE DRY RUN</span></div><div class="security-note mb-14">Dry Run có thể gọi các tool chỉ-đọc để kiểm tra state/history/Knowledge thật. <strong>Không có action nào được thực thi</strong>: service call, TTS, Zalo, proposal, scheduler, event rule, config change và integration action có khả năng ghi đều chỉ được ghi nhận là “dự kiến”. Custom Integration chỉ được gọi thật khi là read + HTTP GET.</div><div class="form-grid skill-dry-run-form"><div class="field"><label for="skillDryRunSelect">Skill</label><select id="skillDryRunSelect" class="select"><option value="">Chọn skill…</option></select><div id="skillDryRunMeta" class="field-hint">Chọn skill để mô phỏng version đã lưu.</div></div><div class="field"><label>&nbsp;</label><div class="row"><button class="btn" data-action="skill-dry-run-example" type="button">Dùng câu mẫu</button><button id="skillDryRunBtn" class="btn primary" data-action="skill-dry-run" type="button">Dry Run Skill</button></div></div><div class="field full"><label for="skillDryRunPrompt">Test prompt</label><textarea id="skillDryRunPrompt" class="textarea" maxlength="20000" placeholder="Ví dụ: Phòng khách không có người thì tắt đèn và quạt đang bật."></textarea></div></div><div id="skillDryRunResult" class="skill-dry-run-result mt-14"><div class="empty">Chọn một skill, nhập tình huống rồi chạy Dry Run.</div></div></div>
         <div class="card card-pad span-12"><div class="card-title"><div><h3>Lịch sử version</h3><span id="skillHistoryTitle" class="muted">Chọn “Versions” ở một skill để xem lịch sử.</span></div></div><div id="skillHistoryBox" class="item-list"><div class="empty">Chưa chọn skill.</div></div></div>
       </div>
     </section>

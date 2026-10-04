@@ -77,7 +77,7 @@ from .tools import ToolRuntime
 os.umask(0o077)
 configure_process_timezone()
 
-APP_VERSION = "1.3.8"
+APP_VERSION = "1.3.9"
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 setup_logging()
@@ -629,6 +629,10 @@ class SkillToggleIn(BaseModel):
 
 class SkillRollbackIn(BaseModel):
     version: int = Field(ge=1)
+
+
+class SkillDryRunIn(BaseModel):
+    prompt: str = Field(min_length=1, max_length=20000)
 
 
 class ClientLogIn(BaseModel):
@@ -1594,6 +1598,38 @@ async def skill_test(name: str):
         return test_skill(name)
     except (KeyError, ValueError):
         raise HTTPException(404, "Skill not found")
+
+
+@app.post("/api/skills/{name}/dry-run", dependencies=[Depends(require_admin)])
+async def skill_dry_run(name: str, body: SkillDryRunIn, request: Request):
+    if agent is None:
+        raise HTTPException(503, "Agent is starting")
+    try:
+        result = await agent.dry_run_skill(name, body.prompt)
+    except KeyError:
+        raise HTTPException(404, "Skill not found")
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+    record_admin_audit(
+        "skill_dry_run", request,
+        user_id=request.state.admin_session["user_id"],
+        username=request.state.admin_session["username"],
+        details=(
+            f"skill={name};planned_actions={len(result.get('planned_actions') or [])};"
+            f"policy={str((result.get('policy') or {}).get('status') or '')}"
+        ),
+    )
+    info(
+        logger,
+        "skill_dry_run_completed",
+        skill=name,
+        planned_actions=len(result.get("planned_actions") or []),
+        read_tools=int((result.get("execution") or {}).get("read_tools_executed") or 0),
+        policy_status=str((result.get("policy") or {}).get("status") or ""),
+        duration_ms=result.get("duration_ms"),
+        component="skills",
+    )
+    return result
 
 
 @app.get("/api/skills/{name}/versions", dependencies=[Depends(require_admin)])

@@ -19,5 +19,5 @@ def test_skills_responsive_stack_and_min_width():
 
 
 def test_skills_assets_cache_busted():
-    assert '/static/app.css?v=1.3.8' in HTML
-    assert '/static/app.js?v=1.3.8' in HTML
+    assert '/static/app.css?v=1.3.9' in HTML
+    assert '/static/app.js?v=1.3.9' in HTML

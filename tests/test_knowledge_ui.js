@@ -13,13 +13,14 @@ const script=fs.readFileSync(path.join(root,'static','app.js'),'utf8').replace(/
 
 function harness(){
   const nodes=new Map(),calls=[];
-  const element=()=>({innerHTML:'',textContent:'',value:'',checked:false,disabled:false,dataset:{},style:{},classList:{add(){},remove(){},toggle(){}},appendChild(){},remove(){},addEventListener(){},querySelector(){return null},querySelectorAll(){return []},reset(){},scrollIntoView(){},focus(){}});
+  const element=()=>({innerHTML:'',textContent:'',value:'',checked:false,disabled:false,dataset:{},style:{},classList:{add(){},remove(){},toggle(){}},appendChild(){},replaceChildren(){},remove(){},removeAttribute(){},setAttribute(){},addEventListener(){},querySelector(){return null},querySelectorAll(){return []},reset(){},scrollIntoView(){},focus(){},setSelectionRange(){}});
   for(const match of html.matchAll(/id="([^"]+)"/g))nodes.set(match[1],element());
   // This node is inserted into proposal details by the renderer.
   nodes.set('knowledgeDryRunResult',element());
+  nodes.set('skillDryRunPreview',element());
   const sandbox={URLSearchParams,Date,Set,Map,JSON,Math,Number,String,Array,Error,Promise,encodeURIComponent,
     localStorage:{getItem(){return null},setItem(){}},crypto:{randomUUID(){return 'test-session'}},
-    document:{getElementById(id){if(!nodes.has(id))throw new Error('Missing UI node: '+id);return nodes.get(id)},querySelectorAll(){return []},addEventListener(){},createElement:element},
+    document:{getElementById(id){if(!nodes.has(id))throw new Error('Missing UI node: '+id);return nodes.get(id)},querySelectorAll(){return []},addEventListener(){},createElement:element,createTextNode(text){return {textContent:String(text)}}},
     window:{addEventListener(){}},location:{href:'http://localhost/',replace(){}},navigator:{},setTimeout(){},setInterval(){},
     fetch:async(url,opt)=>{calls.push({url,opt});throw new Error('Unexpected request '+url)}};
   vm.createContext(sandbox);vm.runInContext(script,sandbox,{filename:'app.js'});
@@ -202,4 +203,30 @@ test('Skills manager loads disabled skills, renders source/version, and validate
   await h.run('loadSkills()');assert.match(h.nodes.get('skillsManageBox').innerHTML,/lighting-optimizer/);assert.match(h.nodes.get('skillsManageBox').innerHTML,/v1/);assert.match(h.nodes.get('skillsManageBox').innerHTML,/custom-home/);assert.match(h.nodes.get('skillsManageBox').innerHTML,/disabled/);
   h.nodes.get('skillName').value='new-skill';h.nodes.get('skillDescription').value='Mô tả đủ dài cho routing chính xác của skill mới.';h.nodes.get('skillBody').value='# Objective\nMục tiêu.\n\n# Workflow\n1. Kiểm tra state trước khi action.';h.nodes.get('skillEnabled').checked=true;
   await h.run('validateSkillDraft()');const call=h.calls.find(x=>x.url==='/api/skills/validate');assert.ok(call);assert.equal(call.opt.method,'POST');assert.equal(call.opt.headers['X-CSRF-Token'],'csrf-skill');assert.equal(JSON.parse(call.opt.body).name,'new-skill');assert.match(h.nodes.get('skillValidationBox').innerHTML,/Validation OK/);
+});
+
+
+test('Chat skill prompt library covers all 21 built-in skills and can insert a prompt',()=>{
+  const h=harness();
+  const count=h.run('SKILL_PROMPT_EXAMPLES.length');
+  const unique=h.run('new Set(SKILL_PROMPT_EXAMPLES.map(x=>x.skill)).size');
+  assert.equal(count,21);assert.equal(unique,21);
+  h.run('renderSkillPromptExamples()');
+  const output=h.nodes.get('skillPromptList').innerHTML;
+  assert.equal((output.match(/data-action="chat-use-skill-example"/g)||[]).length,21);
+  assert.match(output,/presence-aware-control/);assert.match(output,/incident-diagnosis/);
+  h.run("useChatSkillExample('presence-aware-control')");
+  assert.match(h.nodes.get('chatinput').value,/presence-aware-control/);
+});
+
+test('Scenario Dry Run posts selected skill prompt and renders zero executed actions',async()=>{
+  const h=harness();h.run("uiState.csrf='csrf-dry';skillUI.items=[{name:'presence-aware-control',description:'Presence',source:'builtin',enabled:true,valid:true,version:1}]");
+  h.nodes.get('skillDryRunSelect').value='presence-aware-control';h.nodes.get('skillDryRunPrompt').value='Kiểm tra phòng khách, chỉ mô phỏng.';
+  h.respond(async(url,opt)=>{
+    if(url==='/api/skills/presence-aware-control/dry-run')return {body:{ok:true,dry_run:true,skill:{name:'presence-aware-control',version:1,source:'builtin'},expected_tools:['ha_search_states','ha_call_service'],planned_actions:[{tool:'ha_call_service',summary:'light.turn_off -> light.room',arguments:{domain:'light'},policy:{status:'allowed',reason:'Allowed'}}],policy:{status:'allowed',reasons:['Allowed']},execution:{actions_executed:0,read_tools_executed:1},response_preview:'Dry run: chưa thực thi.',rounds:2,duration_ms:42}};
+    throw new Error('unexpected '+url);
+  });
+  await h.run('runSkillDryRun()');
+  const call=h.calls.find(x=>x.url==='/api/skills/presence-aware-control/dry-run');assert.ok(call);assert.equal(call.opt.method,'POST');assert.equal(call.opt.headers['X-CSRF-Token'],'csrf-dry');assert.equal(JSON.parse(call.opt.body).prompt,'Kiểm tra phòng khách, chỉ mô phỏng.');
+  assert.match(h.nodes.get('skillDryRunResult').innerHTML,/NO — Dry Run/);assert.match(h.nodes.get('skillDryRunResult').innerHTML,/ha_call_service/);assert.match(h.nodes.get('skillDryRunResult').innerHTML,/light.turn_off/);
 });
