@@ -1,0 +1,13 @@
+schema_version: 1
+scenes:
+  - entity_id: scene.di_ngu
+    name: Đi ngủ
+    aliases: [chế độ đi ngủ, chuẩn bị ngủ]
+    domain: scene
+    description: Scene đã cấu hình trong HA; xem ảnh hưởng trước khi sử dụng.
+scripts:
+  - entity_id: script.tat_toan_bo_den
+    name: Tắt toàn bộ đèn
+    aliases: [tắt hết đèn, tắt toàn bộ đèn]
+    domain: script
+    notes: Có registry không tự cấp quyền gọi script; policy/approval hiện hành vẫn áp dụng.

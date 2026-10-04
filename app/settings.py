@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 
 
 class Settings(BaseSettings):
@@ -84,6 +85,10 @@ class Settings(BaseSettings):
     telegram_allowed_chat_ids: str = ""
 
     knowledge_dir: str = "/knowledge"
+    knowledge_monitor_enabled: bool = True
+    knowledge_scan_interval_seconds: int = Field(default=300, ge=30, le=86400)
+    knowledge_notify_enabled: bool = True
+    knowledge_max_file_bytes: int = Field(default=2 * 1024 * 1024, ge=1024, le=16 * 1024 * 1024)
     skills_dir: str = "/app/config/skills"
     mcp_config: str = "/app/config/mcp_servers.yaml"
 

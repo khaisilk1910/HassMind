@@ -1,0 +1,37 @@
+schema_version: 1
+entities:
+  - entity_id: climate.may_lanh_phong_ngu
+    name: Máy lạnh phòng ngủ
+    aliases: [điều hòa phòng ngủ, máy lạnh phòng ngủ, máy lạnh ngủ]
+    area_id: bedroom
+    area: Phòng ngủ
+    domain: climate
+    capabilities: [power, temperature, hvac_mode, fan_mode]
+    preferred_actions:
+      turn_on: climate.turn_on
+      turn_off: climate.turn_off
+      set_temperature: climate.set_temperature
+    static_limits:
+      temperature: {min: 24, max: 27}
+    notes: Đọc nhiệt độ hiện tại và trạng thái trực tiếp từ Home Assistant.
+  - entity_id: light.den_tran_phong_ngu
+    name: Đèn trần phòng ngủ
+    aliases: [đèn phòng ngủ, đèn ngủ, đèn trần phòng ngủ]
+    area_id: bedroom
+    area: Phòng ngủ
+    domain: light
+    capabilities: [power, brightness]
+  - entity_id: light.den_ban_lam_viec
+    name: Đèn bàn làm việc
+    aliases: [đèn bàn, đèn bàn làm việc]
+    area_id: office
+    area: Phòng làm việc
+    domain: light
+    capabilities: [power, brightness, color_temperature]
+  - entity_id: media_player.tv_phong_khach
+    name: TV phòng khách
+    aliases: [TV, tivi, TV phòng khách]
+    area_id: living_room
+    area: Phòng khách
+    domain: media_player
+    capabilities: [power, volume, source, media]

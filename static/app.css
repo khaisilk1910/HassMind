@@ -55,3 +55,20 @@ details{border:1px solid var(--line);border-radius:10px;background:var(--surface
 @media(max-width:520px){.integration-summary{padding:13px}.integration-summary-description{display:none}.integration-summary-side .badge{display:none}.integration-editor-body,.integration-add-body{padding:13px}.integration-add-summary{padding:13px}.integration-editor-footer>.row{width:100%}.integration-editor-footer>.row .btn{flex:1}}
 
 .integration-actions-editor{grid-column:1/-1;border:1px solid #2a3748;border-radius:11px;background:#0d1219;overflow:hidden}.integration-actions-editor>summary{cursor:pointer;padding:11px 12px;font-size:12px;font-weight:700;display:flex;align-items:center;gap:8px;list-style:none}.integration-actions-editor>summary::-webkit-details-marker{display:none}.integration-actions-editor[open]>summary{border-bottom:1px solid var(--line)}.integration-actions-body{padding:12px}.custom-actions-json{min-height:250px;font-size:11.5px;line-height:1.45;tab-size:2}
+
+/* Knowledge registry, index status and human-reviewed proposals. */
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.btn:disabled{cursor:not-allowed;opacity:.45}
+.knowledge-filters{display:grid;grid-template-columns:1fr 1fr 1fr;gap:9px}.knowledge-filters .field{min-width:0}
+#knowledgeSearchForm>.row{flex-wrap:nowrap}#knowledgeQuery{flex:1;min-width:0}#knowledgeSearchBtn{flex:0 0 auto}
+.knowledge-result-meta{display:grid;grid-template-columns:110px minmax(0,1fr);gap:5px 10px;font-size:12px;line-height:1.45;margin:12px 0}.knowledge-result-meta dt{color:var(--muted)}.knowledge-result-meta dd{margin:0;overflow-wrap:anywhere}.knowledge-result .item-head strong{overflow-wrap:anywhere;min-width:0}
+.knowledge-preview>summary{padding:8px 11px;font-size:12px}.knowledge-preview pre{max-height:260px}
+.knowledge-warning{padding:9px 11px;margin-bottom:11px;border:1px solid rgba(230,176,79,.35);border-radius:9px;background:rgba(230,176,79,.06);font-size:12px;line-height:1.5;color:#f2c878}
+.knowledge-details-body{padding:12px}.knowledge-file-list{display:grid;gap:9px}.knowledge-file{padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:var(--surface)}.knowledge-file>strong{display:block;font-size:12px;overflow-wrap:anywhere}.knowledge-file>div{margin-top:5px;overflow-wrap:anywhere}
+.knowledge-issues{display:grid;gap:9px}.knowledge-issue{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--surface2);border:1px solid var(--line);border-radius:10px;overflow-wrap:anywhere}.knowledge-issue>.badge{flex:0 0 auto}.knowledge-issue>div{min-width:0}.knowledge-issue strong{font-size:12px}.knowledge-issue .mt-10{margin-top:5px}
+.knowledge-proposal p{line-height:1.5;overflow-wrap:anywhere}.knowledge-proposal .item-head strong{margin-right:auto}
+.knowledge-diff{overflow:hidden}.knowledge-diff summary{display:flex;gap:9px;align-items:center;flex-wrap:wrap;font-size:12px;overflow-wrap:anywhere}.knowledge-diff pre{max-height:400px;white-space:pre;overflow:auto;word-break:normal}.knowledge-hash{padding:9px 12px;border-top:1px solid var(--line);overflow-wrap:anywhere}
+.knowledge-draft-content{min-height:280px;line-height:1.5;font-size:12px;tab-size:2}
+#knowledgeProposalDetail>p{line-height:1.5;overflow-wrap:anywhere}#knowledgeProposalDetail .security-note{overflow-wrap:anywhere}#knowledgeScanBox>.row .mono{overflow-wrap:anywhere}
+@media(max-width:1100px){#knowledge .span-8,#knowledge .span-4{grid-column:span 12}}
+@media(max-width:640px){.knowledge-filters{grid-template-columns:1fr}#knowledgeSearchForm>.row{flex-direction:column;align-items:stretch}.knowledge-result-meta{grid-template-columns:90px minmax(0,1fr)}#knowledge .page-head{flex-direction:column;align-items:flex-start}.knowledge-issue{flex-direction:column}.knowledge-diff pre{font-size:11px}}

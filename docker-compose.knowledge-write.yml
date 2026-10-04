@@ -1,0 +1,6 @@
+# Optional explicit opt-in for applying human-approved Knowledge content proposals.
+# docker compose -f docker-compose.yml -f docker-compose.knowledge-write.yml up -d --build
+services:
+  hassmind:
+    volumes:
+      - ./knowledge:/knowledge:rw

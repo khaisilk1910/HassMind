@@ -1,0 +1,16 @@
+# Optional constraints for the main packages in the 1.3.0 QA environment.
+# pip install -r requirements.txt -c requirements-tested.txt
+# Windows QA additionally installed tzdata for zoneinfo.
+fastapi==0.142.2
+uvicorn==0.54.0
+httpx==0.28.1
+websockets==15.0.1
+openai==2.54.0
+pydantic==2.13.5
+pydantic-settings==2.15.0
+PyYAML==6.0.3
+mcp==1.30.0
+python-multipart==0.0.32
+argon2-cffi==25.1.0
+starlette==1.7.0
+tzdata==2026.5

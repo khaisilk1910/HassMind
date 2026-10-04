@@ -1,0 +1,15 @@
+# Alternative per-area sample: do not duplicate 20-entities.yaml definitions.
+schema_version: 1
+area:
+  id: bedroom
+  name: Phòng ngủ
+  aliases: [phòng ngủ chính, bedroom]
+entities:
+  - entity_id: climate.may_lanh_phong_ngu
+    name: Máy lạnh phòng ngủ
+    aliases: [máy lạnh phòng ngủ, điều hòa phòng ngủ]
+    domain: climate
+  - entity_id: light.den_tran_phong_ngu
+    name: Đèn trần phòng ngủ
+    aliases: [đèn phòng ngủ, đèn trần]
+    domain: light

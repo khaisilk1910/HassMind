@@ -1,5 +1,8 @@
 import asyncio
 import json
+import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from time import perf_counter
 from typing import Any, Awaitable, Callable
 from urllib.parse import urlparse
@@ -10,11 +13,144 @@ import websockets
 from .observability import exception, get_logger, info, preview, warning
 from .policy import assert_service_allowed
 from .settings import settings
+from .state_query import normalize_text
 
 EventCallback = Callable[[dict[str, Any]], Awaitable[None]]
 logger = get_logger("home_assistant")
 
 _SERVICE_TARGET_KEYS = {"entity_id", "device_id", "area_id", "floor_id", "label_id"}
+_ENTITY_ID = re.compile(r"(?<![A-Za-z0-9_.])[a-z][a-z0-9_]*\.[a-z0-9_]+(?![A-Za-z0-9_]|\.[A-Za-z0-9_])")
+_ENTITY_FIELDS = {"entity_id", "entity_ids", "media_player", "media_player_entity_id", "tts_entity_id"}
+_ENTITY_ACTION_DOMAINS = {"light", "switch", "fan", "climate", "media_player", "scene", "script", "homeassistant", "cover", "lock", "alarm_control_panel", "input_boolean", "input_number", "input_select", "number", "select", "button", "tts"}
+# Each chat owns its evidence. The shared HA client/runtime must never carry one
+# user's entity resolution into another concurrent chat or scheduled agent run.
+_KNOWLEDGE_CONTROL: ContextVar[dict | None] = ContextVar("hassmind_knowledge_control", default=None)
+
+
+@contextmanager
+def knowledge_control_context(user_text: str = ""):
+    evidence = {
+        "explicit_ids": set(_ENTITY_ID.findall(str(user_text or ""))),
+        "resolved_ids": set(), "candidate_ids": set(), "blocked_ids": set(),
+        "unsafe_resolution": False,
+        "user_text": normalize_text(user_text),
+        "broad_authorized": bool(re.search(r"\b(all|every|whole|tat ca|toan bo|het|area id|device id|floor id|label id)\b", normalize_text(user_text))),
+    }
+    token = _KNOWLEDGE_CONTROL.set(evidence)
+    try:
+        yield evidence
+    finally:
+        _KNOWLEDGE_CONTROL.reset(token)
+
+
+def record_knowledge_evidence(result: dict | list[dict], *, resolution: bool = False) -> bool | None:
+    evidence = _KNOWLEDGE_CONTROL.get()
+    if evidence is None:
+        # ToolRuntime also supports callers outside Agent.chat. Those callers can
+        # explicitly use knowledge_control_context to bound a multi-tool turn.
+        evidence = {"explicit_ids": set(), "resolved_ids": set(), "candidate_ids": set(),
+                    "blocked_ids": set(), "unsafe_resolution": False, "broad_authorized": False, "user_text": ""}
+        _KNOWLEDGE_CONTROL.set(evidence)
+    rows = result.get("candidates", []) if isinstance(result, dict) else result
+    ids = {str(row.get("entity_id")) for row in rows if isinstance(row, dict) and row.get("entity_id")}
+    for row in rows:
+        if isinstance(row, dict):
+            # Legacy Markdown/text references can mention IDs without structured
+            # metadata. Those mentions are suggestions, never action authority.
+            ids.update(_ENTITY_ID.findall(str(row.get("text") or row.get("preview") or "")))
+    evidence["candidate_ids"].update(ids)
+    if not resolution:
+        return
+    entity_id = str(result.get("entity_id") or "")
+    if entity_id:
+        ids.add(entity_id)
+    safe = bool(result.get("status") == "resolved" and result.get("safe_for_control")
+                and result.get("match_type") in {"entity_id", "alias", "name", "area_domain"}
+                and float(result.get("confidence") or 0) >= 0.85)
+    if safe and evidence["unsafe_resolution"] and entity_id not in evidence["explicit_ids"]:
+        original_query = normalize_text(result.get("query"))
+        # A fallback state/registry read can return an ID or canonical name after
+        # not_found, even when no first-pass candidates existed to taint. Only a
+        # better lookup of the user's literal original phrase can remain safe.
+        if result.get("match_type") == "entity_id" or not original_query or original_query not in evidence["user_text"]:
+            safe = False
+    if safe and entity_id:
+        evidence["resolved_ids"].add(entity_id)
+    else:
+        evidence["blocked_ids"].update(ids)
+        evidence["unsafe_resolution"] = True
+    return bool(entity_id and (entity_id in evidence["explicit_ids"] or (safe and entity_id not in evidence["blocked_ids"])))
+
+
+def _target_entity_ids(payload: Any) -> set[str]:
+    ids: set[str] = set()
+    if not isinstance(payload, dict):
+        return ids
+    for key, value in payload.items():
+        if key in _ENTITY_FIELDS:
+            values = value if isinstance(value, (list, tuple)) else [value]
+            for item in values:
+                if isinstance(item, str):
+                    ids.update(part.strip() for part in item.split(",") if part.strip() and part.strip() != "all")
+        elif isinstance(value, dict):
+            ids.update(_target_entity_ids(value))
+        elif isinstance(value, list):
+            for item in value:
+                ids.update(_target_entity_ids(item))
+    return ids
+
+
+def _has_broad_target(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    for key, value in payload.items():
+        if key in {"area_id", "device_id", "floor_id", "label_id"} and value:
+            return True
+        if key in _ENTITY_FIELDS:
+            values = value if isinstance(value, (list, tuple)) else [value]
+            if any(isinstance(item, str) and "all" in [part.strip() for part in item.split(",")] for item in values):
+                return True
+        if isinstance(value, dict) and _has_broad_target(value):
+            return True
+        if isinstance(value, list) and any(_has_broad_target(item) for item in value):
+            return True
+    return False
+
+
+def assert_knowledge_target_safe(payload: dict, *, domain: str = "") -> set[str]:
+    """Enforce identity evidence at the action boundary, independent of the LLM.
+
+    A model cannot make a fuzzy/ambiguous candidate safe by looking up its copied
+    entity_id next. A literal entity_id in the current user's instruction is an
+    explicit selection. Broad HA selectors keep their existing policy semantics.
+    Returns catalog-derived targets that should be checked against live HA.
+    """
+    evidence = _KNOWLEDGE_CONTROL.get()
+    if evidence is None:
+        return set()
+    entity_ids = _target_entity_ids(payload)
+    broad_target = _has_broad_target(payload)
+    action_domain = str(domain or payload.get("domain") or "")
+    # Omitting a target can mean "all" for HA entity services. An unsafe lookup
+    # must not silently turn into a whole-domain action through an empty target.
+    implicit_all = action_domain in _ENTITY_ACTION_DOMAINS and not entity_ids and not broad_target
+    if evidence["unsafe_resolution"] and (broad_target or implicit_all) and not evidence["broad_authorized"]:
+        raise PermissionError("An ambiguous/fuzzy Knowledge target cannot be replaced by a broad HA selector. Ask the user to select the target.")
+    bound: set[str] = set()
+    for entity_id in entity_ids:
+        if entity_id in evidence["explicit_ids"]:
+            continue
+        blocked = entity_id in evidence["blocked_ids"]
+        unresolved = entity_id in evidence["candidate_ids"] and entity_id not in evidence["resolved_ids"]
+        unknown_after_failure = evidence["unsafe_resolution"] and entity_id not in evidence["resolved_ids"]
+        if blocked or unresolved or unknown_after_failure:
+            raise PermissionError(
+                f"Knowledge target '{entity_id}' is ambiguous, fuzzy, or unconfirmed. "
+                "Ask the user to select an exact entity_id in a new message before control."
+            )
+        if entity_id in evidence["resolved_ids"]:
+            bound.add(entity_id)
+    return bound
 
 
 class HomeAssistantClient:
@@ -197,6 +333,12 @@ class HomeAssistantClient:
             if key in payload and payload[key] != value:
                 raise ValueError(f"Conflicting Home Assistant target field: {key}")
             payload[key] = value
+
+        catalog_targets = assert_knowledge_target_safe(payload, domain=domain)
+        for entity_id in sorted(catalog_targets):
+            live = await self.state(entity_id)
+            if not isinstance(live, dict) or live.get("entity_id") != entity_id:
+                raise PermissionError(f"Knowledge target '{entity_id}' is unresolved in current Home Assistant states")
 
         params = {"return_response": ""} if return_response else None
         result = await self._post(f"/api/services/{domain}/{service}", payload, params=params)

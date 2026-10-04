@@ -1,0 +1,11 @@
+schema_version: 1
+areas:
+  - id: bedroom
+    name: Phòng ngủ
+    aliases: [phòng ngủ, phòng ngủ chính, bedroom]
+  - id: living_room
+    name: Phòng khách
+    aliases: [phòng khách, living room]
+  - id: office
+    name: Phòng làm việc
+    aliases: [phòng làm việc, office]

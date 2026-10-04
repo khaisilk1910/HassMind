@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "references": [
+    {
+      "id": "water-filter",
+      "name": "Máy lọc nước",
+      "aliases": ["thay lõi lọc", "thông tin máy lọc nước"],
+      "text": "Mẫu tham khảo: điền model và chu kỳ thay lõi theo hướng dẫn của thiết bị thực tế.",
+      "source": "60-reference.json"
+    }
+  ]
+}

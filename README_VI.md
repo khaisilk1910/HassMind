@@ -1,4 +1,10 @@
-# HassMind v1.2.9 — AI Agent riêng cho Home Assistant
+# HassMind v1.3.0 — AI Agent riêng cho Home Assistant
+
+## Knowledge mới trong 1.3.0
+
+Semantic registry entity/area/scene/script và tài liệu reference/rules/procedures, phân biệt dữ liệu tĩnh với state HA realtime. Scan định kỳ tạo proposal/diff để người dùng Dry-run và Approve/Reject; có backup, rollback, audit và chặn stale proposal. Fuzzy/ambiguity không tự cấp quyền điều khiển. Dashboard có kết quả chi tiết, lỗi index, monitor config và editor tạo draft.
+
+Đọc [hướng dẫn migrate/triển khai](KNOWLEDGE_MIGRATION_VI.md), [changelog](CHANGELOG_V1.3.0.md) và [QA](QA_V1.3.0.md). Mẫu nằm ở `examples/knowledge/`, không tự đưa vào Knowledge đang dùng. Stack mặc định giữ Knowledge chỉ đọc; dùng override `docker-compose.knowledge-write.yml` nếu muốn apply nội dung sau phê duyệt. Các mục 1.2.x bên dưới mô tả chức năng nền và lịch sử nâng cấp.
 
 
 ## Mới trong v1.2.9

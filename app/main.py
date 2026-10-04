@@ -62,6 +62,7 @@ from .observability import (
     warning,
 )
 from .rag import reindex_knowledge, search_knowledge
+from . import knowledge_governance as knowledge
 from .scheduler import scheduler_loop, set_job_enabled
 from .settings import settings
 from .skills import list_skills
@@ -70,7 +71,7 @@ from .tools import ToolRuntime
 
 os.umask(0o077)
 
-APP_VERSION = "1.2.9"
+APP_VERSION = "1.3.0"
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 setup_logging()
@@ -352,6 +353,7 @@ async def lifespan(app: FastAPI):
     )
     try:
         init_db()
+        await asyncio.to_thread(knowledge.recover_interrupted)
         load_runtime_integration_overrides()
         scrub_sensitive_audit_history()
         ensure_bootstrap_admin()
@@ -368,6 +370,7 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(ha.listen_events(event_callback, stop_event), name="ha-events"),
             asyncio.create_task(scheduler_loop(stop_event, run_prompt), name="scheduler"),
             asyncio.create_task(telegram_supervisor(stop_event, lambda sid, text, src: agent.chat(sid, text, src)), name="telegram-supervisor"),
+            asyncio.create_task(knowledge.monitor_loop(stop_event, ha), name="knowledge-monitor"),
         ]
         await _sync_zalo_webhook_registration_task()
         info(
@@ -842,6 +845,7 @@ async def diagnostics():
             "parent_writable": os.access(db_path.parent, os.W_OK) if db_path.parent.exists() else False,
         },
         "logging": log_file_info(),
+        "knowledge": await asyncio.to_thread(knowledge.knowledge_status),
         "runtime": {
             "background_tasks": task_info,
             "webhook_tasks": len(webhook_tasks),
@@ -1188,14 +1192,124 @@ async def delete_rule(rule_id: int):
 
 @app.post("/api/knowledge/reindex", dependencies=[Depends(require_access)])
 async def reindex():
-    result = reindex_knowledge()
-    info(logger, "knowledge_reindexed", result=result)
+    result = await asyncio.to_thread(reindex_knowledge)
+    knowledge.audit("reindexed", details={k: result.get(k) for k in ("files", "chunks", "records", "status")})
+    info(logger, "knowledge_reindexed", files=result.get("files"), chunks=result.get("chunks"), status=result.get("status"))
     return result
 
 
 @app.get("/api/knowledge/search", dependencies=[Depends(require_access)])
-async def knowledge_search(q: str, limit: int = 8):
-    return search_knowledge(q, min(max(limit, 1), 20))
+async def knowledge_search(q: str = Query(min_length=1, max_length=512), limit: int = 8, area: str | None = None, domain: str | None = None, type: str | None = Query(default=None, pattern="^(entity|area|scene|script|reference|rules|procedures)$"), kind: str | None = Query(default=None, pattern="^(entity|area|scene|script|reference|rules|procedures)$")):
+    return await _knowledge_operation(search_knowledge, q, min(max(limit, 1), 20), area=area, domain=domain, kind=kind or type)
+
+
+class KnowledgeConfigIn(BaseModel):
+    enabled: bool | None = None
+    scan_interval_seconds: int | None = Field(default=None, ge=30, le=86400)
+    notify_enabled: bool | None = None
+
+
+class KnowledgeChangeIn(BaseModel):
+    path: str = Field(min_length=1, max_length=500)
+    operation: str = "upsert"
+    new_content: str = Field(default="", max_length=2 * 1024 * 1024)
+    expected_hash: str | None = None
+
+
+class KnowledgeProposalIn(BaseModel):
+    reason: str = Field(min_length=1, max_length=4000)
+    changes: list[KnowledgeChangeIn] = Field(min_length=1, max_length=100)
+
+
+def _knowledge_actor(request: Request):
+    return str(request.state.admin_session["username"])
+
+
+async def _knowledge_operation(operation, *args, **kwargs):
+    try:
+        return await asyncio.to_thread(operation, *args, **kwargs)
+    except KeyError:
+        raise HTTPException(404, "Knowledge proposal not found")
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+    except OSError as exc:
+        warning(logger, "knowledge_file_operation_failed", error_type=type(exc).__name__)
+        raise HTTPException(409, "Knowledge file operation failed. Check mount permissions and recovery status.")
+
+
+@app.get("/api/knowledge/status", dependencies=[Depends(require_access)])
+async def knowledge_status():
+    return await _knowledge_operation(knowledge.knowledge_status)
+
+
+@app.get("/api/knowledge/file", dependencies=[Depends(require_admin)])
+async def knowledge_file(path: str = Query(min_length=1, max_length=500)):
+    def read():
+        from .rag import safe_knowledge_path
+        target = safe_knowledge_path(path, must_exist=True)
+        if target.stat().st_size > settings.knowledge_max_file_bytes:
+            raise ValueError("Knowledge file too large")
+        data = knowledge._file_bytes(target)
+        return {"path": path, "content": data.decode("utf-8-sig"), "sha256": hashlib.sha256(data).hexdigest()}
+    return await _knowledge_operation(read)
+
+
+@app.get("/api/knowledge/resolve", dependencies=[Depends(require_access)])
+async def knowledge_resolve(q: str = Query(min_length=1, max_length=2000), area: str | None = None, domain: str | None = None):
+    from .rag import resolve_entity
+    return await _knowledge_operation(resolve_entity, q, area=area, domain=domain)
+
+
+@app.patch("/api/knowledge/config", dependencies=[Depends(require_admin)])
+async def knowledge_config(body: KnowledgeConfigIn, request: Request):
+    values = body.model_dump(exclude_none=True)
+    return await _knowledge_operation(knowledge.save_monitor_config, values, _knowledge_actor(request))
+
+
+@app.post("/api/knowledge/scan", dependencies=[Depends(require_access)])
+async def knowledge_scan():
+    return await knowledge.scan_knowledge(ha, actor="manual")
+
+
+@app.get("/api/knowledge/proposals", dependencies=[Depends(require_access)])
+async def knowledge_proposals(limit: int = 100):
+    return await _knowledge_operation(knowledge.list_proposals, limit)
+
+
+@app.post("/api/knowledge/proposals", dependencies=[Depends(require_admin)])
+async def knowledge_draft(body: KnowledgeProposalIn, request: Request):
+    changes = [c.model_dump(exclude_unset=True) for c in body.changes]
+    return await _knowledge_operation(knowledge.create_proposal, changes, body.reason, actor=_knowledge_actor(request))
+
+
+@app.get("/api/knowledge/proposals/{pid}", dependencies=[Depends(require_access)])
+async def knowledge_proposal(pid: str):
+    return await _knowledge_operation(knowledge.get_proposal, pid)
+
+
+@app.post("/api/knowledge/proposals/{pid}/dry-run", dependencies=[Depends(require_access)])
+async def knowledge_dry_run(pid: str):
+    return await _knowledge_operation(knowledge.dry_run, pid)
+
+
+@app.post("/api/knowledge/proposals/{pid}/approve", dependencies=[Depends(require_admin)])
+async def knowledge_approve(pid: str, request: Request):
+    return await _knowledge_operation(knowledge.approve, pid, _knowledge_actor(request))
+
+
+@app.post("/api/knowledge/proposals/{pid}/reject", dependencies=[Depends(require_admin)])
+async def knowledge_reject(pid: str, request: Request):
+    return await _knowledge_operation(knowledge.reject, pid, _knowledge_actor(request))
+
+
+@app.post("/api/knowledge/proposals/{pid}/rollback", dependencies=[Depends(require_admin)])
+async def knowledge_rollback(pid: str, request: Request):
+    return await _knowledge_operation(knowledge.rollback, pid, _knowledge_actor(request))
+
+
+@app.get("/api/knowledge/audit", dependencies=[Depends(require_access)])
+async def knowledge_audit(limit: int = 100):
+    return await _knowledge_operation(knowledge.audit_log, limit)
 
 
 @app.get("/api/skills", dependencies=[Depends(require_access)])
