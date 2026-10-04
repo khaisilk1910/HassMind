@@ -167,6 +167,20 @@ class KnowledgeAPITests(unittest.TestCase):
         self.assertEqual(rule_row['notify_channel'],'mobile')
         self.assertEqual(rule_row['notify_mode'],'actionable')
 
+    def test_advanced_scheduler_api_accepts_weekly_and_overnight_window(self):
+        weekly_value='{"time":"21:30","weekdays":[0,2,4]}'
+        weekly=self.client.post('/api/jobs',json={'name':'Weekly comfort','prompt':'Run comfort','schedule_type':'weekly','schedule_value':weekly_value,'notify':False},headers=self.token)
+        self.assertEqual(weekly.status_code,200,weekly.text)
+        window_value='{"start":"23:00","end":"06:00","every_minutes":30,"weekdays":[0,1,2,3,4,5,6]}'
+        window=self.client.post('/api/jobs',json={'name':'Overnight comfort','prompt':'Dùng skill bedroom-climate-comfort','schedule_type':'window','schedule_value':window_value,'notify':True,'notify_mode':'actionable'},headers=self.token)
+        self.assertEqual(window.status_code,200,window.text)
+        rows=self.client.get('/api/jobs',headers=self.token).json()
+        saved=next(x for x in rows if x['id']==window.json()['id'])
+        self.assertEqual(saved['schedule_type'],'window')
+        self.assertEqual(saved['schedule_value'],window_value)
+        invalid=self.client.post('/api/jobs',json={'name':'Bad window','prompt':'Run','schedule_type':'window','schedule_value':'{"start":"23:00","end":"06:00","every_minutes":30,"weekdays":[]}','notify':False},headers=self.token)
+        self.assertEqual(invalid.status_code,400,invalid.text)
+
     def test_scheduler_and_event_rule_api_pages_are_fixed_at_twenty(self):
         for i in range(21):
             job=self.client.post('/api/jobs',json={'name':f'Job {i}','prompt':'Check','schedule_type':'interval','schedule_value':'300','notify':False},headers=self.token)

@@ -124,14 +124,22 @@ Nếu humidity < 35%, tránh làm lạnh mạnh; tăng target đề xuất thêm
 4. Dry Run chỉ lập kế hoạch action; không được coi planned action là đã thực thi.
 
 # Continuous operation
-Skill chỉ chạy khi Agent được gọi. Nếu người dùng yêu cầu tự động liên tục và chưa có Scheduler phù hợp, đề xuất một Scheduler **disabled** bằng `schedule_propose` với:
-- name: `Bedroom climate comfort`
-- schedule_type: `interval`
-- schedule_value: `600`
+Skill chỉ chạy khi Agent được gọi. Nếu người dùng yêu cầu tự động theo lịch và chưa có Scheduler phù hợp, ưu tiên tạo **một** Scheduler disabled bằng `schedule_propose` thay vì tạo nhiều job cho từng mốc giờ.
+
+- Nếu người dùng muốn chạy trong một khung giờ (đặc biệt ban đêm), ví dụ mỗi 30 phút từ 23:00 đến trước 06:00 mỗi ngày:
+  - schedule_type: `window`
+  - schedule_value: `{"start":"23:00","end":"06:00","every_minutes":30,"weekdays":[0,1,2,3,4,5,6]}`
+  - Với khung qua đêm, `weekdays` là ngày **bắt đầu** khung giờ.
+- Nếu chỉ chạy vào một số thứ ở một giờ cố định, dùng `schedule_type: weekly`, ví dụ `{"time":"21:00","weekdays":[0,2,4]}`.
+- Chỉ dùng `schedule_type: interval` (ví dụ `600` giây) khi người dùng thực sự muốn chạy liên tục 24/7 không phụ thuộc giờ/ngày.
+- Có thể dùng `daily` cho một giờ cố định mỗi ngày hoặc `once` cho một lần duy nhất.
+
+Thiết lập notification khuyến nghị:
 - notify: true
 - notify_mode: `actionable`
 - prompt: `Dùng skill bedroom-climate-comfort kiểm tra Phòng ngủ và Phòng Sóc Chíp. Chỉ điều khiển phòng đang có người, tuân thủ hysteresis, chỉ gửi thông báo nếu có action thực sự hoặc có lỗi sensor/thiết bị cần chú ý.`
-Người dùng phải tự bật Scheduler trên dashboard sau khi kiểm tra Dry Run.
+
+Người dùng phải tự bật Scheduler trên dashboard sau khi kiểm tra lịch/prompt và Dry Run.
 
 # Response format
 Trả lời ngắn theo từng phòng:

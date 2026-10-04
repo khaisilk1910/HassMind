@@ -230,3 +230,20 @@ test('Scenario Dry Run posts selected skill prompt and renders zero executed act
   const call=h.calls.find(x=>x.url==='/api/skills/presence-aware-control/dry-run');assert.ok(call);assert.equal(call.opt.method,'POST');assert.equal(call.opt.headers['X-CSRF-Token'],'csrf-dry');assert.equal(JSON.parse(call.opt.body).prompt,'Kiểm tra phòng khách, chỉ mô phỏng.');
   assert.match(h.nodes.get('skillDryRunResult').innerHTML,/NO — Dry Run/);assert.match(h.nodes.get('skillDryRunResult').innerHTML,/ha_call_service/);assert.match(h.nodes.get('skillDryRunResult').innerHTML,/light.turn_off/);
 });
+
+test('Advanced Scheduler exposes daily weekly window interval and once editors',()=>{
+  for(const id of ['jobScheduleDaily','jobScheduleWeekly','jobScheduleWindow','jobScheduleInterval','jobScheduleOnce','jobDailyTime','jobWeeklyTime','jobWindowStart','jobWindowEnd','jobWindowEvery','jobIntervalValue','jobIntervalUnit','jobOnceAt'])assert.match(html,new RegExp('id="'+id+'"'));
+  for(const value of ['daily','weekly','window','interval','once'])assert.match(html,new RegExp('<option value="'+value+'"'));
+  assert.match(html,/data-weekday-group="weekly"/);assert.match(html,/data-weekday-group="window"/);
+  const h=harness();
+  assert.equal(h.run(`jobScheduleLabel({schedule_type:'weekly',schedule_value:'{"time":"21:00","weekdays":[0,2,6]}'})`),'T2, T4, CN · 21:00');
+  assert.equal(h.run(`jobScheduleLabel({schedule_type:'window',schedule_value:'{"start":"23:00","end":"06:00","every_minutes":30,"weekdays":[0,1,2,3,4,5,6]}'})`),'23:00 → 06:00 · mỗi 30 phút · T2, T3, T4, T5, T6, T7, CN');
+});
+
+test('Advanced Scheduler serializes an overnight window as one job',async()=>{
+  const h=harness();h.run("selectedJobWeekdays=()=>[0,2,4]");
+  h.nodes.get('jobname').value='Bedroom climate';h.nodes.get('jobprompt').value='Dùng skill bedroom-climate-comfort';h.nodes.get('jobtype').value='window';h.nodes.get('jobWindowStart').value='23:00';h.nodes.get('jobWindowEnd').value='06:00';h.nodes.get('jobWindowEvery').value='30';h.nodes.get('jobNotify').checked=true;h.nodes.get('jobNotifyChannel').value='mobile';h.nodes.get('jobNotifyMode').value='actionable';
+  h.respond(async(url,opt)=>url==='/api/jobs'&&opt?.method==='POST'?{body:{id:31,enabled:false}}:url.startsWith('/api/jobs?')?{body:{items:[],page:1,page_size:20,total:0,pages:1}}:{body:{}});
+  await h.run('saveJob()');
+  const call=h.calls.find(x=>x.url==='/api/jobs'&&x.opt?.method==='POST');assert.ok(call);const body=JSON.parse(call.opt.body);assert.equal(body.schedule_type,'window');assert.deepEqual(JSON.parse(body.schedule_value),{start:'23:00',end:'06:00',every_minutes:30,weekdays:[0,2,4]});assert.equal(body.notify_mode,'actionable');
+});

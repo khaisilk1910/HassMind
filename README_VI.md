@@ -1,4 +1,15 @@
-# HassMind v1.4.0 — AI Agent riêng cho Home Assistant
+# HassMind v1.4.1 — AI Agent riêng cho Home Assistant
+
+## Mới trong v1.4.1
+
+- Scheduler nâng cấp thành 5 kiểu lịch: `daily`, `weekly`, `window`, `interval`, `once`.
+- Chọn bật/tắt tự do từng thứ trong tuần; có preset mỗi ngày, T2–T6 và T7–CN.
+- `window` hỗ trợ khung giờ qua đêm như 23:00 → 06:00 và lặp mỗi X phút; giờ kết thúc là mốc dừng.
+- `bedroom-climate-comfort` có thể chạy suốt khung giờ chỉ bằng một job thay vì tạo nhiều job theo từng mốc.
+- Tool `schedule_propose` của agent được đồng bộ với toàn bộ kiểu lịch mới.
+- One-shot job tự disable trước khi thực thi để giảm rủi ro chạy lặp sau restart/chậm xử lý.
+
+Đọc [changelog 1.4.1](CHANGELOG_V1.4.1.md) và [QA 1.4.1](QA_V1.4.1.md).
 
 ## Mới trong v1.4.0
 
@@ -71,7 +82,7 @@ Trong Scheduler bật **Gửi thông báo sau khi chạy**, chọn kênh Điện
 - Sửa lỗi Scheduler bị ghi nhận **failed** dù agent đã chạy xong chỉ vì bước gửi thông báo Zalo trả HTTP 500. Kết quả tác vụ giờ vẫn được lưu; lỗi transport được log riêng và hiển thị cảnh báo ở cuối `last_result`.
 - Chia phản hồi Zalo dài thành các chunk rich-text nhỏ trước khi gửi. Mỗi chunk mặc định giữ trong ngưỡng bảo thủ khoảng **900 ký tự markup / 40 style spans**, tránh payload lớn từng gây lỗi ở Zalo companion.
 - Interval Scheduler **30 giây** giờ chạy đúng 30 giây thay vì bị âm thầm nâng lên 60 giây. Giá trị dưới 30 giây bị từ chối rõ ràng; API trả `400` thay vì `500` cho lịch không hợp lệ.
-- UI Scheduler tự đổi gợi ý theo `daily`/`interval`, nêu rõ interval tối thiểu 30 giây.
+- Scheduler hỗ trợ `daily`, `weekly`, `window`, `interval` và `once`; UI hiển thị trình chọn lịch riêng cho từng kiểu, gồm chọn thứ tự do và khung giờ lặp qua đêm.
 - Các tool có tham số số tùy chọn chịu được giá trị rỗng do OpenAI-compatible backend phát sinh, tránh lỗi kiểu `invalid literal for int() with base 10: ''` trong job định kỳ.
 
 Đọc [changelog 1.3.3](CHANGELOG_V1.3.3.md) và [QA 1.3.3](QA_V1.3.3.md). Bản này là hotfix tương thích dữ liệu với 1.3.2, không cần migration database.
@@ -347,7 +358,15 @@ Bạn có thể thay đổi qua `.env`, nhưng nên mở từng domain sau khi �
 
 ## 7. Scheduler
 
-AI có tool `schedule_propose`; dashboard/API cũng có thể tạo job. Mọi job mới đều `disabled`.
+AI có tool `schedule_propose`; dashboard/API cũng có thể tạo job. Mọi job mới đều `disabled` cho tới khi operator kiểm tra và bật.
+
+Các kiểu lịch hiện có:
+
+- `daily`: chạy một lần mỗi ngày, `schedule_value` là `HH:MM`.
+- `weekly`: chạy vào các thứ được chọn, `schedule_value` là JSON như `{"time":"21:00","weekdays":[0,2,4]}`. `0=T2`, `6=CN`.
+- `window`: lặp trong một khung giờ, kể cả qua đêm. Ví dụ `{"start":"23:00","end":"06:00","every_minutes":30,"weekdays":[0,1,2,3,4,5,6]}`. Với khung qua đêm, các thứ là ngày bắt đầu khung; giờ `end` là mốc dừng và không chạy thêm đúng tại mốc đó.
+- `interval`: lặp liên tục theo số giây, tối thiểu 30 giây.
+- `once`: chạy một lần theo giờ local, dạng `YYYY-MM-DDTHH:MM`; job tự chuyển về disabled trước khi thực thi.
 
 Ví dụ daily report:
 
@@ -358,9 +377,17 @@ schedule_value: 21:00
 prompt: Dùng skill daily-home-report để tạo báo cáo nhà hôm nay.
 ```
 
-Sau khi kiểm tra prompt, bật job trong dashboard.
+Ví dụ chạy `bedroom-climate-comfort` mỗi 30 phút từ 23:00 đến trước 06:00 hằng ngày chỉ cần **một job**:
 
-`interval` có giá trị là số giây và tối thiểu 60 giây.
+```text
+name: Bedroom climate ban đêm
+schedule_type: window
+schedule_value: {"start":"23:00","end":"06:00","every_minutes":30,"weekdays":[0,1,2,3,4,5,6]}
+prompt: Dùng skill bedroom-climate-comfort kiểm tra Phòng ngủ và Phòng Sóc Chíp. Chỉ điều khiển phòng đang có người, tuân thủ hysteresis và chỉ gửi thông báo khi có action hoặc lỗi cần chú ý.
+notify_mode: actionable
+```
+
+Sau khi kiểm tra prompt và lịch, bật job trong dashboard.
 
 ## 8. Event-triggered agent
 
@@ -393,7 +420,7 @@ Không lưu password/token trong knowledge.
 
 ## 10. Skills
 
-HassMind v1.4.0 có trang **Skills** trong Web Admin để tạo, sửa, test cấu trúc, bật/tắt, xóa user skill, xem version, rollback và **Dry Run bằng tình huống**.
+HassMind v1.4.1 có trang **Skills** trong Web Admin để tạo, sửa, test cấu trúc, bật/tắt, xóa user skill, xem version, rollback và **Dry Run bằng tình huống**.
 
 - Built-in skills nằm trong `/app/config/skills` và được xem là read-only.
 - Khi sửa built-in, HassMind tạo override trong `/data/skills`.

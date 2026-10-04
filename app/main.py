@@ -77,7 +77,7 @@ from .tools import ToolRuntime
 os.umask(0o077)
 configure_process_timezone()
 
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.4.1"
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 setup_logging()
@@ -584,8 +584,8 @@ class DecisionIn(BaseModel):
 class JobIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     prompt: str = Field(min_length=1, max_length=20000)
-    schedule_type: str = Field(min_length=1, max_length=32)
-    schedule_value: str = Field(min_length=1, max_length=128)
+    schedule_type: str = Field(min_length=1, max_length=32, pattern="^(daily|weekly|window|interval|once)$")
+    schedule_value: str = Field(min_length=1, max_length=512)
     notify: bool = True
     notify_channel: str = Field(default="mobile", pattern="^(mobile|zalo)$")
     zalo_thread_id: str = Field(default="", max_length=255)

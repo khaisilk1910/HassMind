@@ -102,3 +102,21 @@ details{border:1px solid var(--line);border-radius:10px;background:var(--surface
 .skill-dry-run-card{overflow:hidden}.skill-dry-run-form{align-items:end}.skill-dry-run-result{min-width:0}.skill-dry-run-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.skill-dry-run-summary>div{display:grid;gap:5px;min-width:0;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:#0c1118}.skill-dry-run-summary strong{overflow-wrap:anywhere}.dry-label{font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:750}.dry-no{color:#8ce0b8}.skill-dry-run-section{margin-top:14px;padding-top:13px;border-top:1px solid var(--line)}.skill-dry-run-section h4{margin:0 0 10px;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#a8bad0}.skill-dry-run-actions{display:grid;gap:9px}.skill-dry-run-action{padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface2)}.skill-dry-run-action pre{margin-top:9px;max-height:220px;font-size:11px}.skill-dry-run-preview{padding:12px;border:1px solid var(--line);border-radius:10px;background:#0c1118;min-height:74px;overflow-wrap:anywhere}.empty.compact{padding:16px}
 @media(max-width:1000px){.skill-prompt-list{grid-template-columns:1fr}.skill-dry-run-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:640px){.skill-prompt-toolbar{align-items:stretch;flex-direction:column}.skill-prompt-search{width:100%;max-width:none}.skill-dry-run-summary{grid-template-columns:1fr}.skill-dry-run-form{grid-template-columns:1fr}.skill-dry-run-form>*{grid-column:1/-1}}
+
+/* v1.4.1 advanced Scheduler */
+.scheduler-editor{border:1px solid var(--line);background:rgba(13,18,25,.55);border-radius:12px;padding:12px}
+.schedule-panel{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:end}
+.schedule-panel.hidden{display:none}
+.schedule-panel .full{grid-column:1/-1}
+.schedule-preview{border:1px dashed #334154;border-radius:10px;padding:10px 12px;display:grid;gap:4px;min-height:42px;align-content:center}
+.schedule-preview strong{font-size:12px;color:#dce8f5}.schedule-preview span{font-size:11px;color:var(--muted);line-height:1.45}
+.weekday-picker{display:grid;grid-template-columns:repeat(7,minmax(42px,1fr));gap:7px}
+.weekday-picker label{cursor:pointer;min-width:0}.weekday-picker input{position:absolute;opacity:0;pointer-events:none}
+.weekday-picker span{display:flex;align-items:center;justify-content:center;border:1px solid var(--line);background:#0d1219;border-radius:9px;min-height:38px;font-size:12px;font-weight:700;color:#aebdcd;transition:border-color .12s,background .12s,color .12s,box-shadow .12s}
+.weekday-picker input:checked+span{border-color:#527fd1;background:rgba(82,127,209,.16);color:#eef5ff;box-shadow:0 0 0 2px rgba(82,127,209,.08)}
+.weekday-picker input:focus-visible+span{outline:2px solid #78a1eb;outline-offset:2px}
+.weekday-presets{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}
+.input-suffix{display:grid;grid-template-columns:1fr auto;align-items:center;gap:8px}.input-suffix>span{font-size:12px;color:var(--muted);white-space:nowrap}
+.scheduler-error{grid-column:1/-1;border:1px solid rgba(255,99,99,.35);background:rgba(255,99,99,.08);color:#ffb5b5;border-radius:9px;padding:9px 11px;font-size:12px}
+.scheduler-form-grid>.field>label{font-size:12px;color:#cbd7e4}
+@media(max-width:760px){.schedule-panel{grid-template-columns:1fr}.schedule-panel .full{grid-column:auto}.weekday-picker{grid-template-columns:repeat(4,minmax(42px,1fr))}}

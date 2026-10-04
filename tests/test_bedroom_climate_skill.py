@@ -28,7 +28,8 @@ def test_bedroom_climate_skill_is_valid_and_has_confirmed_entities():
         assert f"`{entity_id}`" in raw
     assert "`.sensor.xiaomi_m15_1480_relative_humidity`" not in raw
     assert "25°C" in raw and "27°C" in raw
-    assert "schedule_value: `600`" in raw
+    assert "schedule_type: `window`" in raw
+    assert "\"every_minutes\":30" in raw
 
 
 def test_only_operator_allowlisted_fan_speed_scripts_are_directly_callable():
