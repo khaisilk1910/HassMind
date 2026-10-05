@@ -46,7 +46,7 @@ from .ha_integrations import HAIntegrationBridge
 from .integration_config import integration_config_view, load_runtime_integration_overrides, reset_integration_config, save_integration_config
 from .integrations import IntegrationHub
 from .message_format import split_zalo_message
-from .notifications import clean_notification_result, get_notification_preference, normalize_notification_channel, save_notification_preference, send_notification, should_suppress_notification
+from .notifications import clean_notification_result, get_notification_preference, is_actionable_notification_prompt, normalize_notification_channel, save_notification_preference, send_notification, should_suppress_actionable_result, should_suppress_notification
 from .observability import (
     current_request_id,
     exception,
@@ -77,7 +77,7 @@ from .tools import ToolRuntime
 os.umask(0o077)
 configure_process_timezone()
 
-APP_VERSION = "1.4.1"
+APP_VERSION = "1.4.2"
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 setup_logging()
@@ -141,11 +141,15 @@ async def run_prompt(session_id: str, prompt: str, notify: bool, notify_channel:
         result = await agent.chat(session_id, prompt, source="system")
         notification_ok: bool | None = None
         delivery_note = ""
-        silent_result = bool(notify and should_suppress_notification(result))
+        conditional_notify = bool(notify and is_actionable_notification_prompt(prompt))
+        exact_sentinel = bool(notify and should_suppress_notification(result))
+        semantic_noop = bool(conditional_notify and should_suppress_actionable_result(result))
+        silent_result = exact_sentinel or semantic_noop
         display_result = result if silent_result or not notify else clean_notification_result(result)
         if silent_result:
             notification_ok = True
-            info(logger, "system_notification_suppressed", reason="conditional_no_result", notify_channel=channel)
+            reason = "conditional_noop_fallback" if semantic_noop and not exact_sentinel else "conditional_no_result"
+            info(logger, "system_notification_suppressed", reason=reason, notify_channel=channel)
         elif notify:
             try:
                 notification_result = await send_notification(

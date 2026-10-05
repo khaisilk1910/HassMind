@@ -12,6 +12,7 @@ from .settings import settings
 logger = get_logger("notifications")
 VALID_NOTIFICATION_CHANNELS = {"mobile", "zalo"}
 NO_NOTIFY_TOKEN = "__HASSMIND_NO_NOTIFY__"
+CONDITIONAL_NOTIFICATION_PROTOCOL_MARKER = "[HassMind conditional notification protocol]"
 _REDUNDANT_RESULT_PREFIX_RE = re.compile(r"^\s*(?:\\?[*_~`]+\s*)?\(\s*Theo(?:\s+đúng)?\s+yêu(?:\s+cầu)?\s*(?:\)?\s*\\?[*_~`]+\s*)*\(?\s*", re.IGNORECASE)
 _FEATURE_RE = re.compile(r"^[a-z0-9_.-]{1,64}$")
 
@@ -21,21 +22,79 @@ _FEATURE_RE = re.compile(r"^[a-z0-9_.-]{1,64}$")
 def should_suppress_notification(value: str | None) -> bool:
     """Return True only for the explicit scheduler/event silent sentinel.
 
-    Exact matching is intentional: ordinary answers such as "không có gì cần báo"
-    must never be hidden accidentally.
+    Exact matching is intentional for callers that do not know the notification
+    mode. Conditional Scheduler/Event runs have an additional guarded fallback in
+    :func:`should_suppress_actionable_result`.
     """
     return str(value or "").strip() == NO_NOTIFY_TOKEN
 
 
-def _notification_output_contract() -> str:
-    return (
+def is_actionable_notification_prompt(prompt: str | None) -> bool:
+    """Detect the private conditional-notification protocol added at runtime."""
+    return CONDITIONAL_NOTIFICATION_PROTOCOL_MARKER in str(prompt or "")
+
+
+_ACTIONABLE_IMPORTANT_RE = re.compile(
+    r"\b(?:"
+    r"lỗi|cảnh\s*báo|thất\s*bại|nguy\s*hiểm|mất\s*kết\s*nối|không\s*khả\s*dụng|"
+    r"unavailable|unknown|error|failed|failure|cần\s*kiểm\s*tra|chưa\s*(?:được\s*)?xác\s*nhận|"
+    r"không\s*xác\s*nhận|bất\s*thường|rò\s*rỉ|rất\s*nóng|quá\s*nóng|quá\s*lạnh"
+    r")\b",
+    re.IGNORECASE,
+)
+_ACTIONABLE_ACTION_RE = re.compile(
+    r"\b(?:"
+    r"đã\s+(?:bật|tắt|đặt|chuyển|điều\s*chỉnh|gửi\s+lệnh|thực\s*hiện|kích\s*hoạt|dừng)|"
+    r"vừa\s+(?:bật|tắt|đặt|chuyển|điều\s*chỉnh)|"
+    r"service\s*call\s*(?:đã\s*)?(?:thành\s*công|completed)|"
+    r"action\s*(?:đã\s*)?(?:thực\s*hiện|executed|completed)"
+    r")\b",
+    re.IGNORECASE,
+)
+_ACTIONABLE_NOOP_PATTERNS = (
+    re.compile(r"\bkhông\s+phát\s+hiện\b.{0,180}\bcần\s+(?:xử\s*lý|thao\s*tác|điều\s*chỉnh|can\s*thiệp)\b", re.IGNORECASE | re.DOTALL),
+    re.compile(r"\bkhông\s+ghi\s+nhận\b.{0,180}\bcần\s+(?:xử\s*lý|thao\s*tác|điều\s*chỉnh|can\s*thiệp)\b", re.IGNORECASE | re.DOTALL),
+    re.compile(r"\bkhông\s+có\b.{0,140}\bcần\s+(?:xử\s*lý|thao\s*tác|điều\s*chỉnh|can\s*thiệp|báo)\b", re.IGNORECASE | re.DOTALL),
+    re.compile(r"\bkhông\s+cần\s+(?:thực\s*hiện\s+)?(?:action|xử\s*lý|thao\s*tác|điều\s*chỉnh|thay\s*đổi|can\s*thiệp)\b", re.IGNORECASE),
+    re.compile(r"\bkhông\s+có\s+(?:action|thao\s*tác|xử\s*lý|thay\s*đổi)\b", re.IGNORECASE),
+    re.compile(r"\bkhông\s+có\s+gì\s+cần\s+(?:báo|xử\s*lý|thao\s*tác)\b", re.IGNORECASE),
+    re.compile(r"\b(?:mọi\s+thứ|hệ\s*thống|thiết\s*bị)\b.{0,120}\b(?:bình\s*thường|đúng\s+trạng\s*thái|tối\s*ưu)\b.{0,120}\bkhông\s+cần\b", re.IGNORECASE | re.DOTALL),
+)
+
+
+def should_suppress_actionable_result(value: str | None) -> bool:
+    """Server-side fallback for conditional notifications.
+
+    The model is instructed to return ``NO_NOTIFY_TOKEN`` for a no-op run, but
+    some providers occasionally answer with a natural-language sentence such as
+    "Không phát hiện thiết bị nào cần xử lý.". In actionable mode only, suppress
+    those strong no-op statements as long as the same result contains no action,
+    warning, device/sensor failure, or other condition that the operator should
+    see. This keeps ``always`` mode unchanged.
+    """
+    if should_suppress_notification(value):
+        return True
+    text = clean_notification_result(value)
+    if not text:
+        return True
+    if _ACTIONABLE_IMPORTANT_RE.search(text) or _ACTIONABLE_ACTION_RE.search(text):
+        return False
+    return any(pattern.search(text) for pattern in _ACTIONABLE_NOOP_PATTERNS)
+
+
+def _notification_output_contract(*, include_noop_example: bool = True) -> str:
+    text = (
         "Kết quả này sẽ được gửi trực tiếp cho người dùng dưới dạng thông báo. "
         "Hãy trả lời ngắn gọn, trực tiếp vào kết quả thực tế; không mở đầu bằng các câu như "
         "'Theo đúng yêu cầu', 'Theo yêu cầu của bạn' hoặc mô tả lại quy tắc gửi thông báo. "
         "Không bọc toàn bộ câu trả lời trong ngoặc, dấu * hoặc các ký hiệu Markdown. "
-        "Nếu không phát hiện thiết bị/sự kiện cần xử lý, hãy nói rõ điều đó bằng một câu tự nhiên, ví dụ "
-        "'✅ Không phát hiện thiết bị nào cần xử lý.'"
     )
+    if include_noop_example:
+        text += (
+            "Nếu không phát hiện thiết bị/sự kiện cần xử lý, hãy nói rõ điều đó bằng một câu tự nhiên, ví dụ "
+            "'✅ Không phát hiện thiết bị nào cần xử lý.'"
+        )
+    return text
 
 
 def always_notification_prompt(prompt: str) -> str:
@@ -53,12 +112,13 @@ def actionable_notification_prompt(prompt: str) -> str:
     return (
         str(prompt or "").rstrip()
         + "\n\n---\n"
-        + "[HassMind conditional notification protocol]\n"
+        + CONDITIONAL_NOTIFICATION_PROTOCOL_MARKER + "\n"
         + "Tác vụ này dùng chế độ chỉ thông báo khi có kết quả cần báo. "
-          "Nếu sau khi kiểm tra/thực hiện tác vụ, theo đúng yêu cầu của người dùng không có nội dung nào được phép gửi thông báo, "
-          f"hãy trả về DUY NHẤT chuỗi {NO_NOTIFY_TOKEN} và không thêm bất kỳ ký tự nào. "
-          "Chỉ dùng chuỗi này khi điều kiện im lặng trong prompt của người dùng thực sự được thỏa mãn. "
-        + _notification_output_contract()
+          "Nếu lần chạy không thực hiện action/service nào, không có lỗi/cảnh báo, không có sensor hoặc thiết bị cần kiểm tra, "
+          "và kết quả chỉ là trạng thái bình thường/không cần xử lý, thì KHÔNG được viết câu xác nhận trạng thái. "
+          f"Hãy trả về DUY NHẤT chuỗi {NO_NOTIFY_TOKEN} và không thêm bất kỳ ký tự nào. "
+          "Chỉ gửi nội dung tự nhiên khi thực sự có action, lỗi, cảnh báo, trạng thái bất thường hoặc vấn đề người dùng cần biết. "
+        + _notification_output_contract(include_noop_example=False)
     )
 
 

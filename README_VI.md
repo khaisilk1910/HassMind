@@ -1,4 +1,14 @@
-# HassMind v1.4.1 — AI Agent riêng cho Home Assistant
+# HassMind v1.4.2 — AI Agent riêng cho Home Assistant
+
+## Mới trong v1.4.2
+
+- Chế độ Scheduler/Event rule `actionable` giờ **không gửi thông báo khi không có action/lỗi/cảnh báo cần biết**, kể cả khi model trả câu tự nhiên thay vì silent token.
+- Loại bỏ xung đột trong notification prompt: conditional mode không còn đồng thời yêu cầu model nói “Không phát hiện thiết bị nào cần xử lý”.
+- Thêm fallback phía server nhận diện các kết quả no-op rõ ràng như `Không phát hiện thiết bị nào cần xử lý`, nhưng vẫn giữ thông báo nếu có action, lỗi, unavailable/unknown, cảnh báo hoặc trạng thái bất thường.
+- Chế độ `always` giữ nguyên: vẫn gửi kết quả kể cả khi không có thao tác.
+- UI đổi mô tả thành **Chỉ gửi khi có thao tác/lỗi cần báo** để phản ánh đúng hành vi.
+
+Đọc [changelog 1.4.2](CHANGELOG_V1.4.2.md) và [QA 1.4.2](QA_V1.4.2.md).
 
 ## Mới trong v1.4.1
 
@@ -420,7 +430,7 @@ Không lưu password/token trong knowledge.
 
 ## 10. Skills
 
-HassMind v1.4.1 có trang **Skills** trong Web Admin để tạo, sửa, test cấu trúc, bật/tắt, xóa user skill, xem version, rollback và **Dry Run bằng tình huống**.
+HassMind v1.4.2 có trang **Skills** trong Web Admin để tạo, sửa, test cấu trúc, bật/tắt, xóa user skill, xem version, rollback và **Dry Run bằng tình huống**.
 
 - Built-in skills nằm trong `/app/config/skills` và được xem là read-only.
 - Khi sửa built-in, HassMind tạo override trong `/data/skills`.
