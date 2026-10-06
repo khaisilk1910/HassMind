@@ -95,7 +95,7 @@ class Agent:
             system_prompt_chars=len(self.system_prompt),
         )
 
-    async def _execute_tool_call(self, tc, round_index: int) -> dict[str, str]:
+    async def _execute_tool_call(self, tc, round_index: int, trace: list[dict] | None = None) -> dict[str, str]:
         args: dict = {}
         tool_started = perf_counter()
         try:
@@ -104,6 +104,16 @@ class Agent:
                 raise ValueError("Tool arguments must be a JSON object")
         except Exception as exc:
             add_tool_audit(tc.function.name, {}, error=f"{type(exc).__name__}: {exc}")
+            if trace is not None:
+                trace.append({
+                    "tool": str(tc.function.name or ""),
+                    "round": round_index,
+                    "status": "error",
+                    "read_only": _is_read_only_tool(str(tc.function.name or "")),
+                    "side_effect": not _is_read_only_tool(str(tc.function.name or "")),
+                    "arguments": {},
+                    "error": f"{type(exc).__name__}: {exc}",
+                })
             exception(
                 logger,
                 "tool_arguments_invalid",
@@ -135,6 +145,15 @@ class Agent:
                 duration_ms=duration_ms,
                 result=preview(result),
             )
+            if trace is not None:
+                trace.append({
+                    "tool": str(tc.function.name or ""),
+                    "round": round_index,
+                    "status": "ok",
+                    "read_only": _is_read_only_tool(str(tc.function.name or "")),
+                    "side_effect": not _is_read_only_tool(str(tc.function.name or "")),
+                    "arguments": redact(args),
+                })
             content = json.dumps(result, ensure_ascii=False, default=str)
         except Exception as exc:
             duration_ms = round((perf_counter() - tool_started) * 1000, 2)
@@ -149,6 +168,16 @@ class Agent:
                 arguments=preview(args),
                 error_type=type(exc).__name__,
             )
+            if trace is not None:
+                trace.append({
+                    "tool": str(tc.function.name or ""),
+                    "round": round_index,
+                    "status": "error",
+                    "read_only": _is_read_only_tool(str(tc.function.name or "")),
+                    "side_effect": not _is_read_only_tool(str(tc.function.name or "")),
+                    "arguments": redact(args),
+                    "error": f"{type(exc).__name__}: {exc}",
+                })
             content = json.dumps({"error": type(exc).__name__, "message": str(exc)}, ensure_ascii=False)
         return {"role": "tool", "tool_call_id": tc.id, "content": content}
 
@@ -474,7 +503,19 @@ class Agent:
         with knowledge_control_context(user_text):
             return await self._chat(session_id, user_text, source)
 
-    async def _chat(self, session_id: str, user_text: str, source: str = "web") -> str:
+    async def chat_with_trace(self, session_id: str, user_text: str, source: str = "web") -> dict:
+        """Run one chat turn and return tool evidence for notification gating.
+
+        Scheduler/Event callers use this to distinguish a real Home Assistant
+        action/tool error from arbitrary model prose. Interactive callers keep
+        using :meth:`chat` and retain the existing string-only API.
+        """
+        trace: list[dict] = []
+        with knowledge_control_context(user_text):
+            text = await self._chat(session_id, user_text, source, trace=trace)
+        return {"text": text, "tools": trace}
+
+    async def _chat(self, session_id: str, user_text: str, source: str = "web", trace: list[dict] | None = None) -> str:
         started = perf_counter()
         with log_context(session_id=session_id, source=source, component="agent"):
             info(
@@ -487,7 +528,14 @@ class Agent:
             try:
                 add_message(session_id, "user", user_text, source)
                 history_limit = settings.zalo_history_messages if source == "zalo" else settings.agent_history_messages
-                history = get_messages(session_id, max(2, int(history_limit)))
+                if source == "system":
+                    # Scheduler/Event runs are independent control evaluations, not
+                    # conversations. Reusing prior job history can amplify an old
+                    # refusal/no-op answer and make later runs stop using tools.
+                    history = [{"role": "user", "content": user_text}]
+                    history_limit = 1
+                else:
+                    history = get_messages(session_id, max(2, int(history_limit)))
                 messages = [{"role": "system", "content": self.system_prompt}]
                 messages.append({"role": "system", "content": _KNOWLEDGE_SAFETY_PROMPT})
                 if source == "zalo":
@@ -585,7 +633,7 @@ class Agent:
                     if run_parallel:
                         batch_started = perf_counter()
                         info(logger, "tool_batch_parallel_started", round=round_index, tool_count=len(calls))
-                        tool_messages = await asyncio.gather(*(self._execute_tool_call(tc, round_index) for tc in calls))
+                        tool_messages = await asyncio.gather(*(self._execute_tool_call(tc, round_index, trace) for tc in calls))
                         info(
                             logger,
                             "tool_batch_parallel_completed",
@@ -596,7 +644,7 @@ class Agent:
                         messages.extend(tool_messages)
                     else:
                         for tc in calls:
-                            messages.append(await self._execute_tool_call(tc, round_index))
+                            messages.append(await self._execute_tool_call(tc, round_index, trace))
 
                 text = "Đã đạt giới hạn số vòng gọi công cụ; HassMind dừng để tránh vòng lặp ngoài ý muốn."
                 add_message(session_id, "assistant", text, source)

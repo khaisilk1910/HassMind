@@ -13,6 +13,7 @@ logger = get_logger("notifications")
 VALID_NOTIFICATION_CHANNELS = {"mobile", "zalo"}
 NO_NOTIFY_TOKEN = "__HASSMIND_NO_NOTIFY__"
 CONDITIONAL_NOTIFICATION_PROTOCOL_MARKER = "[HassMind conditional notification protocol]"
+ACTION_ONLY_NOTIFICATION_PROTOCOL_MARKER = "[HassMind successful action notification protocol]"
 _REDUNDANT_RESULT_PREFIX_RE = re.compile(r"^\s*(?:\\?[*_~`]+\s*)?\(\s*Theo(?:\s+đúng)?\s+yêu(?:\s+cầu)?\s*(?:\)?\s*\\?[*_~`]+\s*)*\(?\s*", re.IGNORECASE)
 _FEATURE_RE = re.compile(r"^[a-z0-9_.-]{1,64}$")
 
@@ -32,6 +33,11 @@ def should_suppress_notification(value: str | None) -> bool:
 def is_actionable_notification_prompt(prompt: str | None) -> bool:
     """Detect the private conditional-notification protocol added at runtime."""
     return CONDITIONAL_NOTIFICATION_PROTOCOL_MARKER in str(prompt or "")
+
+
+def is_action_only_notification_prompt(prompt: str | None) -> bool:
+    """Detect the strict successful-action-only protocol added at runtime."""
+    return ACTION_ONLY_NOTIFICATION_PROTOCOL_MARKER in str(prompt or "")
 
 
 _ACTIONABLE_IMPORTANT_RE = re.compile(
@@ -62,24 +68,45 @@ _ACTIONABLE_NOOP_PATTERNS = (
 )
 
 
-def should_suppress_actionable_result(value: str | None) -> bool:
-    """Server-side fallback for conditional notifications.
+def should_suppress_actionable_result(
+    value: str | None,
+    *,
+    successful_action: bool = False,
+    tool_error: bool = False,
+) -> bool:
+    """Return True when an actionable notification should stay quiet.
 
-    The model is instructed to return ``NO_NOTIFY_TOKEN`` for a no-op run, but
-    some providers occasionally answer with a natural-language sentence such as
-    "Không phát hiện thiết bị nào cần xử lý.". In actionable mode only, suppress
-    those strong no-op statements as long as the same result contains no action,
-    warning, device/sensor failure, or other condition that the operator should
-    see. This keeps ``always`` mode unchanged.
+    Conditional Scheduler/Event runs must not trust arbitrary prose as evidence
+    that something happened. Providers can occasionally answer with capability
+    disclaimers (for example, "Tôi là một mô hình ngôn ngữ...") instead of using
+    Home Assistant tools. Those messages are neither an action nor an operational
+    warning and must not be pushed to the user.
+
+    Runtime tool evidence has priority:
+    - a successful side-effect tool call means there was a real action, so keep
+      the result;
+    - a real tool error is operationally actionable, so keep the result;
+    - an explicit warning/error discovered from read-only state may still be sent;
+    - everything else (no-op prose, refusals, generic chatter, unsupported-task
+      disclaimers, hallucinated success without tool evidence) is suppressed.
+
+    ``always`` mode never calls this function, so its behavior is unchanged.
     """
     if should_suppress_notification(value):
         return True
     text = clean_notification_result(value)
     if not text:
         return True
-    if _ACTIONABLE_IMPORTANT_RE.search(text) or _ACTIONABLE_ACTION_RE.search(text):
+    if successful_action or tool_error:
         return False
-    return any(pattern.search(text) for pattern in _ACTIONABLE_NOOP_PATTERNS)
+    if _ACTIONABLE_IMPORTANT_RE.search(text):
+        return False
+    if any(pattern.search(text) for pattern in _ACTIONABLE_NOOP_PATTERNS):
+        return True
+    # No verified action/error and no explicit operational warning: be quiet.
+    # This intentionally suppresses generic LLM refusals/capability statements
+    # and prevents a hallucinated "đã tắt" sentence from triggering a push.
+    return True
 
 
 def _notification_output_contract(*, include_noop_example: bool = True) -> str:
@@ -114,10 +141,28 @@ def actionable_notification_prompt(prompt: str) -> str:
         + "\n\n---\n"
         + CONDITIONAL_NOTIFICATION_PROTOCOL_MARKER + "\n"
         + "Tác vụ này dùng chế độ chỉ thông báo khi có kết quả cần báo. "
-          "Nếu lần chạy không thực hiện action/service nào, không có lỗi/cảnh báo, không có sensor hoặc thiết bị cần kiểm tra, "
+          "Bạn đang chạy bên trong HassMind và có các tool Home Assistant được backend cấp; nếu prompt yêu cầu kiểm tra hoặc điều khiển Home Assistant, "
+          "hãy dùng các tool đó thay vì trả lời bằng câu từ chối kiểu 'tôi là mô hình ngôn ngữ', 'nằm ngoài khả năng' hoặc 'không thể thực hiện'. "
+          "Nếu lần chạy không thực hiện action/service nào, không có lỗi/cảnh báo thực tế, không có sensor hoặc thiết bị cần kiểm tra, "
           "và kết quả chỉ là trạng thái bình thường/không cần xử lý, thì KHÔNG được viết câu xác nhận trạng thái. "
           f"Hãy trả về DUY NHẤT chuỗi {NO_NOTIFY_TOKEN} và không thêm bất kỳ ký tự nào. "
-          "Chỉ gửi nội dung tự nhiên khi thực sự có action, lỗi, cảnh báo, trạng thái bất thường hoặc vấn đề người dùng cần biết. "
+          "Nếu không đủ dữ liệu để thao tác an toàn và prompt gốc yêu cầu im lặng trong trường hợp đó, cũng phải trả về token im lặng. "
+          "Chỉ gửi nội dung tự nhiên khi thực sự có action đã thực hiện, lỗi/cảnh báo thực tế, trạng thái bất thường hoặc vấn đề người dùng cần biết. "
+        + _notification_output_contract(include_noop_example=False)
+    )
+
+
+def action_only_notification_prompt(prompt: str) -> str:
+    """Require a verified side-effect action before any notification is sent."""
+    return (
+        str(prompt or "").rstrip()
+        + "\n\n---\n"
+        + ACTION_ONLY_NOTIFICATION_PROTOCOL_MARKER + "\n"
+        + "Tác vụ này chỉ được thông báo khi có ít nhất một action/service side-effect thực sự được backend thực hiện thành công. "
+          "Bạn đang chạy bên trong HassMind và có các tool Home Assistant được backend cấp; nếu prompt yêu cầu kiểm tra hoặc điều khiển Home Assistant, hãy dùng tool. "
+          "Nếu không có action thành công, kể cả khi không đủ dữ liệu, model từ chối, chỉ đọc trạng thái, có warning hoặc tool lỗi nhưng chưa có action thành công, "
+          f"hãy trả về DUY NHẤT chuỗi {NO_NOTIFY_TOKEN}. "
+          "Sau action thành công, trả nội dung ngắn gọn chỉ mô tả kết quả cần báo. "
         + _notification_output_contract(include_noop_example=False)
     )
 

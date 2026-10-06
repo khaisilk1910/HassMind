@@ -46,7 +46,7 @@ from .ha_integrations import HAIntegrationBridge
 from .integration_config import integration_config_view, load_runtime_integration_overrides, reset_integration_config, save_integration_config
 from .integrations import IntegrationHub
 from .message_format import split_zalo_message
-from .notifications import clean_notification_result, get_notification_preference, is_actionable_notification_prompt, normalize_notification_channel, save_notification_preference, send_notification, should_suppress_actionable_result, should_suppress_notification
+from .notifications import clean_notification_result, get_notification_preference, is_action_only_notification_prompt, is_actionable_notification_prompt, normalize_notification_channel, save_notification_preference, send_notification, should_suppress_actionable_result, should_suppress_notification
 from .observability import (
     current_request_id,
     exception,
@@ -77,7 +77,7 @@ from .tools import ToolRuntime
 os.umask(0o077)
 configure_process_timezone()
 
-APP_VERSION = "1.4.2"
+APP_VERSION = "1.4.3"
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 setup_logging()
@@ -132,24 +132,86 @@ async def require_admin(
     return session
 
 
+def _successful_action_fallback(tool_trace: list[dict[str, Any]]) -> str:
+    labels: list[str] = []
+    for item in tool_trace:
+        if not (bool(item.get("side_effect")) and str(item.get("status") or "") == "ok"):
+            continue
+        tool = str(item.get("tool") or "action")
+        args = item.get("arguments") if isinstance(item.get("arguments"), dict) else {}
+        if tool == "ha_call_service":
+            action = f"{args.get('domain', '?')}.{args.get('service', '?')}"
+            target = args.get("target") if isinstance(args.get("target"), dict) else {}
+            entity = target.get("entity_id")
+            labels.append(f"{action} -> {entity}" if entity else action)
+        else:
+            labels.append(tool)
+        if len(labels) >= 5:
+            break
+    return "✅ Đã thực hiện thao tác: " + "; ".join(labels or ["Home Assistant action"])
+
+
 async def run_prompt(session_id: str, prompt: str, notify: bool, notify_channel: str = "mobile", zalo_thread_id: str = "") -> str:
     if agent is None or ha is None:
         raise RuntimeError("HassMind is starting")
     channel = normalize_notification_channel(notify_channel)
     with log_context(session_id=session_id, source="system"):
         info(logger, "system_prompt_started", notify=notify, notify_channel=channel, prompt_chars=len(prompt))
-        result = await agent.chat(session_id, prompt, source="system")
+        tool_trace: list[dict[str, Any]] = []
+        chat_with_trace = getattr(agent, "chat_with_trace", None)
+        if callable(chat_with_trace):
+            detailed = await chat_with_trace(session_id, prompt, source="system")
+            if isinstance(detailed, dict):
+                result = str(detailed.get("text") or "")
+                raw_trace = detailed.get("tools") or []
+                if isinstance(raw_trace, list):
+                    tool_trace = [x for x in raw_trace if isinstance(x, dict)]
+            else:
+                result = str(detailed or "")
+        else:
+            # Backward-compatible path for tests/custom Agent implementations.
+            result = await agent.chat(session_id, prompt, source="system")
+
         notification_ok: bool | None = None
         delivery_note = ""
-        conditional_notify = bool(notify and is_actionable_notification_prompt(prompt))
+        action_only_notify = bool(notify and is_action_only_notification_prompt(prompt))
+        actionable_notify = bool(notify and is_actionable_notification_prompt(prompt))
+        conditional_notify = action_only_notify or actionable_notify
+        successful_action = any(
+            bool(item.get("side_effect")) and str(item.get("status") or "") == "ok"
+            for item in tool_trace
+        )
+        tool_error = any(str(item.get("status") or "") == "error" for item in tool_trace)
+        if successful_action and should_suppress_notification(result):
+            # A real action must not disappear merely because the model returned
+            # the silent token after tool execution. Use deterministic evidence.
+            result = _successful_action_fallback(tool_trace)
         exact_sentinel = bool(notify and should_suppress_notification(result))
-        semantic_noop = bool(conditional_notify and should_suppress_actionable_result(result))
+        if action_only_notify:
+            semantic_noop = not successful_action
+        else:
+            semantic_noop = bool(
+                actionable_notify
+                and should_suppress_actionable_result(
+                    result,
+                    successful_action=successful_action,
+                    tool_error=tool_error,
+                )
+            )
         silent_result = exact_sentinel or semantic_noop
         display_result = result if silent_result or not notify else clean_notification_result(result)
         if silent_result:
             notification_ok = True
             reason = "conditional_noop_fallback" if semantic_noop and not exact_sentinel else "conditional_no_result"
-            info(logger, "system_notification_suppressed", reason=reason, notify_channel=channel)
+            info(
+                logger,
+                "system_notification_suppressed",
+                reason=reason,
+                notify_channel=channel,
+                tool_calls=len(tool_trace),
+                successful_action=successful_action,
+                tool_error=tool_error,
+            )
         elif notify:
             try:
                 notification_result = await send_notification(
@@ -593,7 +655,7 @@ class JobIn(BaseModel):
     notify: bool = True
     notify_channel: str = Field(default="mobile", pattern="^(mobile|zalo)$")
     zalo_thread_id: str = Field(default="", max_length=255)
-    notify_mode: str = Field(default="always", pattern="^(always|actionable)$")
+    notify_mode: str = Field(default="always", pattern="^(always|actionable|action_only)$")
 
 
 class RuleIn(BaseModel):
@@ -605,7 +667,7 @@ class RuleIn(BaseModel):
     notify: bool = True
     notify_channel: str = Field(default="mobile", pattern="^(mobile|zalo)$")
     zalo_thread_id: str = Field(default="", max_length=255)
-    notify_mode: str = Field(default="always", pattern="^(always|actionable)$")
+    notify_mode: str = Field(default="always", pattern="^(always|actionable|action_only)$")
 
 
 class NotificationPreferenceIn(BaseModel):

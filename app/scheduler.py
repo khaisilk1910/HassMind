@@ -5,7 +5,7 @@ from time import perf_counter
 from typing import Awaitable, Callable
 
 from .db import conn, utcnow
-from .notifications import actionable_notification_prompt, always_notification_prompt, normalize_notification_channel
+from .notifications import action_only_notification_prompt, actionable_notification_prompt, always_notification_prompt, normalize_notification_channel
 from .observability import exception, get_logger, info, log_context, warning
 from .settings import settings
 from .time_utils import local_tz, now as local_now, parse_datetime
@@ -15,7 +15,7 @@ logger = get_logger("scheduler")
 MIN_INTERVAL_SECONDS = 30
 MIN_WINDOW_INTERVAL_MINUTES = 1
 MAX_WINDOW_INTERVAL_MINUTES = 7 * 24 * 60
-VALID_NOTIFY_MODES = {"always", "actionable"}
+VALID_NOTIFY_MODES = {"always", "actionable", "action_only"}
 VALID_SCHEDULE_TYPES = {"daily", "interval", "weekly", "window", "once"}
 WEEKDAY_LABELS = ("T2", "T3", "T4", "T5", "T6", "T7", "CN")
 
@@ -23,7 +23,7 @@ WEEKDAY_LABELS = ("T2", "T3", "T4", "T5", "T6", "T7", "CN")
 def _normalize_notify_mode(value: str | None) -> str:
     mode = str(value or "always").strip().lower()
     if mode not in VALID_NOTIFY_MODES:
-        raise ValueError("notify_mode must be always or actionable")
+        raise ValueError("notify_mode must be always, actionable or action_only")
     return mode
 
 
@@ -384,11 +384,12 @@ async def scheduler_loop(stop: asyncio.Event, run_prompt: RunPrompt):
                         notify_mode = _normalize_notify_mode(job.get("notify_mode"))
                         runtime_prompt = job["prompt"]
                         if bool(job["notify"]):
-                            runtime_prompt = (
-                                actionable_notification_prompt(runtime_prompt)
-                                if notify_mode == "actionable"
-                                else always_notification_prompt(runtime_prompt)
-                            )
+                            if notify_mode == "action_only":
+                                runtime_prompt = action_only_notification_prompt(runtime_prompt)
+                            elif notify_mode == "actionable":
+                                runtime_prompt = actionable_notification_prompt(runtime_prompt)
+                            else:
+                                runtime_prompt = always_notification_prompt(runtime_prompt)
                         info(
                             logger,
                             "job_run_started",

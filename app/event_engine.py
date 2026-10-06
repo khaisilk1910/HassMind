@@ -3,20 +3,20 @@ from time import perf_counter
 from typing import Awaitable, Callable
 
 from .db import conn, utcnow
-from .notifications import actionable_notification_prompt, always_notification_prompt, normalize_notification_channel
+from .notifications import action_only_notification_prompt, actionable_notification_prompt, always_notification_prompt, normalize_notification_channel
 from .observability import exception, get_logger, info, log_context
 from .settings import settings
 from .time_utils import now as local_now, parse_datetime
 
 RunPrompt = Callable[[str, str, bool, str, str], Awaitable[str]]
 logger = get_logger("event_engine")
-VALID_NOTIFY_MODES = {"always", "actionable"}
+VALID_NOTIFY_MODES = {"always", "actionable", "action_only"}
 
 
 def _normalize_notify_mode(value: str | None) -> str:
     mode = str(value or "always").strip().lower()
     if mode not in VALID_NOTIFY_MODES:
-        raise ValueError("notify_mode must be always or actionable")
+        raise ValueError("notify_mode must be always, actionable or action_only")
     return mode
 
 
@@ -123,11 +123,12 @@ async def handle_state_event(event: dict, run_prompt: RunPrompt):
                 notify_mode = _normalize_notify_mode(rule.get("notify_mode"))
                 runtime_prompt = rule["prompt"] + context
                 if bool(rule["notify"]):
-                    runtime_prompt = (
-                        actionable_notification_prompt(runtime_prompt)
-                        if notify_mode == "actionable"
-                        else always_notification_prompt(runtime_prompt)
-                    )
+                    if notify_mode == "action_only":
+                        runtime_prompt = action_only_notification_prompt(runtime_prompt)
+                    elif notify_mode == "actionable":
+                        runtime_prompt = actionable_notification_prompt(runtime_prompt)
+                    else:
+                        runtime_prompt = always_notification_prompt(runtime_prompt)
                 info(logger, "event_rule_triggered", rule_id=rule["id"], entity_id=entity_id, new_state=new_state, notify=bool(rule["notify"]), notify_channel=rule.get("notify_channel") or "mobile", notify_mode=notify_mode)
                 await run_prompt(
                     sid,
