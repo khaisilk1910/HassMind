@@ -1,0 +1,32 @@
+{
+  "name": "job3-vacancy-shutdown",
+  "recipe": "vacancy_shutdown",
+  "description": "Tắt đèn/quạt đã xác định chắc chắn ở phòng vắng người; TV đang hoạt động là veto an toàn.",
+  "domains": ["light", "fan", "switch"],
+  "areas": [
+    {
+      "name": "Bếp",
+      "presence": "binary_sensor.status_bep",
+      "tv": ["remote.box_phong_bep", "media_player.box_phong_bep_2"]
+    },
+    {
+      "name": "Phòng Sóc Chíp",
+      "presence": "binary_sensor.ph_status",
+      "tv": []
+    },
+    {
+      "name": "Phòng khách",
+      "presence": "binary_sensor.pk_status",
+      "tv": ["remote.box_phong_khach", "media_player.box_phong_khach_2"]
+    },
+    {
+      "name": "Phòng ngủ",
+      "presence": "binary_sensor.pn_status",
+      "tv": ["media_player.xiaomi_tv_box_2", "remote.xiaomi_tv_box"]
+    }
+  ],
+  "switch_allowlist": [
+    "switch.ct3_ngoai_pn_kn_left",
+    "switch.ct4_phong_soc_chip_l3"
+  ]
+}

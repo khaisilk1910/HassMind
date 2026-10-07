@@ -13,6 +13,7 @@ services:
       TZ: ${TZ:-Asia/Ho_Chi_Minh}
       TIMEZONE: ${TIMEZONE:-Asia/Ho_Chi_Minh}
       USER_SKILLS_DIR: /data/skills
+      USER_LOGIC_PROFILES_DIR: /data/logic_profiles
       ALLOW_SCRIPT_ENTITIES: ${ALLOW_SCRIPT_ENTITIES:-script.fan_light_pn_kn_fan_1,script.fan_light_pn_kn_fan_2,script.fan_light_pn_kn_fan_3,script.fan_light_pn_kn_fan_4,script.fan_light_pn_kn_fan_5,script.fan_light_pn_kn_fan_6}
       HA_TOKEN_FILE: /run/secrets/ha_token
       OPENAI_API_KEY_FILE: /run/secrets/openai_api_key

@@ -1,0 +1,41 @@
+{
+  "name": "bedroom-climate-comfort",
+  "recipe": "bedroom_climate_comfort",
+  "description": "Điều phối tiện nghi Phòng ngủ và Phòng Sóc Chíp hoàn toàn bằng logic code; điều hòa chỉ cool 27°C, quạt điều chỉnh cường độ mát.",
+  "ac_target": 27,
+  "climate_cooldown_minutes": 15,
+  "fan_repeat_guard_minutes": 20,
+  "rooms": [
+    {
+      "name": "Phòng ngủ",
+      "temperature": "sensor.xiaomi_m9_daa3_temperature",
+      "humidity": "sensor.xiaomi_m9_daa3_relative_humidity",
+      "presence": "binary_sensor.pn_status",
+      "climate": "climate.xiaomi_m9_daa3_air_conditioner",
+      "fan": {
+        "kind": "script_speed",
+        "power": "switch.ct3_ngoai_pn_kn_left",
+        "speeds": {
+          "1": "script.fan_light_pn_kn_fan_1",
+          "2": "script.fan_light_pn_kn_fan_2",
+          "3": "script.fan_light_pn_kn_fan_3",
+          "4": "script.fan_light_pn_kn_fan_4",
+          "5": "script.fan_light_pn_kn_fan_5",
+          "6": "script.fan_light_pn_kn_fan_6"
+        }
+      }
+    },
+    {
+      "name": "Phòng Sóc Chíp",
+      "temperature": "sensor.xiaomi_m15_1480_temperature",
+      "humidity": "sensor.xiaomi_m15_1480_relative_humidity",
+      "presence": "binary_sensor.ph_status",
+      "climate": "climate.xiaomi_m15_1480_air_conditioner",
+      "fan": {
+        "kind": "preset",
+        "power": "switch.ct4_phong_soc_chip_l3",
+        "entity": "fan.sonoff_1000a827dd"
+      }
+    }
+  ]
+}

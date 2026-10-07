@@ -103,7 +103,7 @@ details{border:1px solid var(--line);border-radius:10px;background:var(--surface
 @media(max-width:1000px){.skill-prompt-list{grid-template-columns:1fr}.skill-dry-run-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:640px){.skill-prompt-toolbar{align-items:stretch;flex-direction:column}.skill-prompt-search{width:100%;max-width:none}.skill-dry-run-summary{grid-template-columns:1fr}.skill-dry-run-form{grid-template-columns:1fr}.skill-dry-run-form>*{grid-column:1/-1}}
 
-/* v1.4.3 strict quiet scheduler notifications */
+/* v1.5.0 logic-first core */
 .scheduler-editor{border:1px solid var(--line);background:rgba(13,18,25,.55);border-radius:12px;padding:12px}
 .schedule-panel{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:end}
 .schedule-panel.hidden{display:none}

@@ -24,6 +24,17 @@ class Settings(BaseSettings):
     zalo_history_messages: int = 12
     parallel_read_tools: bool = True
     ha_state_cache_ttl: float = 1.5
+
+    # Logic-first execution: deterministic code handles exact state/control and
+    # operator-defined logic profiles before the LLM is allowed to run.
+    logic_first_enabled: bool = True
+    logic_profiles_dir: str = "/app/config/logic_profiles"
+    user_logic_profiles_dir: str = "/data/logic_profiles"
+    logic_registry_cache_seconds: int = Field(default=300, ge=15, le=3600)
+    logic_repeat_failure_limit: int = Field(default=2, ge=1, le=20)
+    logic_repeat_failure_window_minutes: int = Field(default=30, ge=1, le=1440)
+    scheduler_max_concurrency: int = Field(default=4, ge=1, le=32)
+    event_rule_max_concurrency: int = Field(default=8, ge=1, le=64)
     # Home Assistant can return large WebSocket frames for entity registries or custom commands.
     # Keep a finite ceiling to avoid unbounded memory while allowing realistic HA installations.
     ha_ws_max_size: int = 16 * 1024 * 1024

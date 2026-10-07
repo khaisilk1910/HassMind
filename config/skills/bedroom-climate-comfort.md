@@ -38,6 +38,14 @@ Dùng đúng các entity_id dưới đây; đây là mapping đã được ngư�
 4. Chỉ tự điều khiển phòng có presence=`on`. Nếu presence=`off`, không bật mới hoặc tăng mức làm mát trong skill này. Nếu presence không xác định, không action.
 5. Nếu sensor môi trường lỗi, non-numeric hoặc rõ ràng quá cũ/bất thường, không tự tăng cooling; báo cần kiểm tra sensor.
 
+# Climate state interpretation
+- Luôn dùng top-level `state` của climate entity để xác định điều hòa bật/tắt.
+- `state=off` nghĩa là điều hòa đang tắt, kể cả khi `attributes.temperature` vẫn giữ target cũ.
+- `attributes.temperature` chỉ là target lưu, không phải power state.
+- `state=cool` nghĩa là điều hòa đang ở mode cool; `hvac_action=idle` chỉ nghĩa compressor hiện nghỉ, không có nghĩa điều hòa đã tắt.
+- Nếu phòng có người, `effective_temp >= 27.5`, climate đang `off` và `cool` được hỗ trợ: bật `cool` và đặt 27°C.
+- Không được kết luận `không cần action` trong trường hợp trên.
+
 # Comfort heuristic
 Dùng nhiệt độ phòng làm tín hiệu chính và độ ẩm chỉ để hiệu chỉnh nhẹ. Không gọi đây là chỉ số y khoa.
 
@@ -48,7 +56,7 @@ Tính `effective_temp` theo heuristic:
 - 40-64%: `T`
 - < 40%: `T - 0.2`
 
-Nếu humidity < 35%, tránh làm lạnh mạnh; tăng target đề xuất thêm 1°C nhưng không vượt 27°C.
+Nếu humidity < 35%, tránh làm lạnh mạnh. Điều hòa tự động vẫn giữ target cố định 27°C; không hạ thấp hơn để bù độ ẩm.
 
 # Decision bands
 Áp dụng riêng cho từng phòng đang có người:
@@ -75,17 +83,17 @@ Nếu humidity < 35%, tránh làm lạnh mạnh; tăng target đề xuất thêm
    - Phòng Sóc Chíp: preset `medium`.
 
 5. **Nóng** — `29.0 <= effective_temp < 30.5`
-   - Bật/giữ điều hòa `cool`, target 26°C.
+   - Bật/giữ điều hòa `cool`, target 27°C. Không hạ target; tăng mức quạt để tăng cảm giác mát.
    - Phòng ngủ: fan speed 4; nếu `T >= 30.0` dùng speed 5.
    - Phòng Sóc Chíp: preset `high`.
 
 6. **Rất nóng** — `effective_temp >= 30.5`
-   - Bật/giữ điều hòa `cool`, target 25°C.
+   - Bật/giữ điều hòa `cool`, target 27°C. Không hạ target; dùng mức quạt cao nhất phù hợp.
    - Phòng ngủ: fan speed 6.
    - Phòng Sóc Chíp: preset `high`.
 
 # High humidity handling
-- Khi humidity >=75%, `24.5 <= T < 27.5`, climate hỗ trợ `dry`, và climate vừa không đổi mode trong khoảng 15 phút: có thể ưu tiên `dry` thay vì `cool`.
+- Khi humidity >=75%, `24.5 <= T < 27.5`, climate hỗ trợ `dry`, và climate vừa không đổi mode trong khoảng 15 phút: có thể ưu tiên `dry` thay vì `cool`; không dùng độ ẩm cao làm lý do hạ target dưới 27°C.
 - Không dùng `dry` khi phòng đã lạnh (`T < 24.5`) hoặc đang nóng rõ (`T >= 27.5`); khi nóng dùng `cool` theo bảng trên.
 - Nếu mode `dry` không hỗ trợ setpoint đáng tin cậy, chỉ đổi mode và không ép temperature.
 - Không liên tục đảo `dry` <-> `cool` quanh ngưỡng; giữ mode hiện tại nếu chênh lệch nhỏ.
@@ -94,7 +102,7 @@ Nếu humidity < 35%, tránh làm lạnh mạnh; tăng target đề xuất thêm
 1. Không gọi action nếu thiết bị đã ở đúng mode/target/preset mong muốn.
 2. Chỉ đổi target điều hòa khi chênh ít nhất 1°C.
 3. Nếu climate `last_changed` dưới 15 phút, tránh đổi mode hoặc target lần nữa, trừ khi `T >= 30.5` hoặc `T <= 22.5`.
-4. Không đặt target thấp hơn 25°C hoặc cao hơn 27°C trong workflow tự động này.
+4. Target cooling tự động duy nhất là 27°C. Không tự đặt 25°C hoặc 26°C; khi phòng nóng hơn, tăng quạt thay vì hạ setpoint.
 5. Không dùng `heat` hoặc auto-heat.
 6. Với Phòng ngủ, nếu speed mong muốn trùng script có `last_triggered` gần nhất trong vòng 20 phút và nguồn quạt vẫn `on`, không trigger lại script đó.
 7. Với Phòng Sóc Chíp, chỉ gọi `fan.set_preset_mode` khi `preset_mode` hiện tại khác mức mong muốn.
@@ -102,7 +110,7 @@ Nếu humidity < 35%, tránh làm lạnh mạnh; tăng target đề xuất thêm
 # Actuation details
 ## Điều hòa
 - Bật/chọn mode: `ha_call_service` domain `climate`, service `set_hvac_mode`, target climate entity, data `{"hvac_mode":"cool"}` hoặc `dry` khi đủ điều kiện.
-- Đặt nhiệt độ: domain `climate`, service `set_temperature`, target climate entity, data `{"temperature":25|26|27}`.
+- Đặt nhiệt độ: domain `climate`, service `set_temperature`, target climate entity, data `{"temperature":27}`. Không tự đặt target dưới 27°C.
 - Tắt khi quá lạnh: domain `climate`, service `turn_off`.
 - Chỉ dùng mode xuất hiện trong attribute `hvac_modes`; nếu thiếu mode mong muốn thì không đoán.
 
@@ -124,6 +132,12 @@ Nếu humidity < 35%, tránh làm lạnh mạnh; tăng target đề xuất thêm
 4. Dry Run chỉ lập kế hoạch action; không được coi planned action là đã thực thi.
 
 # Continuous operation
+Với Scheduler/Event tự động, ưu tiên **Logic Profile deterministic** để không cần AI:
+
+`@logic-profile bedroom-climate-comfort`
+
+Prompt cũ có chứa tên skill vẫn được HassMind v1.5.0 auto-route sang Logic Profile khi chạy từ Scheduler/Event. Skill chỉ cần Agent AI khi được dùng trong chat/ngữ cảnh chưa đi qua profile logic.
+
 Skill chỉ chạy khi Agent được gọi. Nếu người dùng yêu cầu tự động theo lịch và chưa có Scheduler phù hợp, ưu tiên tạo **một** Scheduler disabled bằng `schedule_propose` thay vì tạo nhiều job cho từng mốc giờ.
 
 - Nếu người dùng muốn chạy trong một khung giờ (đặc biệt ban đêm), ví dụ mỗi 30 phút từ 23:00 đến trước 06:00 mỗi ngày:

@@ -1,4 +1,34 @@
-# HassMind v1.4.3 — AI Agent riêng cho Home Assistant
+# HassMind v1.5.0 — Logic-First Agent cho Home Assistant
+
+## Mới trong v1.5.0
+
+- **Logic trước, AI sau:** Web Chat, Scheduler, Event rules, Zalo và Telegram đều đi qua Logic-First Router; request chắc chắn được xử lý bằng code, AI chỉ nhận phần còn mơ hồ hoặc cần suy luận ngữ nghĩa.
+- **HA state nhanh và chính xác:** exact `entity_id` và friendly name khớp chính xác có fast path deterministic; direct on/off được đọc lại state để xác minh trước khi báo thành công.
+- **Hỏi lại khi mơ hồ:** nếu nhiều entity có cùng tên, HassMind liệt kê lựa chọn thay vì tự đoán.
+- **Logic Profiles:** Scheduler/Event có thể dùng `@logic-profile <name>` để chạy hoàn toàn không qua AI. Có sẵn `job3-vacancy-shutdown` và `bedroom-climate-comfort`; prompt Job 3 cũ và Scheduler gọi skill climate cũ đều được auto-route tương thích.
+- **Nhớ lỗi runtime:** SQLite lưu action/tool lỗi theo exact entity; lỗi lặp lại bị chặn retry mù, thành công trở lại sẽ resolve issue.
+- **Đa luồng có giới hạn:** Scheduler mặc định tối đa 4 job đồng thời, Event rules tối đa 8 rule đồng thời; read-only AI tools vẫn parallel như trước.
+- Chat UI hiển thị `⚙ logic` hoặc `🤖 AI` để biết request vừa được xử lý bằng engine nào.
+
+### Ranh giới Logic / AI
+
+**Code logic xử lý trước:** timing Scheduler, Event trigger/cooldown, notification gate, policy, state snapshot/cache, exact state query, simple exact on/off, exact friendly-name resolution, logic profile, verification, repeated-error guard và concurrency.
+
+**AI chỉ fallback:** câu lệnh cần hiểu ngữ nghĩa không thể resolve chắc chắn bằng rule hiện có, workflow điều kiện chưa được compile thành Logic Profile, giải thích/tư vấn mở, hoặc tác vụ cần suy luận nhiều bước. Khi dữ liệu/target vẫn mơ hồ, Agent được yêu cầu hỏi lại thay vì đoán.
+
+### Job 3 không dùng AI
+
+Sau nâng cấp có thể đổi prompt Job 3 thành:
+
+```text
+@logic-profile job3-vacancy-shutdown
+```
+
+Và chọn **Chỉ gửi khi có thao tác thành công**. Profile có presence/TV map cố định, dùng HA registry để map area, chỉ tắt entity đủ bằng chứng và chỉ báo action đã verify `off`. Profile operator có thể override tại `/data/logic_profiles/job3-vacancy-shutdown.json`.
+
+Scheduler tiện nghi nhiệt cũng có thể rút gọn thành `@logic-profile bedroom-climate-comfort`; logic cố định điều hòa ở `cool 27°C` và điều chỉnh mức mát bằng quạt.
+
+Đọc [changelog 1.5.0](CHANGELOG_V1.5.0.md) và [QA 1.5.0](QA_V1.5.0.md).
 
 ## Mới trong v1.4.3
 

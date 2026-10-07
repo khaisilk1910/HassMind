@@ -7,6 +7,7 @@ from openai import AsyncOpenAI
 
 from .custom_integrations import custom_tool_is_read_only
 from .db import add_message, get_messages, add_tool_audit
+from .error_memory import recent_issue_context, record_failure, record_success
 from .ha import assert_knowledge_target_safe, knowledge_control_context
 from .observability import exception, get_logger, info, log_context, preview, redact, warning
 from .policy import assert_service_allowed
@@ -104,6 +105,7 @@ class Agent:
                 raise ValueError("Tool arguments must be a JSON object")
         except Exception as exc:
             add_tool_audit(tc.function.name, {}, error=f"{type(exc).__name__}: {exc}")
+            record_failure(str(tc.function.name or "unknown"), {}, f"{type(exc).__name__}: {exc}", source="ai-agent")
             if trace is not None:
                 trace.append({
                     "tool": str(tc.function.name or ""),
@@ -136,7 +138,13 @@ class Agent:
         try:
             result = await self.runtime.call(tc.function.name, args)
             duration_ms = round((perf_counter() - tool_started) * 1000, 2)
-            add_tool_audit(tc.function.name, args, result=result)
+            logical_error = bool(isinstance(result, dict) and result.get("error") and not result.get("ok"))
+            if logical_error:
+                add_tool_audit(tc.function.name, args, error=str(result.get("error")))
+                record_failure(str(tc.function.name or "unknown"), args, str(result.get("error")), source="ai-agent")
+            else:
+                add_tool_audit(tc.function.name, args, result=result)
+                record_success(str(tc.function.name or "unknown"), args, source="ai-agent")
             info(
                 logger,
                 "tool_call_completed",
@@ -144,20 +152,23 @@ class Agent:
                 tool_call_id=tc.id,
                 duration_ms=duration_ms,
                 result=preview(result),
+                logical_error=logical_error,
             )
             if trace is not None:
                 trace.append({
                     "tool": str(tc.function.name or ""),
                     "round": round_index,
-                    "status": "ok",
+                    "status": "error" if logical_error else "ok",
                     "read_only": _is_read_only_tool(str(tc.function.name or "")),
                     "side_effect": not _is_read_only_tool(str(tc.function.name or "")),
                     "arguments": redact(args),
+                    **({"error": str(result.get("error"))} if logical_error else {}),
                 })
             content = json.dumps(result, ensure_ascii=False, default=str)
         except Exception as exc:
             duration_ms = round((perf_counter() - tool_started) * 1000, 2)
             add_tool_audit(tc.function.name, args, error=f"{type(exc).__name__}: {exc}")
+            record_failure(str(tc.function.name or "unknown"), args, f"{type(exc).__name__}: {exc}", source="ai-agent")
             exception(
                 logger,
                 "tool_call_failed",
@@ -538,6 +549,9 @@ class Agent:
                     history = get_messages(session_id, max(2, int(history_limit)))
                 messages = [{"role": "system", "content": self.system_prompt}]
                 messages.append({"role": "system", "content": _KNOWLEDGE_SAFETY_PROMPT})
+                issue_context = recent_issue_context(user_text)
+                if issue_context:
+                    messages.append({"role": "system", "content": issue_context})
                 if source == "zalo":
                     messages.append({"role": "system", "content": _ZALO_FORMAT_PROMPT})
                 messages.extend(history)

@@ -26,7 +26,7 @@ COPY config /app/config
 COPY static /app/static
 COPY VERSION /app/VERSION
 
-RUN mkdir -p /data /data/secrets /data/skills /knowledge /tmp && chown -R hassmind:hassmind /app /data /knowledge /tmp && chmod 700 /data/secrets /data/skills
+RUN mkdir -p /data /data/secrets /data/skills /data/logic_profiles /knowledge /tmp && chown -R hassmind:hassmind /app /data /knowledge /tmp && chmod 700 /data/secrets /data/skills /data/logic_profiles
 
 USER hassmind
 EXPOSE 8090

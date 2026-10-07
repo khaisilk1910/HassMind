@@ -5,7 +5,11 @@ from typing import Any
 
 
 def normalize_text(value: Any) -> str:
-    text = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode("ascii").lower()
+    # Vietnamese đ/Đ is not decomposed by NFKD and would otherwise disappear
+    # during ASCII folding ("đèn" -> "en"). Map it explicitly first so
+    # deterministic intent/entity matching remains accurate for Vietnamese.
+    raw = str(value or "").replace("đ", "d").replace("Đ", "D")
+    text = unicodedata.normalize("NFKD", raw).encode("ascii", "ignore").decode("ascii").lower()
     return " ".join(text.replace("_", " ").replace("-", " ").split())
 
 

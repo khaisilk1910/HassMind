@@ -1,3 +1,4 @@
+import asyncio
 from datetime import timedelta
 from time import perf_counter
 from typing import Awaitable, Callable
@@ -90,29 +91,8 @@ def set_rule_enabled(rule_id: int, enabled: bool):
     info(logger, "event_rule_enabled_changed", rule_id=rule_id, enabled=enabled)
 
 
-async def handle_state_event(event: dict, run_prompt: RunPrompt):
-    if not settings.event_agent_enabled:
-        return
-    data = event.get("data") or {}
-    entity_id = data.get("entity_id")
-    new_state_obj = data.get("new_state") or {}
-    new_state = new_state_obj.get("state")
-    if not entity_id:
-        return
-    with conn() as c:
-        rows = c.execute("SELECT * FROM event_rules WHERE enabled=1 AND entity_id=?", (entity_id,)).fetchall()
-        rules = [dict(r) for r in rows]
-    if not rules:
-        return
-    info(logger, "state_event_rules_found", entity_id=entity_id, new_state=new_state, rule_count=len(rules))
-    now = local_now()
-    for rule in rules:
-        if rule["to_state"] not in (None, "", new_state):
-            continue
-        if rule["last_triggered"]:
-            last = parse_datetime(rule["last_triggered"])
-            if last is not None and now - last < timedelta(seconds=int(rule["cooldown_seconds"])):
-                continue
+async def _run_matching_rule(rule: dict, *, entity_id: str, new_state: str | None, new_state_obj: dict, run_prompt: RunPrompt, semaphore: asyncio.Semaphore) -> None:
+    async with semaphore:
         with conn() as c:
             c.execute("UPDATE event_rules SET last_triggered=? WHERE id=?", (utcnow(), rule["id"]))
         context = f"\n\nEvent context: entity_id={entity_id}, new_state={new_state}, attributes={new_state_obj.get('attributes') or {}}"
@@ -141,3 +121,40 @@ async def handle_state_event(event: dict, run_prompt: RunPrompt):
             except Exception:
                 exception(logger, "event_rule_failed", rule_id=rule["id"], entity_id=entity_id, duration_ms=round((perf_counter() - started) * 1000, 2))
                 raise
+
+
+async def handle_state_event(event: dict, run_prompt: RunPrompt):
+    if not settings.event_agent_enabled:
+        return
+    data = event.get("data") or {}
+    entity_id = data.get("entity_id")
+    new_state_obj = data.get("new_state") or {}
+    new_state = new_state_obj.get("state")
+    if not entity_id:
+        return
+    with conn() as c:
+        rows = c.execute("SELECT * FROM event_rules WHERE enabled=1 AND entity_id=?", (entity_id,)).fetchall()
+        rules = [dict(r) for r in rows]
+    if not rules:
+        return
+    info(logger, "state_event_rules_found", entity_id=entity_id, new_state=new_state, rule_count=len(rules))
+    now = local_now()
+    runnable: list[dict] = []
+    for rule in rules:
+        if rule["to_state"] not in (None, "", new_state):
+            continue
+        if rule["last_triggered"]:
+            last = parse_datetime(rule["last_triggered"])
+            if last is not None and now - last < timedelta(seconds=int(rule["cooldown_seconds"])):
+                continue
+        runnable.append(rule)
+    if not runnable:
+        return
+    semaphore = asyncio.Semaphore(max(1, int(settings.event_rule_max_concurrency)))
+    results = await asyncio.gather(
+        *(_run_matching_rule(rule, entity_id=entity_id, new_state=new_state, new_state_obj=new_state_obj, run_prompt=run_prompt, semaphore=semaphore) for rule in runnable),
+        return_exceptions=True,
+    )
+    failures = [result for result in results if isinstance(result, Exception)]
+    if failures:
+        exception(logger, "event_rule_batch_failed", entity_id=entity_id, failures=len(failures), total=len(runnable))

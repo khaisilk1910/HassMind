@@ -31,6 +31,7 @@ _TIMESTAMP_COLUMNS: dict[str, tuple[str, ...]] = {
     "knowledge_proposals": ("created_at", "decided_at"),
     "knowledge_audit": ("created_at",),
     "tool_audit": ("created_at",),
+    "runtime_issues": ("first_seen", "last_seen", "resolved_at"),
     "admin_users": ("created_at", "updated_at", "last_login_at", "password_changed_at", "locked_until"),
     "admin_sessions": ("created_at", "last_seen_at", "expires_at"),
     "auth_audit": ("created_at",),
@@ -300,6 +301,20 @@ def init_db():
               created_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_tool_audit_id ON tool_audit(id DESC);
+
+            CREATE TABLE IF NOT EXISTS runtime_issues (
+              fingerprint TEXT PRIMARY KEY,
+              operation TEXT NOT NULL,
+              target TEXT NOT NULL DEFAULT '',
+              source TEXT NOT NULL DEFAULT 'runtime',
+              count INTEGER NOT NULL DEFAULT 1,
+              first_seen TEXT NOT NULL,
+              last_seen TEXT NOT NULL,
+              last_error TEXT NOT NULL DEFAULT '',
+              resolved_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_runtime_issues_last_seen ON runtime_issues(last_seen DESC);
+            CREATE INDEX IF NOT EXISTS idx_runtime_issues_target ON runtime_issues(target);
 
             CREATE TABLE IF NOT EXISTS admin_users (
               id INTEGER PRIMARY KEY AUTOINCREMENT,

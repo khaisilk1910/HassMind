@@ -436,6 +436,12 @@ class HomeAssistantClient:
     async def entity_registry(self):
         return await self.ws_command({"type": "config/entity_registry/list"})
 
+    async def device_registry(self):
+        return await self.ws_command({"type": "config/device_registry/list"})
+
+    async def area_registry(self):
+        return await self.ws_command({"type": "config/area_registry/list"})
+
     async def listen_events(self, callback: EventCallback, stop: asyncio.Event):
         backoff = 2
         attempt = 0

@@ -41,10 +41,12 @@ from .auth import (
 )
 from .db import add_event, conn, get_messages, init_db, list_approvals, list_event_rules, list_event_rules_page, list_jobs, list_jobs_page, normalize_stored_timestamps, recent_events, recent_tool_audit, scrub_sensitive_audit_history
 from .event_engine import handle_state_event, set_rule_enabled, update_event_rule
+from .error_memory import list_recent_issues
 from .ha import HomeAssistantClient
 from .ha_integrations import HAIntegrationBridge
 from .integration_config import integration_config_view, load_runtime_integration_overrides, reset_integration_config, save_integration_config
 from .integrations import IntegrationHub
+from .logic_engine import LogicEngine, LogicFirstOrchestrator
 from .message_format import split_zalo_message
 from .notifications import clean_notification_result, get_notification_preference, is_action_only_notification_prompt, is_actionable_notification_prompt, normalize_notification_channel, save_notification_preference, send_notification, should_suppress_actionable_result, should_suppress_notification
 from .observability import (
@@ -77,14 +79,14 @@ from .tools import ToolRuntime
 os.umask(0o077)
 configure_process_timezone()
 
-APP_VERSION = "1.4.3"
+APP_VERSION = "1.5.0"
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 setup_logging()
 logger = get_logger("main")
 
 ha: HomeAssistantClient | None = None
-agent: Agent | None = None
+agent: Any | None = None
 stop_event = asyncio.Event()
 tasks: list[asyncio.Task] = []
 integrations: IntegrationHub | None = None
@@ -499,7 +501,9 @@ async def lifespan(app: FastAPI):
         stop_event.clear()
         ha = HomeAssistantClient()
         integrations = IntegrationHub()
-        agent = Agent(ToolRuntime(ha, integrations))
+        runtime = ToolRuntime(ha, integrations)
+        ai_agent = Agent(runtime)
+        agent = LogicFirstOrchestrator(ai_agent, LogicEngine(runtime))
         tasks = [
             asyncio.create_task(ha.listen_events(event_callback, stop_event), name="ha-events"),
             asyncio.create_task(scheduler_loop(stop_event, run_prompt), name="scheduler"),
@@ -988,6 +992,9 @@ async def status():
         "model": settings.openai_model,
         "scheduler": settings.scheduler_enabled,
         "event_agent": settings.event_agent_enabled,
+        "logic_first": settings.logic_first_enabled,
+        "scheduler_max_concurrency": settings.scheduler_max_concurrency,
+        "event_rule_max_concurrency": settings.event_rule_max_concurrency,
         "log_level": settings.log_level.upper(),
         "log_file": settings.log_file if settings.log_file_enabled else "disabled",
         "timezone": timezone_name(),
@@ -1026,6 +1033,11 @@ async def diagnostics():
             "ha_url": settings.ha_url,
             "openai_base_url": settings.openai_base_url,
             "openai_model": settings.openai_model,
+            "logic_first_enabled": settings.logic_first_enabled,
+            "logic_profiles_dir": settings.logic_profiles_dir,
+            "user_logic_profiles_dir": settings.user_logic_profiles_dir,
+            "scheduler_max_concurrency": settings.scheduler_max_concurrency,
+            "event_rule_max_concurrency": settings.event_rule_max_concurrency,
             "searxng_url": settings.searxng_url,
             "telegram_enabled": settings.telegram_enabled,
             "camera_tts_enabled": settings.camera_tts_enabled,
@@ -1042,6 +1054,11 @@ async def diagnostics():
             "tz_env": os.environ.get("TZ", ""),
         },
     }
+
+
+@app.get("/api/runtime-issues", dependencies=[Depends(require_access)])
+async def runtime_issues(limit: int = Query(default=50, ge=1, le=200)):
+    return list_recent_issues(limit)
 
 
 @app.get("/api/logs", dependencies=[Depends(require_access)])
@@ -1270,9 +1287,11 @@ async def chat(body: ChatIn):
     sid = body.session_id or uuid.uuid4().hex
     with log_context(session_id=sid, source="web", component="chat_api"):
         info(logger, "chat_api_request", message_chars=len(body.message), component="chat_api")
-        answer = await agent.chat(sid, body.message, source="web")
-        info(logger, "chat_api_response", answer_chars=len(answer), component="chat_api")
-    return {"session_id": sid, "answer": answer, "request_id": current_request_id()}
+        detailed = await agent.chat_with_trace(sid, body.message, source="web")
+        answer = str(detailed.get("text") or "") if isinstance(detailed, dict) else str(detailed or "")
+        engine = str(detailed.get("engine") or "ai") if isinstance(detailed, dict) else "ai"
+        info(logger, "chat_api_response", answer_chars=len(answer), engine=engine, component="chat_api")
+    return {"session_id": sid, "answer": answer, "engine": engine, "request_id": current_request_id()}
 
 
 @app.get("/api/messages/{session_id}", dependencies=[Depends(require_access)])

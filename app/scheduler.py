@@ -365,8 +365,60 @@ def _advance_due_jobs(now: datetime) -> list[dict]:
     return runnable
 
 
+async def _run_due_job(job: dict, run_prompt: RunPrompt, semaphore: asyncio.Semaphore) -> None:
+    async with semaphore:
+        started = perf_counter()
+        sid = f"job:{job['id']}"
+        with log_context(session_id=sid, source="scheduler", component="scheduler"):
+            try:
+                notify_mode = _normalize_notify_mode(job.get("notify_mode"))
+                runtime_prompt = job["prompt"]
+                if bool(job["notify"]):
+                    if notify_mode == "action_only":
+                        runtime_prompt = action_only_notification_prompt(runtime_prompt)
+                    elif notify_mode == "actionable":
+                        runtime_prompt = actionable_notification_prompt(runtime_prompt)
+                    else:
+                        runtime_prompt = always_notification_prompt(runtime_prompt)
+                info(
+                    logger,
+                    "job_run_started",
+                    job_id=job["id"],
+                    name=job["name"],
+                    notify=bool(job["notify"]),
+                    notify_channel=job.get("notify_channel") or "mobile",
+                    notify_mode=notify_mode,
+                )
+                result = await run_prompt(
+                    sid,
+                    runtime_prompt,
+                    bool(job["notify"]),
+                    job.get("notify_channel") or "mobile",
+                    job.get("zalo_thread_id") or "",
+                )
+                info(
+                    logger,
+                    "job_run_completed",
+                    job_id=job["id"],
+                    duration_ms=round((perf_counter() - started) * 1000, 2),
+                    result_chars=len(result),
+                )
+            except Exception as exc:
+                result = f"ERROR: {type(exc).__name__}: {exc}"
+                exception(
+                    logger,
+                    "job_run_failed",
+                    job_id=job["id"],
+                    duration_ms=round((perf_counter() - started) * 1000, 2),
+                )
+            with conn() as c:
+                c.execute("UPDATE jobs SET last_result=? WHERE id=?", (result[-8000:], job["id"]))
+
+
 async def scheduler_loop(stop: asyncio.Event, run_prompt: RunPrompt):
-    info(logger, "scheduler_started", enabled=settings.scheduler_enabled)
+    max_concurrency = max(1, int(settings.scheduler_max_concurrency))
+    semaphore = asyncio.Semaphore(max_concurrency)
+    info(logger, "scheduler_started", enabled=settings.scheduler_enabled, max_concurrency=max_concurrency)
     while not stop.is_set():
         try:
             if not settings.scheduler_enabled:
@@ -376,53 +428,7 @@ async def scheduler_loop(stop: asyncio.Event, run_prompt: RunPrompt):
             jobs = _advance_due_jobs(now)
             if jobs:
                 info(logger, "scheduler_due_jobs", count=len(jobs), job_ids=[job["id"] for job in jobs])
-            for job in jobs:
-                started = perf_counter()
-                sid = f"job:{job['id']}"
-                with log_context(session_id=sid, source="scheduler", component="scheduler"):
-                    try:
-                        notify_mode = _normalize_notify_mode(job.get("notify_mode"))
-                        runtime_prompt = job["prompt"]
-                        if bool(job["notify"]):
-                            if notify_mode == "action_only":
-                                runtime_prompt = action_only_notification_prompt(runtime_prompt)
-                            elif notify_mode == "actionable":
-                                runtime_prompt = actionable_notification_prompt(runtime_prompt)
-                            else:
-                                runtime_prompt = always_notification_prompt(runtime_prompt)
-                        info(
-                            logger,
-                            "job_run_started",
-                            job_id=job["id"],
-                            name=job["name"],
-                            notify=bool(job["notify"]),
-                            notify_channel=job.get("notify_channel") or "mobile",
-                            notify_mode=notify_mode,
-                        )
-                        result = await run_prompt(
-                            sid,
-                            runtime_prompt,
-                            bool(job["notify"]),
-                            job.get("notify_channel") or "mobile",
-                            job.get("zalo_thread_id") or "",
-                        )
-                        info(
-                            logger,
-                            "job_run_completed",
-                            job_id=job["id"],
-                            duration_ms=round((perf_counter() - started) * 1000, 2),
-                            result_chars=len(result),
-                        )
-                    except Exception as exc:
-                        result = f"ERROR: {type(exc).__name__}: {exc}"
-                        exception(
-                            logger,
-                            "job_run_failed",
-                            job_id=job["id"],
-                            duration_ms=round((perf_counter() - started) * 1000, 2),
-                        )
-                    with conn() as c:
-                        c.execute("UPDATE jobs SET last_result=? WHERE id=?", (result[-8000:], job["id"]))
+                await asyncio.gather(*(_run_due_job(job, run_prompt, semaphore) for job in jobs))
         except asyncio.CancelledError:
             info(logger, "scheduler_cancelled")
             raise
