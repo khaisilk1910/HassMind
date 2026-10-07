@@ -9,10 +9,11 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-from .db import add_message, add_tool_audit
+from .db import add_message, add_tool_audit, replace_last_assistant_message
 from .error_memory import record_failure, record_success, recent_issue_for_operation
 from .notifications import NO_NOTIFY_TOKEN
 from .observability import exception, get_logger, info
+from .policy import assert_service_allowed
 from .settings import settings
 from .state_query import normalize_text
 from .time_utils import now as local_now, parse_datetime
@@ -27,7 +28,18 @@ _COMPLEX_WORDS = (
 )
 _QUERY_WORDS = (
     "trang thai", "hien tai", "dang ", "bao nhieu", "nhiet do", "do am", "status", "state",
-    "co bat", "co tat", "on hay off", "bat hay tat",
+    "co bat", "co tat", "on hay off", "bat hay tat", "kiem tra", "xem",
+)
+
+_HA_INTENT_WORDS = (
+    "home assistant", "hass", "phong", "bep", "den", "quat", "dieu hoa", "climate",
+    "sensor", "switch", "light", "fan", "media player", "remote", "presence", "hien dien",
+    "trang thai", "nhiet do", "do am", "bat", "tat", "kiem tra", "xem",
+)
+_MODEL_REFUSAL_MARKERS = (
+    "mo hinh ngon ngu", "nam ngoai kha nang", "khong duoc thiet ke de tro giup",
+    "khong the giup ban viec do", "khong the ho tro giup ve dieu do",
+    "chi co the tao van ban", "khong co kha nang hieu cung nhu tra loi yeu cau",
 )
 
 _LEGACY_JOB3_TV_IDS = {
@@ -205,10 +217,177 @@ class LogicEngine:
 
     @staticmethod
     def _looks_like_legacy_bedroom_climate(text: str, *, source: str) -> bool:
-        if source != "system":
-            return False
+        # Explicitly naming this operator-confirmed skill/profile is strong enough
+        # evidence to use the deterministic implementation in chat as well as Scheduler.
         core = LogicEngine._core_text(text).lower()
         return "bedroom-climate-comfort" in core
+
+    @staticmethod
+    def _looks_like_home_assistant_intent(text: str) -> bool:
+        normalized = LogicEngine._normalized_without_runtime_protocol(text)
+        return any(word in normalized for word in _HA_INTENT_WORDS)
+
+    @staticmethod
+    def is_model_refusal(text: str) -> bool:
+        normalized = normalize_text(text)
+        return any(marker in normalized for marker in _MODEL_REFUSAL_MARKERS)
+
+    @staticmethod
+    def _requested_rooms(text: str) -> list[str]:
+        normalized = LogicEngine._normalized_without_runtime_protocol(text)
+        aliases = [
+            ("Phòng Sóc Chíp", ("phong soc chip", "soc chip")),
+            ("Phòng khách", ("phong khach",)),
+            ("Phòng ngủ", ("phong ngu",)),
+            ("Bếp", ("nha bep", "phong bep", "bep")),
+        ]
+        out: list[str] = []
+        padded = f" {normalized} "
+        for canonical, names in aliases:
+            if any(f" {name} " in padded for name in names):
+                out.append(canonical)
+        return out
+
+    async def _room_status_report(self, room_names: list[str]) -> LogicDecision:
+        """Report operator-confirmed room signals without invoking the LLM.
+
+        This is deliberately conservative: it uses only fixed mappings from logic
+        profiles, so a short request such as "xem trạng thái phòng ngủ" remains
+        useful even when the configured LLM refuses or does not support tools.
+        """
+        mapped: dict[str, dict[str, Any]] = {}
+        try:
+            climate_profile = self.profiles.load("bedroom-climate-comfort")
+        except Exception:
+            climate_profile = {}
+        for room in climate_profile.get("rooms") or []:
+            if not isinstance(room, dict):
+                continue
+            name = str(room.get("name") or "").strip()
+            if not name:
+                continue
+            entry = mapped.setdefault(name, {})
+            for key in ("temperature", "humidity", "presence", "climate"):
+                value = str(room.get(key) or "").strip().lower()
+                if value:
+                    entry[key] = value
+            fan = room.get("fan") or {}
+            if isinstance(fan, dict):
+                entry["fan"] = fan
+
+        try:
+            vacancy_profile = self.profiles.load("job3-vacancy-shutdown")
+        except Exception:
+            vacancy_profile = {}
+        for area in vacancy_profile.get("areas") or []:
+            if not isinstance(area, dict):
+                continue
+            name = str(area.get("name") or "").strip()
+            if not name:
+                continue
+            entry = mapped.setdefault(name, {})
+            presence = str(area.get("presence") or "").strip().lower()
+            if presence:
+                entry.setdefault("presence", presence)
+            tv = [str(x).strip().lower() for x in (area.get("tv") or []) if str(x).strip()]
+            if tv:
+                entry["tv"] = tv
+
+        selected = [(name, mapped.get(name) or {}) for name in room_names]
+        entity_ids: list[str] = []
+        for _name, entry in selected:
+            for key in ("temperature", "humidity", "presence", "climate"):
+                eid = str(entry.get(key) or "")
+                if eid and eid not in entity_ids:
+                    entity_ids.append(eid)
+            fan = entry.get("fan") or {}
+            if isinstance(fan, dict):
+                for key in ("power", "entity"):
+                    eid = str(fan.get(key) or "").lower()
+                    if eid and eid not in entity_ids:
+                        entity_ids.append(eid)
+            for eid in entry.get("tv") or []:
+                if eid not in entity_ids:
+                    entity_ids.append(eid)
+
+        if not entity_ids:
+            return LogicDecision(False, reason="room_mapping_unavailable")
+
+        states = await self.ha.states()
+        by_id = {str(item.get("entity_id") or "").lower(): item for item in states if isinstance(item, dict)}
+        trace = [{
+            "tool": "ha_get_states", "round": 0, "status": "ok", "read_only": True,
+            "side_effect": False, "arguments": {"entity_ids": entity_ids, "include_attributes": True, "engine": "logic-room"},
+        }]
+        add_tool_audit("ha_get_states", {"entity_ids": entity_ids, "include_attributes": True}, result={"engine": "logic-room", "count": sum(1 for eid in entity_ids if eid in by_id)})
+
+        blocks: list[str] = []
+        for room_name, entry in selected:
+            if not entry:
+                continue
+            lines = [f"### 🏠 {room_name}"]
+
+            presence_eid = str(entry.get("presence") or "")
+            if presence_eid:
+                item = by_id.get(presence_eid)
+                state = str((item or {}).get("state") or "unknown").lower()
+                label = "Có người" if state == "on" else ("Không có người" if state == "off" else state)
+                lines.append(f"- **Hiện diện:** {label}")
+
+            temp_eid = str(entry.get("temperature") or "")
+            hum_eid = str(entry.get("humidity") or "")
+            if temp_eid:
+                item = by_id.get(temp_eid)
+                state = str((item or {}).get("state") or "unknown")
+                unit = str(((item or {}).get("attributes") or {}).get("unit_of_measurement") or "°C")
+                lines.append(f"- **Nhiệt độ:** {state}{unit if state not in {'unknown','unavailable'} else ''}")
+            if hum_eid:
+                item = by_id.get(hum_eid)
+                state = str((item or {}).get("state") or "unknown")
+                unit = str(((item or {}).get("attributes") or {}).get("unit_of_measurement") or "%")
+                lines.append(f"- **Độ ẩm:** {state}{unit if state not in {'unknown','unavailable'} else ''}")
+
+            climate_eid = str(entry.get("climate") or "")
+            if climate_eid:
+                item = by_id.get(climate_eid) or {}
+                state = str(item.get("state") or "unknown").lower()
+                attrs = item.get("attributes") or {}
+                target = attrs.get("temperature")
+                hvac_action = str(attrs.get("hvac_action") or "").lower()
+                detail = state
+                if state != "off" and target is not None:
+                    detail += f" · target {target}°C"
+                if hvac_action and hvac_action not in {"off", ""}:
+                    detail += f" · {hvac_action}"
+                lines.append(f"- **Điều hòa:** {detail}")
+
+            fan = entry.get("fan") or {}
+            if isinstance(fan, dict) and fan:
+                power_eid = str(fan.get("power") or "").lower()
+                fan_eid = str(fan.get("entity") or "").lower()
+                if power_eid:
+                    power_state = str((by_id.get(power_eid) or {}).get("state") or "unknown").lower()
+                    fan_text = power_state
+                    if fan_eid:
+                        attrs = (by_id.get(fan_eid) or {}).get("attributes") or {}
+                        preset = attrs.get("preset_mode")
+                        if preset:
+                            fan_text += f" · {preset}"
+                    lines.append(f"- **Quạt:** {fan_text}")
+
+            tv_ids = list(entry.get("tv") or [])
+            if tv_ids:
+                tv_values = []
+                for eid in tv_ids:
+                    item = by_id.get(eid) or {}
+                    tv_values.append(f"{eid.split('.',1)[0]}={str(item.get('state') or 'unknown')}")
+                lines.append("- **TV:** " + " · ".join(tv_values))
+
+            blocks.append("\n".join(lines))
+
+        if not blocks:
+            return LogicDecision(False, reason="room_mapping_unavailable")
+        return LogicDecision(True, "## 📊 Trạng thái realtime\n\n" + "\n\n".join(blocks), trace, reason="mapped_room_status")
 
     @staticmethod
     def _looks_like_legacy_job3(text: str, *, source: str) -> bool:
@@ -269,11 +448,20 @@ class LogicEngine:
                 return LogicDecision(False, reason="legacy_bedroom_climate_profile_unavailable")
 
         core_text = self._core_text(text)
-        if self._is_complex(core_text):
-            return LogicDecision(False, reason="semantic_or_complex")
-
         action = self._imperative_action(core_text)
         state_query = self._looks_like_state_query(core_text)
+
+        # A room status request can be answered from operator-confirmed profile
+        # mappings with one HA snapshot. Do this before the broad "complex" gate.
+        requested_rooms = self._requested_rooms(core_text)
+        if state_query and not action and requested_rooms:
+            room_result = await self._room_status_report(requested_rooms)
+            if room_result.handled:
+                info(logger, "logic_room_status_completed", rooms=requested_rooms, duration_ms=round((perf_counter()-started)*1000, 2))
+                return room_result
+
+        if self._is_complex(core_text):
+            return LogicDecision(False, reason="semantic_or_complex")
         entity_ids = self._entity_ids(core_text)
         if not entity_ids and (action or state_query):
             entity_ids, clarification = await self._resolve_named_entities(core_text)
@@ -464,7 +652,7 @@ class LogicEngine:
             return LogicDecision(True, "⚠️ Chưa xác nhận được thao tác: " + "; ".join(errors[:4]), traces, reason="direct_control_unverified")
         return LogicDecision(True, "⚠️ Không xác nhận được thay đổi trạng thái.", traces, reason="direct_control_unverified")
 
-    async def _execute_profile(self, profile: dict[str, Any], *, source: str) -> LogicDecision:
+    async def _execute_profile(self, profile: dict[str, Any], *, source: str, dry_run: bool = False) -> LogicDecision:
         recipe = str(profile.get("recipe") or "").strip().lower()
         if recipe == "vacancy_shutdown":
             return await self._vacancy_shutdown(profile, source=source)
@@ -474,8 +662,72 @@ class LogicEngine:
                 raise ValueError("state_report requires entity_ids")
             return await self._exact_state_query(ids)
         if recipe == "bedroom_climate_comfort":
-            return await self._bedroom_climate_comfort(profile, source=source)
+            return await self._bedroom_climate_comfort(profile, source=source, dry_run=dry_run)
         raise ValueError(f"Unsupported logic recipe: {recipe or '(empty)'}")
+
+    async def dry_run_profile(self, name: str) -> dict[str, Any]:
+        """Deterministically simulate a supported logic profile without side effects."""
+        started = perf_counter()
+        profile = self.profiles.load(name)
+        recipe = str(profile.get("recipe") or "").strip().lower()
+        if recipe != "bedroom_climate_comfort":
+            raise ValueError(f"Logic profile dry-run is not implemented for recipe: {recipe or '(empty)'}")
+        decision = await self._execute_profile(profile, source="web", dry_run=True)
+        planned_actions: list[dict[str, Any]] = []
+        for item in decision.trace:
+            if not (isinstance(item, dict) and item.get("kind") == "planned_action"):
+                continue
+            args = item.get("arguments") if isinstance(item.get("arguments"), dict) else {}
+            policy = item.get("policy") if isinstance(item.get("policy"), dict) else {
+                "status": "allowed", "reason": "Dry Run: action suppressed"
+            }
+            if str(item.get("tool") or "") == "ha_call_service":
+                try:
+                    assert_service_allowed(
+                        str(args.get("domain") or ""),
+                        str(args.get("service") or ""),
+                        target=args.get("target") if isinstance(args.get("target"), dict) else None,
+                        data=args.get("data") if isinstance(args.get("data"), dict) else {},
+                    )
+                    policy = {"status": "allowed", "reason": "Allowed by current HassMind policy; suppressed by Dry Run"}
+                except Exception as exc:
+                    policy = {"status": "blocked", "reason": str(exc)}
+            planned_actions.append({
+                "round": int(item.get("round") or 0),
+                "tool": str(item.get("tool") or "ha_call_service"),
+                "arguments": args,
+                "summary": str(item.get("summary") or "action"),
+                "executed": False,
+                "policy": policy,
+            })
+        policy_statuses = [str((x.get("policy") or {}).get("status") or "") for x in planned_actions]
+        overall_policy = "blocked" if any(x == "blocked" for x in policy_statuses) else ("allowed" if planned_actions else "no_action")
+        policy_reasons: list[str] = []
+        for action in planned_actions:
+            reason = str((action.get("policy") or {}).get("reason") or "")
+            if reason and reason not in policy_reasons:
+                policy_reasons.append(reason)
+        return {
+            "ok": True,
+            "dry_run": True,
+            "profile": str(profile.get("name") or name),
+            "tools": decision.trace,
+            "expected_tools": list(dict.fromkeys(str(x.get("tool") or "") for x in decision.trace if isinstance(x, dict) and x.get("tool"))),
+            "planned_actions": planned_actions,
+            "policy": {
+                "status": overall_policy,
+                "reasons": policy_reasons,
+            },
+            "execution": {
+                "actions_executed": 0,
+                "read_tools_executed": sum(1 for x in decision.trace if isinstance(x, dict) and x.get("read_only") and x.get("status") == "ok"),
+            },
+            "response_preview": decision.text,
+            "rounds": 1,
+            "duration_ms": round((perf_counter() - started) * 1000, 2),
+            "engine": "logic",
+            "reason": decision.reason,
+        }
 
     async def _registry_snapshot(self) -> dict[str, Any]:
         now = perf_counter()
@@ -722,7 +974,7 @@ class LogicEngine:
             return False
         return local_now() - changed < timedelta(minutes=max(1, int(minutes)))
 
-    async def _bedroom_climate_comfort(self, profile: dict[str, Any], *, source: str) -> LogicDecision:
+    async def _bedroom_climate_comfort(self, profile: dict[str, Any], *, source: str, dry_run: bool = False) -> LogicDecision:
         """Deterministic comfort controller: AC fixed at 27C, fan carries cooling intensity."""
         rooms = profile.get("rooms") or []
         if not isinstance(rooms, list) or not rooms:
@@ -886,12 +1138,23 @@ class LogicEngine:
                         plan("climate", "set_temperature", climate_eid, {"temperature": 27}, verify=("attribute:temperature", 27.0), label="đưa target về 27°C")
 
             # Execute per-room sequentially to preserve power/mode ordering; rooms themselves run in parallel.
+            # In dry-run mode we keep the exact same deterministic planning but never call a mutation tool.
             sent: list[dict[str, Any]] = []
             for item in planned:
                 args = {
                     "domain": item["domain"], "service": item["service"], "data": item["data"],
                     "target": {"entity_id": item["entity_id"]},
                 }
+                if dry_run:
+                    sent.append({**item, "args": args, "dry_run": True})
+                    room_trace.append({
+                        "tool": "ha_call_service", "round": 0, "status": "suppressed",
+                        "kind": "planned_action", "read_only": False, "side_effect": True,
+                        "arguments": args, "executed": False,
+                        "policy": {"status": "allowed", "reason": "Dry Run: action suppressed"},
+                        "summary": item.get("label") or f"{item['domain']}.{item['service']}",
+                    })
+                    continue
                 issue = recent_issue_for_operation(
                     "ha_call_service", args,
                     minutes=settings.logic_repeat_failure_window_minutes,
@@ -924,6 +1187,35 @@ class LogicEngine:
             }
 
         room_results = await asyncio.gather(*(run_room(room) for room in rooms))
+
+        if dry_run:
+            display: list[str] = []
+            for result in room_results:
+                trace.extend(result.get("trace") or [])
+                status = str(result.get("status") or "")
+                if status == "ok":
+                    sent = result.get("sent") or []
+                    if sent:
+                        labels = [str(x.get("label") or x.get("summary") or "action") for x in sent]
+                        display.append(
+                            f"🌡️ **{result['name']}:** {result['temperature']:.1f}°C · {result['humidity']:.0f}% · "
+                            f"~{result['effective']:.1f}°C · **{result['band']}**\n"
+                            f"- Dự kiến: " + " · ".join(labels)
+                        )
+                    else:
+                        display.append(
+                            f"🌡️ **{result['name']}:** {result['temperature']:.1f}°C · {result['humidity']:.0f}% · "
+                            f"~{result['effective']:.1f}°C · **{result['band']}**\n"
+                            "- Không có action dự kiến."
+                        )
+                elif status == "empty":
+                    display.append(f"🏠 **{result['name']}:** không có người · không điều khiển.")
+                else:
+                    display.append(f"⚠️ **{result['name']}:** {result.get('summary') or 'không đủ dữ liệu an toàn'}")
+            preview = "## 🧪 Dry Run · bedroom-climate-comfort\n\n" + "\n\n".join(display)
+            preview += "\n\n*Không có action nào được thực thi.*"
+            return LogicDecision(True, preview, trace, reason="climate_dry_run")
+
         # One fresh snapshot verifies all side effects across rooms.
         live = await self.ha.states(fresh=True)
         live_by_id = {str(item.get("entity_id") or "").lower(): item for item in live if isinstance(item, dict)}
@@ -1022,6 +1314,35 @@ class LogicFirstOrchestrator:
         result = await self.chat_with_trace(session_id, user_text, source)
         return str(result.get("text") or "")
 
+    async def dry_run_skill(self, name: str, user_text: str) -> dict[str, Any]:
+        """Use deterministic profile simulation for skills that have a code implementation.
+
+        This fixes the most important Logic-First boundary: selecting a deterministic
+        skill in the admin Dry Run must not fall straight back to an LLM that may
+        refuse or ignore Home Assistant tools.
+        """
+        from .skills import read_skill
+
+        skill = read_skill(name, include_disabled=True)
+        if not skill.get("valid", False):
+            raise ValueError("Skill is invalid; fix validation errors before scenario dry-run")
+        try:
+            profile = self.logic.profiles.load(str(name).strip().lower())
+            if str(profile.get("recipe") or "").strip().lower() == "bedroom_climate_comfort":
+                result = await self.logic.dry_run_profile(str(name).strip().lower())
+                result["skill"] = {
+                    "name": skill.get("name"),
+                    "version": skill.get("version"),
+                    "source": skill.get("source"),
+                    "enabled": skill.get("enabled"),
+                    "valid": skill.get("valid"),
+                }
+                result["prompt"] = str(user_text or "").strip()
+                return result
+        except (FileNotFoundError, ValueError):
+            pass
+        return await self.agent.dry_run_skill(name, user_text)
+
     async def chat_with_trace(self, session_id: str, user_text: str, source: str = "web") -> dict[str, Any]:
         decision = await self.logic.try_handle(user_text, source=source)
         if decision.handled:
@@ -1034,5 +1355,22 @@ class LogicFirstOrchestrator:
         if isinstance(detailed, dict):
             detailed.setdefault("engine", "ai")
             detailed.setdefault("reason", decision.reason)
+            text_value = str(detailed.get("text") or "")
+            tool_trace = detailed.get("tools") if isinstance(detailed.get("tools"), list) else []
+            if (
+                not tool_trace
+                and self.logic._looks_like_home_assistant_intent(user_text)
+                and self.logic.is_model_refusal(text_value)
+            ):
+                # Never surface generic "I am only a language model" prose for an HA
+                # operation. If deterministic routing could not safely resolve it, ask
+                # for the exact missing identity instead of pretending the feature is unsupported.
+                fallback = (
+                    "❓ Chưa xác định đủ dữ liệu để xử lý chắc chắn bằng Home Assistant. "
+                    "Hãy nêu tên thiết bị/phòng cụ thể hoặc `entity_id`; HassMind sẽ kiểm tra state realtime trước khi thao tác."
+                )
+                if not replace_last_assistant_message(session_id, fallback, source):
+                    add_message(session_id, "assistant", fallback, source)
+                return {"text": fallback, "tools": [], "engine": "logic", "reason": "ai_refusal_guard"}
             return detailed
         return {"text": str(detailed or ""), "tools": [], "engine": "ai", "reason": decision.reason}

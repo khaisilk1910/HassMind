@@ -1,4 +1,15 @@
-# HassMind v1.5.0 — Logic-First Agent cho Home Assistant
+# HassMind v1.5.1 — Logic-First Recovery cho Home Assistant
+
+## Mới trong v1.5.1
+
+- **Khôi phục luồng Chat/Dry Run:** các câu `xem trạng thái phòng ngủ`, `kiểm tra phòng ngủ` dùng mapping logic đã xác nhận và đọc state realtime trực tiếp, không rơi vào AI refusal.
+- **Skill `bedroom-climate-comfort` trên Web Chat:** khi người dùng gọi đích danh skill, HassMind route thẳng sang Logic Profile deterministic giống Scheduler, không bắt model tự quyết định có gọi tool hay không.
+- **Dry Run deterministic:** skill có Logic Profile được mô phỏng bằng code, đọc HA thật nhưng chặn toàn bộ mutation; giao diện hiển thị `⚙ Logic` và action dự kiến thay vì trả `Tôi là mô hình ngôn ngữ...`.
+- **Refusal guard:** nếu AI fallback trả capability disclaimer nhưng không hề dùng tool cho một yêu cầu Home Assistant, backend thay bằng câu hỏi làm rõ ngắn gọn và không lưu refusal đó vào lịch sử hội thoại.
+- **Climate state chính xác:** room status dùng top-level `climate.state`; target cũ không còn bị mô tả như bằng chứng điều hòa đang bật.
+- Giữ nguyên các tính năng v1.5.0: Logic Profiles, runtime issue memory, bounded concurrency, strict quiet notification, Advanced Scheduler và Knowledge/Integration management.
+
+Đọc [changelog 1.5.1](CHANGELOG_V1.5.1.md) và [QA 1.5.1](QA_V1.5.1.md).
 
 ## Mới trong v1.5.0
 

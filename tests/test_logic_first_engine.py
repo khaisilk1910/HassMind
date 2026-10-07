@@ -387,3 +387,164 @@ async def test_legacy_bedroom_skill_scheduler_prompt_auto_routes_to_logic_profil
     assert result.handled is True
     assert result.reason == "legacy_bedroom_climate_auto_profile"
     assert result.text == NO_NOTIFY_TOKEN
+
+@pytest.mark.asyncio
+async def test_room_status_phrase_uses_fixed_profile_mapping_without_ai(isolated_db, tmp_path, monkeypatch):
+    profiles = tmp_path / "profiles"
+    profiles.mkdir()
+    climate_profile = json.loads(Path("config/logic_profiles/bedroom-climate-comfort.json").read_text(encoding="utf-8"))
+    vacancy_profile = json.loads(Path("config/logic_profiles/job3-vacancy-shutdown.json").read_text(encoding="utf-8"))
+    (profiles / "bedroom-climate-comfort.json").write_text(json.dumps(climate_profile), encoding="utf-8")
+    (profiles / "job3-vacancy-shutdown.json").write_text(json.dumps(vacancy_profile), encoding="utf-8")
+    monkeypatch.setattr(settings, "logic_profiles_dir", str(profiles))
+    monkeypatch.setattr(settings, "user_logic_profiles_dir", str(tmp_path / "user-profiles"))
+
+    ha = FakeHA([
+        {"entity_id": "sensor.xiaomi_m9_daa3_temperature", "state": "28.1", "attributes": {"unit_of_measurement": "°C"}},
+        {"entity_id": "sensor.xiaomi_m9_daa3_relative_humidity", "state": "62", "attributes": {"unit_of_measurement": "%"}},
+        {"entity_id": "binary_sensor.pn_status", "state": "on", "attributes": {}},
+        {"entity_id": "climate.xiaomi_m9_daa3_air_conditioner", "state": "off", "attributes": {"temperature": 25, "hvac_action": "off"}},
+        {"entity_id": "switch.ct3_ngoai_pn_kn_left", "state": "on", "attributes": {}},
+        {"entity_id": "media_player.xiaomi_tv_box_2", "state": "off", "attributes": {}},
+        {"entity_id": "remote.xiaomi_tv_box", "state": "off", "attributes": {}},
+    ])
+    ai = FakeAI()
+    router = LogicFirstOrchestrator(ai, LogicEngine(FakeRuntime(ha)))
+
+    result = await router.chat_with_trace("room-status", "xem trạng thái phòng ngủ", "web")
+
+    assert result["engine"] == "logic"
+    assert result["reason"] == "mapped_room_status"
+    assert "28.1°C" in result["text"]
+    assert "Điều hòa:** off" in result["text"]
+    assert "target 25" not in result["text"]  # stored target must not imply AC is on
+    assert ai.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_explicit_bedroom_skill_in_web_chat_routes_to_logic_profile(isolated_db, tmp_path, monkeypatch):
+    profiles = tmp_path / "profiles"
+    profiles.mkdir()
+    profile = json.loads(Path("config/logic_profiles/bedroom-climate-comfort.json").read_text(encoding="utf-8"))
+    profile["rooms"] = [profile["rooms"][1]]
+    (profiles / "bedroom-climate-comfort.json").write_text(json.dumps(profile), encoding="utf-8")
+    monkeypatch.setattr(settings, "logic_profiles_dir", str(profiles))
+    monkeypatch.setattr(settings, "user_logic_profiles_dir", str(tmp_path / "user-profiles"))
+
+    ha = FakeHA([
+        {"entity_id": "sensor.xiaomi_m15_1480_temperature", "state": "25.0", "attributes": {}},
+        {"entity_id": "sensor.xiaomi_m15_1480_relative_humidity", "state": "50", "attributes": {}},
+        {"entity_id": "binary_sensor.ph_status", "state": "off", "attributes": {}},
+        {"entity_id": "climate.xiaomi_m15_1480_air_conditioner", "state": "off", "attributes": {"temperature": 27, "hvac_modes": ["off", "cool"]}},
+        {"entity_id": "switch.ct4_phong_soc_chip_l3", "state": "off", "attributes": {}},
+        {"entity_id": "fan.sonoff_1000a827dd", "state": "off", "attributes": {"preset_mode": "off", "preset_modes": ["off", "low", "medium", "high"]}},
+    ])
+    ai = FakeAI()
+    result = await LogicFirstOrchestrator(ai, LogicEngine(FakeRuntime(ha))).chat_with_trace(
+        "skill-web",
+        "Hãy dùng skill bedroom-climate-comfort kiểm tra Phòng ngủ và Phòng Sóc Chíp.",
+        "web",
+    )
+    assert result["engine"] == "logic"
+    assert result["reason"] == "legacy_bedroom_climate_auto_profile"
+    assert ai.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_logic_profile_dry_run_reads_and_plans_without_mutation(isolated_db, tmp_path, monkeypatch):
+    profiles = tmp_path / "profiles"
+    profiles.mkdir()
+    profile = json.loads(Path("config/logic_profiles/bedroom-climate-comfort.json").read_text(encoding="utf-8"))
+    profile["rooms"] = [profile["rooms"][0]]
+    (profiles / "bedroom-climate-comfort.json").write_text(json.dumps(profile), encoding="utf-8")
+    monkeypatch.setattr(settings, "logic_profiles_dir", str(profiles))
+    monkeypatch.setattr(settings, "user_logic_profiles_dir", str(tmp_path / "user-profiles"))
+
+    states = [
+        {"entity_id": "sensor.xiaomi_m9_daa3_temperature", "state": "31.0", "attributes": {}},
+        {"entity_id": "sensor.xiaomi_m9_daa3_relative_humidity", "state": "78", "attributes": {}},
+        {"entity_id": "binary_sensor.pn_status", "state": "on", "attributes": {}},
+        {"entity_id": "climate.xiaomi_m9_daa3_air_conditioner", "state": "off", "attributes": {"temperature": 25, "hvac_modes": ["off", "cool", "dry"]}},
+        {"entity_id": "switch.ct3_ngoai_pn_kn_left", "state": "off", "attributes": {}},
+    ]
+    for speed in range(1, 7):
+        states.append({"entity_id": f"script.fan_light_pn_kn_fan_{speed}", "state": "off", "attributes": {}})
+    ha = FakeHA(states)
+    runtime = FakeRuntime(ha)
+    logic = LogicEngine(runtime)
+
+    result = await logic.dry_run_profile("bedroom-climate-comfort")
+
+    assert result["engine"] == "logic"
+    assert result["execution"]["actions_executed"] == 0
+    assert result["execution"]["read_tools_executed"] >= 1
+    assert result["planned_actions"]
+    assert runtime.calls == []
+    assert ha._states["climate.xiaomi_m9_daa3_air_conditioner"]["state"] == "off"
+    assert "Dự kiến" in result["response_preview"]
+    assert any((x.get("arguments") or {}).get("data", {}).get("temperature") == 27 for x in result["planned_actions"])
+    assert not any((x.get("arguments") or {}).get("data", {}).get("temperature") in {25, 26} for x in result["planned_actions"])
+
+
+class RefusalAI:
+    async def chat_with_trace(self, session_id, text, source="web"):
+        from app.db import add_message
+        add_message(session_id, "user", text, source)
+        refusal = "Tôi là một mô hình ngôn ngữ, tôi không được thiết kế để trợ giúp về điều đó."
+        add_message(session_id, "assistant", refusal, source)
+        return {"text": refusal, "tools": []}
+
+
+@pytest.mark.asyncio
+async def test_generic_model_refusal_is_replaced_by_safe_clarification(isolated_db):
+    ha = FakeHA([])
+    router = LogicFirstOrchestrator(RefusalAI(), LogicEngine(FakeRuntime(ha)))
+
+    result = await router.chat_with_trace("refusal", "Kiểm tra Home Assistant giúp tôi", "web")
+
+    assert result["engine"] == "logic"
+    assert result["reason"] == "ai_refusal_guard"
+    assert "mô hình ngôn ngữ" not in result["text"].lower()
+    assert "entity_id" in result["text"]
+
+class DryRunFallbackAI(FakeAI):
+    def __init__(self):
+        super().__init__()
+        self.dry_calls = 0
+
+    async def dry_run_skill(self, name, user_text):
+        self.dry_calls += 1
+        return {"ok": True, "engine": "ai", "response_preview": "AI dry run"}
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_skill_dry_run_prefers_logic_profile(isolated_db, tmp_path, monkeypatch):
+    profiles = tmp_path / "profiles"
+    profiles.mkdir()
+    profile = json.loads(Path("config/logic_profiles/bedroom-climate-comfort.json").read_text(encoding="utf-8"))
+    profile["rooms"] = [profile["rooms"][1]]
+    (profiles / "bedroom-climate-comfort.json").write_text(json.dumps(profile), encoding="utf-8")
+    monkeypatch.setattr(settings, "logic_profiles_dir", str(profiles))
+    monkeypatch.setattr(settings, "user_logic_profiles_dir", str(tmp_path / "user-profiles"))
+    monkeypatch.setattr(settings, "skills_dir", str(Path("config/skills").resolve()))
+    user_skills = tmp_path / "user-skills"
+    user_skills.mkdir()
+    monkeypatch.setattr(settings, "user_skills_dir", str(user_skills))
+
+    ha = FakeHA([
+        {"entity_id": "sensor.xiaomi_m15_1480_temperature", "state": "28.2", "attributes": {}},
+        {"entity_id": "sensor.xiaomi_m15_1480_relative_humidity", "state": "52", "attributes": {}},
+        {"entity_id": "binary_sensor.ph_status", "state": "on", "attributes": {}},
+        {"entity_id": "climate.xiaomi_m15_1480_air_conditioner", "state": "off", "attributes": {"temperature": 27, "hvac_modes": ["off", "cool"]}},
+        {"entity_id": "switch.ct4_phong_soc_chip_l3", "state": "off", "attributes": {}},
+        {"entity_id": "fan.sonoff_1000a827dd", "state": "off", "attributes": {"preset_mode": "off", "preset_modes": ["off", "low", "medium", "high"]}},
+    ])
+    ai = DryRunFallbackAI()
+    router = LogicFirstOrchestrator(ai, LogicEngine(FakeRuntime(ha)))
+
+    result = await router.dry_run_skill("bedroom-climate-comfort", "Kiểm tra hai phòng")
+
+    assert result["engine"] == "logic"
+    assert result["skill"]["name"] == "bedroom-climate-comfort"
+    assert result["execution"]["actions_executed"] == 0
+    assert ai.dry_calls == 0

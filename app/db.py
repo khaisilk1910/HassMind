@@ -421,6 +421,23 @@ def add_message(session_id: str, role: str, content: str, source: str = "web"):
                   (session_id, role, content, source, utcnow()))
 
 
+def replace_last_assistant_message(session_id: str, content: str, source: str = "web") -> bool:
+    """Replace the newest assistant message for one session/source.
+
+    Used by backend response guards so a rejected generic LLM refusal is not kept
+    in history after HassMind substitutes a deterministic clarification.
+    """
+    with conn() as c:
+        row = c.execute(
+            "SELECT id FROM messages WHERE session_id=? AND role='assistant' AND source=? ORDER BY id DESC LIMIT 1",
+            (session_id, source),
+        ).fetchone()
+        if not row:
+            return False
+        c.execute("UPDATE messages SET content=? WHERE id=?", (content, row["id"]))
+        return True
+
+
 def get_messages(session_id: str, limit: int = 30) -> list[dict[str, str]]:
     with conn() as c:
         rows = c.execute("SELECT role,content FROM messages WHERE session_id=? ORDER BY id DESC LIMIT ?", (session_id, limit)).fetchall()

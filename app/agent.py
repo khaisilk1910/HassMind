@@ -508,6 +508,7 @@ class Agent:
             "response_preview": response_preview,
             "rounds": max([int(x.get("round") or 0) for x in trace] or [1]),
             "duration_ms": round((perf_counter() - started) * 1000, 2),
+            "engine": "ai",
         }
 
     async def chat(self, session_id: str, user_text: str, source: str = "web") -> str:
