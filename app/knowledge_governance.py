@@ -491,7 +491,15 @@ def _ha_issues(records, entities, areas, devices):
     live = {e["entity_id"]: e for e in entities if e.get("entity_id")}
     device_areas = {d["id"]: d.get("area_id") for d in devices if d.get("id")}
     area_map = {a["area_id"]: a for a in areas if a.get("area_id")}
+    known_devices = {d["id"] for d in devices if d.get("id")}
     for record in records:
+        if record.get("kind") == "device":
+            match = (record.get("metadata") or {}).get("match") or {}
+            if match.get("device_id") not in known_devices:
+                issues.append({"code": "unresolved_device", "severity": "warning", "path": record["path"],
+                               "device_id": match.get("device_id"),
+                               "message": "Device is missing from HA Device Registry; inspect the mapping before using it"})
+            continue
         eid = record.get("entity_id")
         if not eid:
             continue

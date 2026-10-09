@@ -19,5 +19,6 @@ def test_skills_responsive_stack_and_min_width():
 
 
 def test_skills_assets_cache_busted():
-    assert '/static/app.css?v=1.5.1' in HTML
-    assert '/static/app.js?v=1.5.1' in HTML
+    version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    assert f'/static/app.css?v={version}' in HTML
+    assert f'/static/app.js?v={version}' in HTML

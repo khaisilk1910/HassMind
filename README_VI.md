@@ -833,3 +833,10 @@ Khuyến nghị: lần deploy đầu để các cờ gửi/xóa/download/auto-re
 8. Mở **Integrations** và kiểm tra từng module trước khi bật side-effect policy.
 
 **Quan trọng khi nâng cấp từ bản logging cũ:** cơ chế scrub có thể che các secret còn nhận dạng được hoặc vẫn đang cấu hình, nhưng không thể chứng minh đã nhận ra mọi secret tùy ý từng xuất hiện trong log cũ. Nếu trước đây từng bật log nội dung hoặc nghi ngờ token bị ghi thô, hãy archive mã hóa để điều tra hoặc xóa `data/logs/hassmind.log*` sau khi đã lấy thông tin cần thiết, rồi xoay các credential liên quan.
+
+
+## v1.5.2: Thêm Device từ Home Assistant không nhập YAML
+
+Vào Web Admin → **Knowledge → Devices → + Thêm từ Home Assistant**. Chọn Device trong danh sách HA, xem Entity Registry của thiết bị, tùy chỉnh tên/aliases, nhấn tạo đề xuất, **Dry-run** và **Approve**. HassMind tạo/cập nhật `21-devices.yaml` theo `match.device_id`, không chép từng entity_id hoặc trạng thái hiện tại. Quyền điều khiển vẫn thực thi theo policy hiện tại; bản ghi Device không tự cấp quyền điều khiển.
+
+Tài liệu chi tiết: `KNOWLEDGE_DEVICES_VI.md`.

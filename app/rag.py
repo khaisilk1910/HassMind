@@ -21,8 +21,8 @@ from .time_utils import parse_datetime
 
 logger = get_logger("knowledge")
 ALLOWED = {".md", ".txt", ".yaml", ".yml", ".json"}
-KINDS = {"entity", "area", "scene", "script", "reference", "rules", "procedures"}
-GROUPS = {"entities": "entity", "areas": "area", "scenes": "scene", "scripts": "script",
+KINDS = {"entity", "area", "scene", "script", "device", "reference", "rules", "procedures"}
+GROUPS = {"devices": "device", "entities": "entity", "areas": "area", "scenes": "scene", "scripts": "script",
           "references": "reference", "rules": "rules", "procedures": "procedures",
           "entity": "entity", "area": "area", "scene": "scene", "script": "script",
           "reference": "reference", "rule": "rules", "procedure": "procedures"}
@@ -152,6 +152,14 @@ def _record(raw: Any, kind: str, path: str, index: int, diagnostics: list[dict],
         if removed:
             diagnostics.append(_diag("realtime_fields", "Live state fields excluded; read current state from Home Assistant", path,
                                      record_id=record_id, entity_id=raw.get("entity_id", raw.get("id")), fields=removed, location=location))
+    if kind == "device":
+        match = cleaned.get("match", {})
+        if not isinstance(match, dict) or not isinstance(match.get("device_id"), str) or not match["device_id"].strip():
+            diagnostics.append(_diag("schema_error", "Device requires match.device_id from Home Assistant", path, severity="error", location=location))
+            return None
+        if cleaned.get("entities") is not None and (not isinstance(cleaned["entities"], dict) or cleaned["entities"].get("mode") != "auto"):
+            diagnostics.append(_diag("schema_error", "Device entities.mode must be auto", path, severity="error", location=location))
+            return None
     entity_id = cleaned.get("entity_id", cleaned.get("id") if kind in {"entity", "scene", "script"} else None)
     if entity_id is not None:
         entity_id = str(entity_id).strip()
@@ -286,7 +294,10 @@ def parse_knowledge_text(path: str, text: str) -> dict:
             if isinstance(value, str):
                 return [(value, kind, base)]
             raise ValueError(f"{kind} collection must be a list, object or text")
-        if semantic(data):
+        if isinstance(data, dict) and data.get("kind") == "hassmind_device_catalog" and isinstance(data.get("devices"), list):
+            is_registry = True
+            raw_records = located_members(data["devices"], "device", "devices")
+        elif semantic(data):
             is_registry = True
             raw_records = [(data, "entity" if "entity_id" in data else "reference", "$")]
         elif isinstance(data, dict) and any(k in GROUPS for k in data):

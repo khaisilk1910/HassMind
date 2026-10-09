@@ -1,0 +1,6 @@
+# Device Catalog template. Normally created automatically via Web Admin:
+# Knowledge -> Devices -> Thêm từ Home Assistant -> Dry-run -> Approve.
+# DO NOT copy placeholder HA device_id values into the production Knowledge directory.
+schema_version: 1
+kind: hassmind_device_catalog
+devices: []

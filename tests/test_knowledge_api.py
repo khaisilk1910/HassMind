@@ -58,6 +58,45 @@ class KnowledgeAPITests(unittest.TestCase):
         self.assertEqual(r.status_code,200,r.text)
         self.csrf={'X-CSRF-Token':r.json()['csrf_token']}
 
+    def test_device_browser_requires_admin_and_import_is_reviewed(self):
+        from unittest.mock import AsyncMock
+        # Browser reads only registry metadata; import must not execute HA services.
+        fake = AsyncMock()
+        fake.device_registry.return_value = [
+            {'id': 'ha-pump-01', 'name': 'Ổ cắm Bơm Nước', 'area_id': 'kitchen', 'manufacturer': 'Tuya', 'model': 'TS011F'}]
+        fake.entity_registry.return_value = [
+            {'device_id': 'ha-pump-01', 'entity_id': 'switch.bom_nuoc', 'name': 'Power'},
+            {'device_id': 'ha-pump-01', 'entity_id': 'sensor.bom_nuoc_power', 'name': 'Power meter'}]
+        fake.area_registry.return_value = [{'area_id': 'kitchen', 'name': 'Bếp'}]
+        self.assertEqual(self.client.get('/api/knowledge/devices').status_code, 401)
+        self.assertEqual(self.client.get('/api/knowledge/devices', headers=self.token).status_code, 401)
+        self.login()
+        self.assertEqual(self.client.get('/api/knowledge/devices', headers=self.csrf).status_code, 503)
+        self.main.ha = fake
+        browse = self.client.get('/api/knowledge/devices', headers=self.csrf)
+        self.assertEqual(browse.status_code, 200, browse.text)
+        self.assertEqual(browse.json()[0]['entity_count'], 2)
+        self.assertFalse(browse.json()[0]['imported'])
+        payload = {'device_id': 'ha-pump-01', 'name': 'Ổ cắm Bơm Nước', 'aliases': ['bơm nước']}
+        url = '/api/knowledge/devices/import'
+        self.assertEqual(self.client.post(url, json=payload).status_code, 403)
+        self.assertEqual(self.client.post(url, json=payload, headers=self.token).status_code, 403)
+        proposal = self.client.post(url, json=payload, headers=self.csrf)
+        self.assertEqual(proposal.status_code, 200, proposal.text)
+        self.assertEqual(proposal.json()['status'], 'pending')
+        self.assertFalse((self.root/'21-devices.yaml').exists())
+        pid = proposal.json()['id']
+        self.assertTrue(self.client.post(f'/api/knowledge/proposals/{pid}/dry-run', json={}, headers=self.csrf).json()['valid'])
+        approved = self.client.post(f'/api/knowledge/proposals/{pid}/approve', json={}, headers=self.csrf)
+        self.assertEqual(approved.status_code, 200, approved.text)
+        self.assertEqual(approved.json()['status'], 'applied')
+        content = (self.root/'21-devices.yaml').read_text(encoding='utf-8')
+        self.assertIn('ha-pump-01', content)
+        self.assertNotIn('sensor.bom_nuoc_power', content)
+        self.assertTrue(self.client.get('/api/knowledge/devices', headers=self.csrf).json()[0]['imported'])
+        self.assertEqual(self.client.post(url, json=payload, headers=self.csrf).status_code, 409)
+        fake.call_service.assert_not_called()
+
     def test_search_backward_compatible_list_and_metadata_filters(self):
         r=self.client.get('/api/knowledge/search',params={'q':'đèn thử','domain':'light','type':'entity'},headers=self.token)
         self.assertEqual(r.status_code,200,r.text)

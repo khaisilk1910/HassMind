@@ -247,3 +247,28 @@ test('Advanced Scheduler serializes an overnight window as one job',async()=>{
   await h.run('saveJob()');
   const call=h.calls.find(x=>x.url==='/api/jobs'&&x.opt?.method==='POST');assert.ok(call);const body=JSON.parse(call.opt.body);assert.equal(body.schedule_type,'window');assert.deepEqual(JSON.parse(body.schedule_value),{start:'23:00',end:'06:00',every_minutes:30,weekdays:[0,2,4]});assert.equal(body.notify_mode,'actionable');
 });
+
+test('Device browser is reachable from Knowledge and HTML-escapes HA registry fields',()=>{
+  for(const id of ['knowledgeDevicesPanel','deviceSearch','deviceAreaFilter','deviceList','devicePager','deviceImportForm','deviceEntityList','deviceImportButton'])assert.match(html,new RegExp('id="'+id+'"'));
+  assert.match(script,/knowledge-devices-open/);
+  const h=harness();h.run('deviceUI.rows=[{device_id:"<svg>",name:"<img onerror=x>",area_id:"a",area:"<script>",manufacturer:"Maker",model:"X",integration:"z2m",entity_count:1,active_count:1,imported:false,entities:[{entity_id:"switch.<iframe>",name:"Power",domain:"switch"}]}];renderDeviceBrowser()');
+  assert.doesNotMatch(h.nodes.get('deviceList').innerHTML,/<svg>|<img |<script>|<iframe>/);
+  assert.match(h.nodes.get('deviceList').innerHTML,/&lt;img onerror=x&gt;/);
+  h.run('selectKnowledgeDevice("<svg>")');
+  assert.match(h.nodes.get('deviceEntityList').innerHTML,/&lt;iframe&gt;/);
+  assert.match(h.nodes.get('deviceOverview').innerHTML,/&lt;script&gt;/);
+});
+
+test('Device import is a CSRF-protected approval proposal, never an instant file mutation',async()=>{
+  const h=harness();h.run("uiState.csrf='device-csrf';deviceUI.rows=[{device_id:'ha-id-01',name:'Bơm',area_id:'',area:'',manufacturer:'Tuya',model:'TS011F',integration:'z2m',entity_count:1,active_count:1,imported:false,entities:[{entity_id:'switch.bom',name:'Switch',domain:'switch'}]}];selectKnowledgeDevice('ha-id-01')");
+  h.nodes.get('deviceDisplayName').value='Ổ cắm Bơm Nước';h.nodes.get('deviceAliases').value='bơm nước\nổ cắm bơm';
+  h.respond(async(url)=>({body:url==='/api/knowledge/devices/import'?{id:'draft-device-01'}:url.startsWith('/api/knowledge/proposals/draft-device-01')?{id:'draft-device-01',kind:'content',status:'pending',changes:[]}:url==='/api/knowledge/status'?{index:{},monitor:{}}:[]}));
+  await h.run('importKnowledgeDevice()');
+  const called=h.calls.find(x=>x.url==='/api/knowledge/devices/import');assert.ok(called);
+  assert.equal(called.opt.headers['X-CSRF-Token'],'device-csrf');
+  assert.equal(called.opt.method,'POST');
+  assert.equal(JSON.parse(called.opt.body).device_id,'ha-id-01');
+  assert.equal(JSON.parse(called.opt.body).name,'Ổ cắm Bơm Nước');
+  assert.deepEqual(JSON.parse(called.opt.body).aliases,['bơm nước','ổ cắm bơm']);
+  assert.equal(h.calls.some(x=>x.url.endsWith('/approve')),false);
+});

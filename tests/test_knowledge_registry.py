@@ -36,7 +36,8 @@ class KnowledgeRegistryTests(unittest.TestCase):
 
     def test_registry_all_kinds_and_legacy_formats(self):
         data = self.registry()
-        data.update(scenes=[{"entity_id": "scene.night", "name": "Ban đêm"}],
+        data.update(devices=[{"name": "Ổ cắm", "match": {"device_id": "abcd1234"}, "entities": {"mode": "auto"}}],
+                    scenes=[{"entity_id": "scene.night", "name": "Ban đêm"}],
                     scripts=[{"entity_id": "script.welcome", "name": "Chào nhà"}],
                     references=[{"id": "manual", "text": "Hướng dẫn bộ lọc"}],
                     rules=[{"id": "quiet", "text": "Yên lặng sau 22h"}],

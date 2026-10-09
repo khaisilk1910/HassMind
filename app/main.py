@@ -66,6 +66,7 @@ from .observability import (
 )
 from .rag import reindex_knowledge, search_knowledge
 from . import knowledge_governance as knowledge
+from . import device_catalog
 from .scheduler import scheduler_loop, set_job_enabled, update_job
 from .settings import settings
 from .time_utils import configure_process_timezone, timezone_name
@@ -79,7 +80,7 @@ from .tools import ToolRuntime
 os.umask(0o077)
 configure_process_timezone()
 
-APP_VERSION = "1.5.1"
+APP_VERSION = "1.5.2"
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 setup_logging()
@@ -1460,7 +1461,7 @@ async def reindex():
 
 
 @app.get("/api/knowledge/search", dependencies=[Depends(require_access)])
-async def knowledge_search(q: str = Query(min_length=1, max_length=512), limit: int = 8, area: str | None = None, domain: str | None = None, type: str | None = Query(default=None, pattern="^(entity|area|scene|script|reference|rules|procedures)$"), kind: str | None = Query(default=None, pattern="^(entity|area|scene|script|reference|rules|procedures)$")):
+async def knowledge_search(q: str = Query(min_length=1, max_length=512), limit: int = 8, area: str | None = None, domain: str | None = None, type: str | None = Query(default=None, pattern="^(entity|area|scene|script|reference|rules|procedures|device)$"), kind: str | None = Query(default=None, pattern="^(entity|area|scene|script|reference|rules|procedures|device)$")):
     return await _knowledge_operation(search_knowledge, q, min(max(limit, 1), 20), area=area, domain=domain, kind=kind or type)
 
 
@@ -1498,6 +1499,35 @@ async def _knowledge_operation(operation, *args, **kwargs):
     except OSError as exc:
         warning(logger, "knowledge_file_operation_failed", error_type=type(exc).__name__)
         raise HTTPException(409, "Knowledge file operation failed. Check mount permissions and recovery status.")
+
+
+class DeviceImportIn(BaseModel):
+    device_id: str = Field(min_length=1, max_length=150)
+    name: str = Field(min_length=1, max_length=150)
+    aliases: list[str] = Field(default_factory=list, max_length=20)
+
+
+@app.get("/api/knowledge/devices", dependencies=[Depends(require_admin)])
+async def knowledge_devices():
+    if ha is None:
+        raise HTTPException(503, "Home Assistant is not connected")
+    try:
+        devices, entities, areas = await asyncio.wait_for(
+            asyncio.gather(ha.device_registry(), ha.entity_registry(), ha.area_registry()), timeout=30)
+        return await _knowledge_operation(device_catalog.discover, devices, entities, areas)
+    except asyncio.TimeoutError:
+        raise HTTPException(504, "Home Assistant registry request timed out")
+    except (ConnectionError, OSError, RuntimeError, PermissionError) as exc:
+        warning(logger, "knowledge_devices_unavailable", error_type=type(exc).__name__)
+        raise HTTPException(502, "Cannot read Home Assistant device registry")
+
+
+@app.post("/api/knowledge/devices/import", dependencies=[Depends(require_admin)])
+async def knowledge_device_import(body: DeviceImportIn, request: Request):
+    # Always verify the selected device against a fresh HA registry snapshot.
+    devices = await knowledge_devices()
+    return await _knowledge_operation(device_catalog.create_import_proposal, devices,
+                                      body.device_id, body.name, body.aliases, _knowledge_actor(request))
 
 
 @app.get("/api/knowledge/status", dependencies=[Depends(require_access)])
