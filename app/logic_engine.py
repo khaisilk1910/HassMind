@@ -10,6 +10,7 @@ from time import perf_counter
 from typing import Any
 
 from .db import add_message, add_tool_audit, replace_last_assistant_message
+from . import device_catalog
 from .error_memory import record_failure, record_success, recent_issue_for_operation
 from .notifications import NO_NOTIFY_TOKEN
 from .observability import exception, get_logger, info
@@ -29,6 +30,7 @@ _COMPLEX_WORDS = (
 _QUERY_WORDS = (
     "trang thai", "hien tai", "dang ", "bao nhieu", "nhiet do", "do am", "status", "state",
     "co bat", "co tat", "on hay off", "bat hay tat", "kiem tra", "xem",
+    "liet ke", "danh sach entity", "cac entity", "thong so", "bao cao",
 )
 
 _HA_INTENT_WORDS = (
@@ -214,6 +216,87 @@ class LogicEngine:
                     break
             return [], "\n".join(lines)
         return resolved, None
+
+    @staticmethod
+    def _safe_display(value: Any) -> str:
+        """Keep HA-supplied friendly names readable, not Markdown markup."""
+        clean = " ".join(str(value if value is not None else "").split())
+        return re.sub(r"([\\`*_\[\]<>])", r"\\\1", clean)[:150]
+
+    async def _device_state_report(self, selected: dict[str, str]) -> LogicDecision:
+        """Report ALL entities belonging to one approved Device Registry identity.
+
+        Registry membership is authoritative; NEVER infer membership by the
+        entity_id prefix or duplicate friendly names. Disabled/hidden entities
+        remain visible in this read-only report even if import excludes them.
+        """
+        device_id = selected["device_id"]
+        states, registry = await asyncio.gather(self.ha.states(), self._registry_snapshot())
+        devices = registry["devices"]
+        if not any(isinstance(row, dict) and row.get("id") == device_id for row in devices):
+            return LogicDecision(True,
+                                 f"⚠️ Device **{self._safe_display(selected['name'])}** không còn trong Home Assistant Device Registry. "
+                                 "Hãy đồng bộ Knowledge → Devices và kiểm tra lại thiết bị.",
+                                 reason="device_registry_missing")
+
+        rows = sorted(
+            (row for row in registry["entities"] if isinstance(row, dict)
+             and row.get("device_id") == device_id
+             and isinstance(row.get("entity_id"), str) and row["entity_id"]),
+            key=lambda row: (row["entity_id"].split(".", 1)[0], row["entity_id"]),
+        )
+        live = {str(row.get("entity_id") or ""): row for row in states if isinstance(row, dict)}
+        available = sum(row["entity_id"] in live for row in rows)
+        disabled = sum(bool(row.get("disabled_by")) for row in rows)
+        heading = f"## 🔌 {self._safe_display(selected['name'])}"
+        lines = [heading]
+        if selected.get("area"):
+            lines.append(f"📍 {self._safe_display(selected['area'])}")
+        lines.append(f"**{len(rows)} entity** · {available} có state · {len(rows) - available} không có state"
+                     + (f" · {disabled} bị vô hiệu hóa" if disabled else ""))
+
+        if not rows:
+            lines.append("⚠️ Device hiện không có entity trong Entity Registry.")
+        for row in rows:
+            eid = row["entity_id"]
+            state_row = live.get(eid)
+            attrs = (state_row or {}).get("attributes") or {}
+            if not isinstance(attrs, dict):
+                attrs = {}
+            friendly = (attrs.get("friendly_name") or row.get("name") or row.get("original_name")
+                        or eid.split(".", 1)[-1].replace("_", " "))
+            # Registry name takes priority for duplicates such as switch/update
+            # that otherwise share a single HA friendly_name.
+            if row.get("name") or row.get("original_name"):
+                friendly = row.get("name") or row.get("original_name")
+            label = self._safe_display(friendly)
+            flags = []
+            if row.get("disabled_by"):
+                flags.append("đã vô hiệu hóa")
+            if row.get("hidden_by"):
+                flags.append("đang ẩn")
+            if state_row is None:
+                state_value = "không có state"
+            else:
+                raw_state = state_row.get("state")
+                state_value = str(raw_state) if raw_state is not None else "unknown"
+                unit = attrs.get("unit_of_measurement")
+                if unit and state_value not in {"unknown", "unavailable", ""}:
+                    state_value += f" {unit}"
+            suffix = f" ({', '.join(flags)})" if flags else ""
+            lines.append(f"- **{label}** · `{eid}`: **{self._safe_display(state_value)}**{suffix}")
+
+        trace = [
+            {"tool": "ha_device_registry", "round": 0, "status": "ok", "read_only": True,
+             "side_effect": False, "arguments": {"device_id": device_id}},
+            {"tool": "ha_entity_registry", "round": 0, "status": "ok", "read_only": True,
+             "side_effect": False, "arguments": {"device_id": device_id, "entity_count": len(rows)}},
+            {"tool": "ha_get_states", "round": 0, "status": "ok", "read_only": True,
+             "side_effect": False, "arguments": {"device_id": device_id, "snapshot": "all_states"}},
+        ]
+        add_tool_audit("ha_device_state_report", {"device_id": device_id},
+                       result={"entity_count": len(rows), "with_state": available, "disabled": disabled, "engine": "logic"})
+        return LogicDecision(True, "\n".join(lines), trace, reason="device_state_report")
 
     @staticmethod
     def _looks_like_legacy_bedroom_climate(text: str, *, source: str) -> bool:
@@ -450,6 +533,30 @@ class LogicEngine:
         core_text = self._core_text(text)
         action = self._imperative_action(core_text)
         state_query = self._looks_like_state_query(core_text)
+
+        # Device status is a READ-only operation. Resolve the operator-approved
+        # Device before looking for individual friendly_name matches, otherwise
+        # switch.* and update.* with the same name produce a false ambiguity.
+        # An explicit entity_id always stays an individual-entity request.
+        if state_query and not action and not self._entity_ids(core_text):
+            try:
+                match = device_catalog.match_device_in_message(core_text)
+                if match["status"] == "resolved":
+                    result = await self._device_state_report(match["candidates"][0])
+                    info(logger, "logic_device_status_completed", device_id=match["candidates"][0]["device_id"],
+                         duration_ms=round((perf_counter() - started) * 1000, 2))
+                    return result
+                if match["status"] == "ambiguous":
+                    options = "\n".join(f"- **{self._safe_display(row['name'])}**"
+                                        + (f" · {self._safe_display(row['area'])}" if row.get("area") else "")
+                                        for row in match["candidates"])
+                    return LogicDecision(True, "❓ Có nhiều Device trong Knowledge khớp yêu cầu. "
+                                         "Hãy chỉ rõ một thiết bị:\n" + options, reason="ambiguous_device")
+            except Exception as exc:
+                exception(logger, "logic_device_status_failed", error_type=type(exc).__name__)
+                return LogicDecision(True, "⚠️ Chưa thể đọc danh sách entity và state thiết bị từ Home Assistant. "
+                                     "Vui lòng thử lại; HassMind không dùng trạng thái lưu trong Knowledge.",
+                                     reason="device_state_unavailable")
 
         # A room status request can be answered from operator-confirmed profile
         # mappings with one HA snapshot. Do this before the broad "complex" gate.

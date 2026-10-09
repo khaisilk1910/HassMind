@@ -161,3 +161,62 @@ def match_catalog_device(query, *, area=None):
         if isinstance(match, dict) and isinstance(match.get("device_id"), str):
             candidates.append({"device_id": match["device_id"], "name": r["name"], "area": r.get("area", "")})
     return {"status": "resolved" if len(candidates) == 1 else "ambiguous" if candidates else "not_found", "candidates": candidates}
+
+
+def match_device_in_message(message: str) -> dict:
+    """Identify a *Knowledge-imported* Device in a longer Vietnamese status question.
+
+    No HA entity names are consulted here. A Device is identified only by its
+    operator-approved name/aliases and stable Registry ID. If two devices match,
+    the caller must ask which one; a partial name never grants action authority.
+    """
+    query = rag.normalize(message)
+    if not query:
+        return {"status": "not_found", "candidates": []}
+    padded = f" {query} "
+    full_matches: dict[str, dict] = {}
+    full_labels: dict[str, set[str]] = {}
+    partial_matches: dict[str, dict] = {}
+    for row in rag.load_catalog():
+        if row.get("kind") != "device":
+            continue
+        metadata = row.get("metadata") or {}
+        match = metadata.get("match") or {}
+        device_id = str(match.get("device_id") or "").strip() if isinstance(match, dict) else ""
+        if not device_id:
+            continue
+        candidate = {"device_id": device_id, "name": str(row.get("name") or device_id),
+                     "area": str(row.get("area") or "")}
+        labels = {rag.normalize(value) for value in [row.get("name"), *(row.get("aliases") or [])]}
+        for label in labels:
+            if not label or (len(label.split()) < 2 and len(label) < 8):
+                continue
+            if f" {label} " in padded:
+                full_matches[device_id] = candidate
+                full_labels.setdefault(device_id, set()).add(label)
+                continue
+            # Allow a missing final word ("ổ cắm bơm" -> "Ổ cắm Bơm Nước")
+            # only with at least three contiguous name tokens. This is an
+            # identity suggestion for a read-only status report, never control.
+            words = label.split()
+            if len(words) >= 4:
+                prefix = " ".join(words[:-1])
+                if len(prefix.split()) >= 3 and f" {prefix} " in padded:
+                    partial_matches[device_id] = candidate
+    # A longer exact Device name can contain another Device's short alias.
+    # Select the longer name ONLY when the shorter alias does not also appear
+    # outside its span ("pump A and pump B" must remain ambiguous).
+    if len(full_matches) > 1:
+        longest = max((len(label.split()), len(label), device_id, label)
+                      for device_id, labels in full_labels.items() for label in labels)
+        longest_words, longest_size, best_id, best_label = longest
+        max_labels = [(device_id, label) for device_id, labels in full_labels.items()
+                      for label in labels if (len(label.split()), len(label)) == (longest_words, longest_size)]
+        if len({device_id for device_id, _ in max_labels}) == 1:
+            remainder = padded.replace(f" {best_label} ", " ", 1)
+            if not any(f" {label} " in remainder for other_id, labels in full_labels.items()
+                       if other_id != best_id for label in labels):
+                full_matches = {best_id: full_matches[best_id]}
+    candidates = list(full_matches.values() if full_matches else partial_matches.values())
+    return {"status": "resolved" if len(candidates) == 1 else "ambiguous" if candidates else "not_found",
+            "candidates": sorted(candidates, key=lambda row: (rag.normalize(row["name"]), row["device_id"]))}

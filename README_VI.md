@@ -840,3 +840,9 @@ Khuyến nghị: lần deploy đầu để các cờ gửi/xóa/download/auto-re
 Vào Web Admin → **Knowledge → Devices → + Thêm từ Home Assistant**. Chọn Device trong danh sách HA, xem Entity Registry của thiết bị, tùy chỉnh tên/aliases, nhấn tạo đề xuất, **Dry-run** và **Approve**. HassMind tạo/cập nhật `21-devices.yaml` theo `match.device_id`, không chép từng entity_id hoặc trạng thái hiện tại. Quyền điều khiển vẫn thực thi theo policy hiện tại; bản ghi Device không tự cấp quyền điều khiển.
 
 Tài liệu chi tiết: `KNOWLEDGE_DEVICES_VI.md`.
+
+## v1.5.3: Device Status Report – hiển thị đầy đủ tên entity và states
+
+Với những thiết bị đã thêm vào **Knowledge → Devices**, chỉ cần hỏi `Ổ cắm Bơm Nước trạng thái ra sao?` hoặc `Bơm nước đang thế nào?`.
+Logic-First đối chiếu tên/alias với Device trong Knowledge, tìm mọi entity bằng `device_id` thật từ Home Assistant Registry, rồi báo cáo **đầy đủ** tên entity, `entity_id`, state (và đơn vị). Mọi entity disabled/hidden/missing state đều được nêu rõ. Nếu nhiều Device cùng tên, HassMind hỏi lại; yêu cầu một entity cụ thể và quyền điều khiển vẫn giữ nguyên.
+Xem `CHANGELOG_V1.5.3.md` và `KNOWLEDGE_DEVICES_VI.md`.

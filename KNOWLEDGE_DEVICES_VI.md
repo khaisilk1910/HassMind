@@ -44,3 +44,14 @@ devices:
 ## Triển khai Docker Stack
 
 Hãy build/push image từ mã nguồn v1.5.2 này qua CI/GHCR của bạn, sau đó cập nhật image của service trong Docker Stack trên **Swarm manager**. Giữ nguyên các bind mounts `/data`, `/knowledge`, `/data/secrets` và các biến `HA_URL`/Home Assistant token. Chỉ giải nén ZIP trên host không tự thay đổi image đang chạy.
+
+## v1.5.3 – Báo cáo toàn bộ entity và state của một Device
+
+Sau khi đã import Device trong **Knowledge → Devices**, hỏi:
+
+- `Ổ cắm Bơm Nước trạng thái ra sao?`
+- `Ổ cắm bơm trạng thái ra sao?`
+- `Bơm nước đang thế nào?`
+- `Liệt kê tất cả entity của ổ cắm bơm nước`
+
+HassMind truy vấn đúng `match.device_id` đã lưu, lấy toàn bộ entity từ HA Entity Registry và state hiện tại từ HA State API. Kết quả gồm tên chức năng, `entity_id`, state có đơn vị khi phù hợp. Entity bị vô hiệu hóa, ẩn hoặc chưa có state vẫn được nêu rõ; **không** suy diễn state từ Knowledge tĩnh. Khi hai thiết bị cùng khớp, HassMind yêu cầu chọn rõ một thiết bị. Khi hỏi một `entity_id` cụ thể thì chỉ trả entity đó; điều khiển vẫn tuân theo policy cũ.
