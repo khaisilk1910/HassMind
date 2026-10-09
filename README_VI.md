@@ -1,3 +1,20 @@
+## Mới trong v1.5.6 — ghi nhớ hội thoại theo mọi chủ đề
+
+- Trong **cùng một phiên** Web hoặc Zalo, HassMind dùng lịch sử chat cho các câu nối tiếp thuộc **mọi chủ đề**: Home Assistant, Scheduler/Event, Knowledge, giải thích, văn bản, tra cứu... Không chỉ giới hạn ở Device.
+- AI nhận **đoạn hội thoại gần nhất**, đồng thời code truy hồi **một số trao đổi cũ có chủ đề liên quan** từ SQLite khi người dùng quay lại chủ đề trước. Bộ nhớ được giới hạn dung lượng để tránh prompt quá dài và giảm độ trễ; không bảo đảm tìm đúng mọi chi tiết trong các phiên rất dài.
+- Câu rõ ràng, độc lập vẫn dùng Logic-First. Câu dùng đại từ hoặc yêu cầu viết lại/tiếp tục/giải thích câu trước không bị logic suy đoán sai chủ đề.
+- Lịch sử Web/Zalo tách theo cả `session_id` **và** `source`. Scheduler/Event `system` không kế thừa hội thoại. “Phiên mới” không dùng lịch sử cũ.
+- **An toàn:** lịch sử chỉ là ngữ cảnh, không phải lệnh mới, phê duyệt hay state thời gian thực. Luôn truy vấn Home Assistant mới và hỏi lại trước hành động thiếu định danh.
+- Cấu hình: `AGENT_HISTORY_MESSAGES`, `ZALO_HISTORY_MESSAGES`, `CONVERSATION_CONTEXT_MAX_CHARS`, `CONVERSATION_RECALL_EXCHANGES`, `CONVERSATION_RECALL_SCAN_MESSAGES`, `CONVERSATION_RECALL_MAX_CHARS`. Device focus vẫn dùng `CONVERSATION_FOCUS_MINUTES=60` riêng.
+- Hướng dẫn chi tiết: `CHANGELOG_V1.5.6.md` và `QA_V1.5.6.md`.
+
+## Mới trong v1.5.5 — hội thoại theo phiên
+
+- HassMind ghi nhớ Device được xác minh trong cùng phiên, cho các câu tiếp như **“còn điện áp?”**, **“nó đang bật không?”**.
+- Trạng thái luôn lấy mới từ Home Assistant; không lưu state trong ngữ cảnh.
+- Logic xử lý câu đọc đủ chắc chắn, AI giữ lịch sử để hiểu câu tiếp về chủ đề chung hoặc câu cần suy luận. Device focus có thời hạn 60 phút (`CONVERSATION_FOCUS_MINUTES`).
+- Phiên mới tách biệt; lịch sử web được khôi phục sau reload. Chi tiết: `CHANGELOG_V1.5.5.md`, `QA_V1.5.5.md`.
+
 # HassMind v1.5.1 — Logic-First Recovery cho Home Assistant
 
 ## Mới trong v1.5.1
@@ -846,3 +863,15 @@ Tài liệu chi tiết: `KNOWLEDGE_DEVICES_VI.md`.
 Với những thiết bị đã thêm vào **Knowledge → Devices**, chỉ cần hỏi `Ổ cắm Bơm Nước trạng thái ra sao?` hoặc `Bơm nước đang thế nào?`.
 Logic-First đối chiếu tên/alias với Device trong Knowledge, tìm mọi entity bằng `device_id` thật từ Home Assistant Registry, rồi báo cáo **đầy đủ** tên entity, `entity_id`, state (và đơn vị). Mọi entity disabled/hidden/missing state đều được nêu rõ. Nếu nhiều Device cùng tên, HassMind hỏi lại; yêu cầu một entity cụ thể và quyền điều khiển vẫn giữ nguyên.
 Xem `CHANGELOG_V1.5.3.md` và `KNOWLEDGE_DEVICES_VI.md`.
+
+
+## v1.5.4: Logic-First / AI Intent Fallback
+
+- Câu hỏi đã xác định rõ: xử lý bằng logic, không cần gọi AI.
+- Câu hỏi trạng thái Device diễn đạt tự nhiên mà logic chưa nhận diện: AI chỉ phân loại ý định (không có tools); mã nguồn xác minh `device_id` đã được duyệt trong Knowledge, sau đó đọc trạng thái thật từ Home Assistant.
+- Nếu AI không đạt độ tin cậy 0,85, Device trùng tên hoặc ID không hợp lệ: hỏi lại, không tự đoán.
+- Yêu cầu điều khiển và hướng dẫn: AI agent xử lý theo quyền, chính sách và quy trình phê duyệt hiện có.
+- Cấu hình: `LOGIC_AI_INTENT_ENABLED`, `LOGIC_AI_INTENT_TIMEOUT_SECONDS`, `LOGIC_AI_CHAT_TIMEOUT_SECONDS`.
+- Các lỗi timeout hay mất kết nối API trên giao diện được thông báo rõ hơn; cần xem log server để xác định nguyên nhân hạ tầng.
+
+Xem `CHANGELOG_V1.5.4.md` và `QA_V1.5.4.md`.

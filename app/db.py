@@ -1,6 +1,7 @@
 import json
 import sqlite3
 import os
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -210,6 +211,15 @@ def init_db():
               created_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id,id);
+            CREATE INDEX IF NOT EXISTS idx_messages_session_source ON messages(session_id,source,id);
+
+            CREATE TABLE IF NOT EXISTS session_device_focus (
+              session_id TEXT NOT NULL,
+              source TEXT NOT NULL,
+              device_id TEXT NOT NULL,
+              updated_at INTEGER NOT NULL,
+              PRIMARY KEY (session_id,source)
+            );
 
             CREATE TABLE IF NOT EXISTS approvals (
               id TEXT PRIMARY KEY,
@@ -438,10 +448,68 @@ def replace_last_assistant_message(session_id: str, content: str, source: str = 
         return True
 
 
-def get_messages(session_id: str, limit: int = 30) -> list[dict[str, str]]:
+def get_messages(session_id: str, limit: int = 30, source: str | None = None) -> list[dict[str, str]]:
+    """Recent messages; source must be supplied for interactive channel isolation."""
     with conn() as c:
-        rows = c.execute("SELECT role,content FROM messages WHERE session_id=? ORDER BY id DESC LIMIT ?", (session_id, limit)).fetchall()
+        if source is None:
+            rows = c.execute(
+                "SELECT role,content FROM messages WHERE session_id=? ORDER BY id DESC LIMIT ?",
+                (session_id, limit),
+            ).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT role,content FROM messages WHERE session_id=? AND source=? ORDER BY id DESC LIMIT ?",
+                (session_id, source, limit),
+            ).fetchall()
     return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+
+
+def get_older_session_messages(session_id: str, source: str, *, skip: int, limit: int) -> list[dict[str, str]]:
+    """Bounded retrospective scan, without crossing session or transport boundaries."""
+    if source == "system" or not session_id or limit <= 0:
+        return []
+    with conn() as c:
+        rows = c.execute(
+            "SELECT role,substr(content,1,4000) AS content FROM messages "
+            "WHERE session_id=? AND source=? ORDER BY id DESC LIMIT ? OFFSET ?",
+            (session_id, source, max(0, limit), max(0, skip)),
+        ).fetchall()
+    return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+
+
+def save_session_device_focus(session_id: str, source: str, device_id: str) -> None:
+    """Save ONLY an operator-approved Device Registry ID (never a state snapshot)."""
+    if source == "system" or not session_id or not device_id:
+        return
+    with conn() as c:
+        c.execute(
+            "INSERT INTO session_device_focus(session_id,source,device_id,updated_at) "
+            "VALUES(?,?,?,?) ON CONFLICT(session_id,source) DO UPDATE SET "
+            "device_id=excluded.device_id, updated_at=excluded.updated_at",
+            (session_id, source, device_id, int(time.time())),
+        )
+        # Limited retention even for abandoned web/Zalo sessions.
+        c.execute("DELETE FROM session_device_focus WHERE updated_at < ?", (int(time.time()) - 7 * 86400,))
+
+
+def read_session_device_focus(session_id: str, source: str, ttl_minutes: int = 60) -> str:
+    if source == "system" or not session_id:
+        return ""
+    with conn() as c:
+        row = c.execute(
+            "SELECT device_id,updated_at FROM session_device_focus WHERE session_id=? AND source=?",
+            (session_id, source),
+        ).fetchone()
+    if not row or int(row["updated_at"]) < time.time() - max(1, ttl_minutes) * 60:
+        return ""
+    return str(row["device_id"] or "")
+
+
+def clear_session_device_focus(session_id: str, source: str) -> None:
+    if source == "system":
+        return
+    with conn() as c:
+        c.execute("DELETE FROM session_device_focus WHERE session_id=? AND source=?", (session_id, source))
 
 
 def add_event(event_type: str, entity_id: str | None, payload: dict):

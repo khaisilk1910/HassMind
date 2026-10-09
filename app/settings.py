@@ -21,6 +21,12 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-5.6"
     max_tool_rounds: int = 10
     agent_history_messages: int = 24
+    conversation_focus_minutes: int = Field(default=60, ge=1, le=1440)
+    # Context applies to ALL interactive topics, not just device focus.
+    conversation_context_max_chars: int = Field(default=16000, ge=2000, le=100000)
+    conversation_recall_exchanges: int = Field(default=4, ge=0, le=16)
+    conversation_recall_scan_messages: int = Field(default=1200, ge=20, le=10000)
+    conversation_recall_max_chars: int = Field(default=5000, ge=500, le=30000)
     zalo_history_messages: int = 12
     parallel_read_tools: bool = True
     ha_state_cache_ttl: float = 1.5
@@ -28,6 +34,11 @@ class Settings(BaseSettings):
     # Logic-first execution: deterministic code handles exact state/control and
     # operator-defined logic profiles before the LLM is allowed to run.
     logic_first_enabled: bool = True
+    # Bounded, read-only AI intent classification before deterministic Device report.
+    logic_ai_intent_enabled: bool = True
+    logic_ai_intent_timeout_seconds: float = Field(default=12.0, ge=3.0, le=45.0)
+    # Keep interactive chat below common reverse-proxy idle timeouts.
+    logic_ai_chat_timeout_seconds: float = Field(default=35.0, ge=10.0, le=180.0)
     logic_profiles_dir: str = "/app/config/logic_profiles"
     user_logic_profiles_dir: str = "/data/logic_profiles"
     logic_registry_cache_seconds: int = Field(default=300, ge=15, le=3600)

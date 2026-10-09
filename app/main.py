@@ -80,7 +80,7 @@ from .tools import ToolRuntime
 os.umask(0o077)
 configure_process_timezone()
 
-APP_VERSION = "1.5.3"
+APP_VERSION = "1.5.6"
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 setup_logging()
@@ -1297,7 +1297,7 @@ async def chat(body: ChatIn):
 
 @app.get("/api/messages/{session_id}", dependencies=[Depends(require_access)])
 async def messages(session_id: str):
-    return get_messages(session_id, 100)
+    return get_messages(session_id, 100, source="web")
 
 
 @app.get("/api/events", dependencies=[Depends(require_access)])

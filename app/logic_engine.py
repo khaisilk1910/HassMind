@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import weakref
 import re
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -9,11 +10,11 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-from .db import add_message, add_tool_audit, replace_last_assistant_message
-from . import device_catalog
+from .db import add_message, add_tool_audit, replace_last_assistant_message, clear_session_device_focus, get_messages
+from . import device_catalog, conversation_context, conversation_history
 from .error_memory import record_failure, record_success, recent_issue_for_operation
 from .notifications import NO_NOTIFY_TOKEN
-from .observability import exception, get_logger, info
+from .observability import exception, get_logger, info, warning
 from .policy import assert_service_allowed
 from .settings import settings
 from .state_query import normalize_text
@@ -150,6 +151,18 @@ class LogicEngine:
         return "turn_off" if off else "turn_on"
 
     @staticmethod
+    def _looks_like_control_discussion(text: str) -> bool:
+        """A question ABOUT changing a device is not a status inquiry."""
+        normalized = LogicEngine._normalized_without_runtime_protocol(text)
+        # If asking for instructions or permission to act, defer to the AI
+        # agent's policy and approval rules; never guess from a trailing '?'.
+        return bool(re.search(
+            r"\b(?:co the|lam sao|cach|huong dan|muon|nen|giup|xin|thu)\b"
+            r".{0,65}\b(?:bat|tat|mo|dong|reset|khoi dong|cai dat|dieu khien|thay doi)\b",
+            normalized,
+        ))
+
+    @staticmethod
     def _looks_like_state_query(text: str) -> bool:
         normalized = LogicEngine._normalized_without_runtime_protocol(text)
         if any(word in normalized for word in _QUERY_WORDS):
@@ -223,7 +236,7 @@ class LogicEngine:
         clean = " ".join(str(value if value is not None else "").split())
         return re.sub(r"([\\`*_\[\]<>])", r"\\\1", clean)[:150]
 
-    async def _device_state_report(self, selected: dict[str, str]) -> LogicDecision:
+    async def _device_state_report(self, selected: dict[str, str], property_kind: str | None = None) -> LogicDecision:
         """Report ALL entities belonging to one approved Device Registry identity.
 
         Registry membership is authoritative; NEVER infer membership by the
@@ -245,18 +258,48 @@ class LogicEngine:
              and isinstance(row.get("entity_id"), str) and row["entity_id"]),
             key=lambda row: (row["entity_id"].split(".", 1)[0], row["entity_id"]),
         )
+        if property_kind:
+            # A follow-up such as "còn điện áp?" resolves the SAME approved
+            # Device but narrows the output to supported HA attributes. Never
+            # choose one switch when the Device has multiple switches.
+            def supports_property(row: dict[str, Any]) -> bool:
+                eid = str(row.get("entity_id") or "")
+                domain = eid.split(".", 1)[0]
+                if property_kind == "switch":
+                    return domain in {"switch", "light", "fan"}
+                if domain != "sensor":
+                    return False
+                item = next((item for item in states if isinstance(item, dict) and item.get("entity_id") == eid), {})
+                attrs = item.get("attributes") or {}
+                identity = " ".join((str(row.get("device_class") or row.get("original_device_class") or ""),
+                                     str(row.get("name") or row.get("original_name") or ""),
+                                     str(attrs.get("device_class") or ""),
+                                     str(attrs.get("friendly_name") or ""),
+                                     eid.rsplit(".", 1)[-1].replace("_", " ")))
+                normalized = normalize_text(identity)
+                patterns = {
+                    "voltage": ("voltage", "dien ap"), "current": ("current", "dong dien"),
+                    "power": ("power", "cong suat"), "energy": ("energy", "dien nang", "dien tieu thu"),
+                    "temperature": ("temperature", "nhiet do"), "humidity": ("humidity", "do am"),
+                    "battery": ("battery", "pin"),
+                }
+                terms = patterns.get(property_kind, ())
+                return any(f" {term} " in f" {normalized} " for term in terms)
+            rows = [row for row in rows if supports_property(row)]
         live = {str(row.get("entity_id") or ""): row for row in states if isinstance(row, dict)}
         available = sum(row["entity_id"] in live for row in rows)
         disabled = sum(bool(row.get("disabled_by")) for row in rows)
         heading = f"## 🔌 {self._safe_display(selected['name'])}"
         lines = [heading]
+        if property_kind:
+            lines.append("🔎 Thuộc tính đang xem: **" + self._safe_display(property_kind) + "**")
         if selected.get("area"):
             lines.append(f"📍 {self._safe_display(selected['area'])}")
         lines.append(f"**{len(rows)} entity** · {available} có state · {len(rows) - available} không có state"
                      + (f" · {disabled} bị vô hiệu hóa" if disabled else ""))
 
         if not rows:
-            lines.append("⚠️ Device hiện không có entity trong Entity Registry.")
+            lines.append("⚠️ Không tìm thấy entity tương ứng trong Device Registry. Không suy đoán giá trị.")
         for row in rows:
             eid = row["entity_id"]
             state_row = live.get(eid)
@@ -531,6 +574,8 @@ class LogicEngine:
                 return LogicDecision(False, reason="legacy_bedroom_climate_profile_unavailable")
 
         core_text = self._core_text(text)
+        if self._looks_like_control_discussion(core_text):
+            return LogicDecision(False, reason="control_discussion_needs_ai")
         action = self._imperative_action(core_text)
         state_query = self._looks_like_state_query(core_text)
 
@@ -1411,6 +1456,9 @@ class LogicFirstOrchestrator:
     def __init__(self, agent, logic: LogicEngine) -> None:
         self.agent = agent
         self.logic = logic
+        # Serialize concurrent turns from the same web/Zalo session, especially
+        # overlapping Zalo webhooks. Weak references prevent idle lock buildup.
+        self._turn_locks = weakref.WeakValueDictionary()
 
     def __getattr__(self, name: str):
         # Preserve the full Agent surface (for example Scenario Dry Run) while
@@ -1450,15 +1498,187 @@ class LogicFirstOrchestrator:
             pass
         return await self.agent.dry_run_skill(name, user_text)
 
+    async def _analyze_unclear_device_query(
+        self, session_id: str, user_text: str, source: str, reason: str,
+    ) -> dict[str, Any] | None:
+        """Use AI ONLY to parse uncertain status intent, then run verified HA logic.
+
+        No model-provided entity IDs, states, actions or free-form answers are used.
+        """
+        if not settings.logic_ai_intent_enabled or source == "system":
+            return None
+        core = self.logic._core_text(user_text)
+        if (self.logic._entity_ids(core) or self.logic._imperative_action(core)
+                or self.logic._looks_like_control_discussion(core)):
+            return None
+        # Do not reinterpret composite/conditional operations as a simple read.
+        if self.logic._is_complex(core):
+            return None
+        match = device_catalog.match_device_in_message(core)
+        if match["status"] != "resolved":
+            # Multiple plausible identities require an explicit user selection;
+            # AI must never silently choose one based on a guess.
+            if match["status"] == "ambiguous" and ("?" in core or self.logic._looks_like_state_query(core)
+                    or "nhu nao" in normalize_text(core)):
+                names = "\n".join("- **" + self.logic._safe_display(d["name"]) + "**"
+                                     for d in match["candidates"][:8])
+                clarification = ("\u2753 C\u00f3 nhi\u1ec1u Device kh\u1edbp y\u00eau c\u1ea7u. "
+                                 "Vui l\u00f2ng ch\u1ecdn m\u1ed9t thi\u1ebft b\u1ecb:\n" + names)
+                add_message(session_id, "user", user_text, source)
+                add_message(session_id, "assistant", clarification, source)
+                return {"text": clarification, "tools": [], "engine": "logic", "reason": "ambiguous_device"}
+            return None
+        interpreter = getattr(self.agent, "interpret_device_status", None)
+        if not callable(interpreter):
+            return None
+        selected = match["candidates"][0]
+        info(logger, "logic_ai_intent_started", reason=reason, source=source,
+             device_id=selected["device_id"])
+        try:
+            intent = await interpreter(core, [selected])
+        except Exception as exc:
+            exception(logger, "logic_ai_intent_failed", error_type=type(exc).__name__, reason=reason)
+            # This single-step AI service has just failed; trying the same backend
+            # again with a larger agent prompt would amplify an outage/timeout.
+            message = ("\u26a0\ufe0f AI ch\u01b0a ph\u00e2n t\u00edch \u0111\u01b0\u1ee3c c\u00e2u h\u1ecfi "
+                       "(d\u1ecbch v\u1ee5 AI ch\u1eadm ho\u1eb7c m\u1ea5t k\u1ebft n\u1ed1i). "
+                       "B\u1ea1n c\u00f3 th\u1ec3 h\u1ecfi r\u00f5: "
+                       "**xem tr\u1ea1ng th\u00e1i " + self.logic._safe_display(selected["name"]) + "** "
+                       "\u0111\u1ec3 Logic truy v\u1ea5n tr\u1ef1c ti\u1ebfp Home Assistant.")
+            add_message(session_id, "user", user_text, source)
+            add_message(session_id, "assistant", message, source)
+            return {"text": message, "tools": [], "engine": "logic", "reason": "ai_intent_unavailable"}
+        if not isinstance(intent, dict):
+            return None
+        classification = intent.get("intent")
+        if classification == "other":
+            return None  # Normal full AI agent handles non-status requests.
+        if (classification != "device_status" or intent.get("device_id") != selected["device_id"]
+                or not isinstance(intent.get("confidence"), (int, float))
+                or not 0.85 <= intent["confidence"] <= 1):
+            text = ("\u2753 B\u1ea1n mu\u1ed1n xem to\u00e0n b\u1ed9 tr\u1ea1ng th\u00e1i "
+                    "v\u00e0 entity c\u1ee7a **" + self.logic._safe_display(selected["name"]) + "** "
+                    "hay mu\u1ed1n th\u1ef1c hi\u1ec7n thao t\u00e1c kh\u00e1c?")
+            add_message(session_id, "user", user_text, source)
+            add_message(session_id, "assistant", text, source)
+            return {"text": text, "tools": [], "engine": "ai", "reason": "ai_intent_needs_clarification"}
+        try:
+            report = await self.logic._device_state_report(selected)
+        except Exception as exc:
+            exception(logger, "ai_routed_device_report_failed", error_type=type(exc).__name__)
+            text = ("\u26a0\ufe0f Kh\u00f4ng th\u1ec3 \u0111\u1ecdc state t\u1eeb Home Assistant l\u00fac n\u00e0y. "
+                    "H\u00e3y ki\u1ec3m tra k\u1ebft n\u1ed1i HA v\u00e0 th\u1eed l\u1ea1i.")
+            report = LogicDecision(True, text, reason="device_state_unavailable")
+        add_message(session_id, "user", user_text, source)
+        add_message(session_id, "assistant", report.text, source)
+        trace = [{"tool": "ai_device_intent", "round": 0, "status": "ok", "read_only": True,
+                  "side_effect": False, "arguments": {"device_id": selected["device_id"]}}, *report.trace]
+        info(logger, "logic_ai_device_status_handled", device_id=selected["device_id"],
+             trace_count=len(trace))
+        return {"text": report.text, "tools": trace, "engine": "ai+logic",
+                "reason": "ai_interpreted_device_status" if report.reason == "device_state_report" else report.reason}
+
+    @staticmethod
+    def _update_focus(session_id: str, source: str, text: str,
+                      match: dict[str, Any], reason: str) -> None:
+        if source == "system":
+            return
+        # Never remember a speculative match or a failed HA/AI read.
+        if match["status"] == "resolved" and reason not in {
+                "device_registry_missing", "device_state_unavailable", "ai_intent_unavailable",
+                "ai_agent_unavailable", "ai_agent_timeout", "ai_intent_needs_clarification",
+                "ai_refusal_guard"}:
+            conversation_context.remember(session_id, source, match["candidates"][0])
+        elif match["status"] == "ambiguous" or not conversation_context.should_keep_focus(text):
+            clear_session_device_focus(session_id, source)
+
     async def chat_with_trace(self, session_id: str, user_text: str, source: str = "web") -> dict[str, Any]:
-        decision = await self.logic.try_handle(user_text, source=source)
+        if source == "system":
+            return await self._chat_with_trace_turn(session_id, user_text, source)
+        key = (source, session_id)
+        lock = self._turn_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._turn_locks[key] = lock
+        async with lock:
+            return await self._chat_with_trace_turn(session_id, user_text, source)
+
+    async def _chat_with_trace_turn(self, session_id: str, user_text: str, source: str) -> dict[str, Any]:
+        # Session-local read context, never shared with Scheduler or another chat.
+        focus = conversation_context.focused_device(session_id, source)
+        explicit = conversation_context.explicit_device(user_text) if source != "system" else {"status": "not_found"}
+        has_explicit_target = explicit["status"] != "not_found" or bool(self.logic._entity_ids(user_text))
+        is_action = bool(self.logic._imperative_action(user_text)) or self.logic._looks_like_control_discussion(user_text)
+        # Unambiguous follow-ups can be served without an LLM, always by live HA.
+        # A new named target, room, conditional request or action MUST NOT inherit
+        # an earlier Device's authority by accidental pronoun resolution.
+        followup, prop = conversation_context.followup_read_request(user_text)
+        if (focus and source != "system" and followup and not has_explicit_target
+                and not is_action and not self.logic._is_complex(user_text)
+                and not self.logic._requested_rooms(user_text)
+                and not re.search(r"\b(?:den|quat|camera|tivi|tv|dieu hoa|may lanh|khac|kia)\b", normalize_text(user_text))):
+            try:
+                report = await self.logic._device_state_report(focus, property_kind=prop)
+            except Exception as exc:
+                exception(logger, "session_followup_device_failed", error_type=type(exc).__name__)
+                report = LogicDecision(True, "⚠️ Không đọc được state Home Assistant; vui lòng kiểm tra kết nối.",
+                                       reason="device_state_unavailable")
+            add_message(session_id, "user", user_text, source)
+            add_message(session_id, "assistant", report.text, source)
+            if report.reason == "device_state_report":
+                conversation_context.remember(session_id, source, focus)
+            elif report.reason == "device_registry_missing":
+                clear_session_device_focus(session_id, source)
+            info(logger, "session_followup_device_status", session_id=session_id, source=source,
+                 device_id=focus["device_id"], property=prop or "all")
+            return {"text": report.text, "tools": report.trace, "engine": "logic", "reason": "session_device_followup"}
+        # A short anaphoric request without a verified, explicit target may refer
+        # to ANY prior subject, not necessarily Home Assistant. In that case use
+        # session-aware AI rather than executing an unrelated deterministic rule.
+        recent_prior = get_messages(session_id, 1, source=source) if source != "system" else []
+        needs_context = bool(
+            recent_prior and conversation_history.is_contextual_followup(user_text)
+            and not has_explicit_target and not self.logic._requested_rooms(user_text)
+        )
+        if needs_context:
+            decision = LogicDecision(False, reason="session_general_followup")
+        else:
+            decision = await self.logic.try_handle(user_text, source=source)
         if decision.handled:
             add_message(session_id, "user", user_text, source)
             add_message(session_id, "assistant", decision.text, source)
+            self._update_focus(session_id, source, user_text, explicit, decision.reason)
             info(logger, "logic_first_handled", session_id=session_id, source=source, reason=decision.reason, trace_count=len(decision.trace))
             return {"text": decision.text, "tools": decision.trace, "engine": "logic", "reason": decision.reason}
         info(logger, "logic_first_fallback_ai", session_id=session_id, source=source, reason=decision.reason)
-        detailed = await self.agent.chat_with_trace(session_id, user_text, source)
+        parsed = await self._analyze_unclear_device_query(session_id, user_text, source, decision.reason)
+        if parsed is not None:
+            self._update_focus(session_id, source, user_text, explicit, str(parsed.get("reason") or ""))
+            return parsed
+        try:
+            if source == "web":
+                detailed = await asyncio.wait_for(
+                    self.agent.chat_with_trace(session_id, user_text, source),
+                    timeout=float(settings.logic_ai_chat_timeout_seconds),
+                )
+            else:
+                detailed = await self.agent.chat_with_trace(session_id, user_text, source)
+        except asyncio.TimeoutError:
+            warning(logger, "logic_ai_agent_timeout", source=source,
+                    timeout_seconds=settings.logic_ai_chat_timeout_seconds)
+            message = ("\u26a0\ufe0f AI ph\u1ea3n h\u1ed3i qu\u00e1 l\u00e2u. "
+                       "HassMind \u0111\u00e3 d\u1eebng y\u00eau c\u1ea7u \u0111\u1ec3 tr\u00e1nh m\u1ea5t k\u1ebft n\u1ed1i. "
+                       "Vui l\u00f2ng th\u1eed l\u1ea1i ho\u1eb7c xem log k\u1ebft n\u1ed1i AI.")
+            add_message(session_id, "assistant", message, source)
+            return {"text": message, "tools": [], "engine": "ai", "reason": "ai_agent_timeout"}
+        except Exception as exc:
+            if source != "web":
+                raise
+            exception(logger, "logic_ai_agent_failed", error_type=type(exc).__name__)
+            message = ("\u26a0\ufe0f Kh\u00f4ng th\u1ec3 k\u1ebft n\u1ed1i d\u1ecbch v\u1ee5 AI. "
+                       "H\u00e3y ki\u1ec3m tra OPENAI_BASE_URL, model v\u00e0 log HassMind.")
+            add_message(session_id, "assistant", message, source)
+            return {"text": message, "tools": [], "engine": "ai", "reason": "ai_agent_unavailable"}
         if isinstance(detailed, dict):
             detailed.setdefault("engine", "ai")
             detailed.setdefault("reason", decision.reason)
@@ -1479,5 +1699,7 @@ class LogicFirstOrchestrator:
                 if not replace_last_assistant_message(session_id, fallback, source):
                     add_message(session_id, "assistant", fallback, source)
                 return {"text": fallback, "tools": [], "engine": "logic", "reason": "ai_refusal_guard"}
+            self._update_focus(session_id, source, user_text, explicit, "ai_answer")
             return detailed
+        self._update_focus(session_id, source, user_text, explicit, "ai_answer")
         return {"text": str(detailed or ""), "tools": [], "engine": "ai", "reason": decision.reason}
