@@ -24,6 +24,7 @@ from . import notes, zalo_notes, zalo_note_drafts
 from .agent import Agent
 from .approvals import apply_approval, decide_by_action, decide_by_web, get_approval
 from .custom_integrations import create_custom_integration, delete_custom_integration, update_custom_integration
+from .integration_discovery import discover_openapi, _check_discovery_host
 from .auth import (
     change_password,
     change_username,
@@ -50,6 +51,7 @@ from .http_security import permitted_host, permitted_origin, admit_webhook_reque
 from .ha import HomeAssistantClient
 from .ha_integrations import HAIntegrationBridge
 from .integration_config import integration_config_view, load_runtime_integration_overrides, reset_integration_config, save_integration_config
+from .mcp_connections import list_mcp_connections, save_mcp_connection, delete_mcp_connection
 from .integrations import IntegrationHub
 from .logic_engine import LogicEngine, LogicFirstOrchestrator
 from .message_format import split_zalo_message
@@ -85,7 +87,7 @@ from .tools import ToolRuntime
 os.umask(0o077)
 configure_process_timezone()
 
-APP_VERSION = "1.5.19"
+APP_VERSION = "1.5.20"
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 setup_logging()
@@ -798,6 +800,8 @@ async def lifespan(app: FastAPI):
         await asyncio.gather(*tasks, *list(webhook_tasks), return_exceptions=True)
         if integrations:
             await integrations.close()
+        if agent and hasattr(agent.agent, "close"):
+            await agent.agent.close()
         if ha:
             await ha.close()
         info(logger, "application_stopped", duration_ms=round((perf_counter() - shutdown_started) * 1000, 2))
@@ -1059,6 +1063,35 @@ class RecoveryKeyRotateIn(BaseModel):
 
 class IntegrationConfigIn(BaseModel):
     values: dict[str, Any] = Field(default_factory=dict)
+
+
+class MCPConnectionIn(BaseModel):
+    id: str = Field(default="", max_length=64)
+    name: str = Field(default="", max_length=120)
+    url: str = Field(min_length=1, max_length=2048)
+    auth_type: str = Field(default="none", max_length=32)
+    auth_header: str = Field(default="X-API-Key", max_length=128)
+    secret: str = Field(default="", max_length=4096)
+    clear_secret: bool = False
+    enabled: bool = True
+    allowed_tools: list[str] = Field(default_factory=list)
+
+
+class MCPDiscoveryIn(BaseModel):
+    url: str = Field(min_length=1, max_length=2048)
+    auth_type: str = Field(default="none", max_length=32)
+    auth_header: str = Field(default="X-API-Key", max_length=128)
+    secret: str = Field(default="", max_length=4096)
+    existing_id: str = Field(default="", max_length=64)
+
+
+class DiscoverIntegrationIn(BaseModel):
+    base_url: str = Field(min_length=1, max_length=2048)
+    auth_type: str = Field(default="none", max_length=32)
+    auth_header: str = Field(default="X-API-Key", max_length=128)
+    secret: str = Field(default="", max_length=4096)
+    existing_id: str = Field(default="", max_length=64)
+    spec_path: str = Field(default="", max_length=512)
 
 
 class CustomIntegrationIn(BaseModel):
@@ -1430,6 +1463,111 @@ async def client_log(body: ClientLogIn):
     return {"ok": True, "request_id": current_request_id()}
 
 
+async def _apply_core_integration_config(integration_id: str) -> None:
+    """Reconfigure long-lived HA/LLM clients after saving core connection settings."""
+    if integration_id == "home_assistant" and ha is not None:
+        changed = await ha.reconfigure()
+        if changed:
+            # Existing websocket subscriptions hold the old URL/token. Restart
+            # just this worker while keeping the HA object and all tools intact.
+            worker = next((t for t in tasks if t.get_name() == "ha-events"), None)
+            if worker:
+                worker.cancel()
+                await asyncio.gather(worker, return_exceptions=True)
+                tasks.remove(worker)
+            if not stop_event.is_set():
+                tasks.append(asyncio.create_task(ha.listen_events(event_callback, stop_event), name="ha-events"))
+    elif integration_id == "openai" and agent is not None:
+        await agent.agent.reconfigure()
+
+
+@app.get("/api/integrations/mcp", dependencies=[Depends(require_admin)])
+async def managed_mcp_get():
+    return {"servers": list_mcp_connections()}
+
+
+@app.post("/api/integrations/mcp", dependencies=[Depends(require_admin)])
+async def managed_mcp_create(body: MCPConnectionIn, request: Request):
+    try:
+        item = save_mcp_connection(body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    record_admin_audit("mcp_connection_created", request,
+                       user_id=request.state.admin_session["user_id"],
+                       username=request.state.admin_session["username"], details=f"mcp={item['id']}")
+    return {"ok": True, "server": item}
+
+
+@app.put("/api/integrations/mcp/{server_id}", dependencies=[Depends(require_admin)])
+async def managed_mcp_update(server_id: str, body: MCPConnectionIn, request: Request):
+    try:
+        item = save_mcp_connection(body.model_dump(), existing=server_id)
+    except KeyError:
+        raise HTTPException(404, "Unknown MCP server")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    record_admin_audit("mcp_connection_updated", request,
+                       user_id=request.state.admin_session["user_id"],
+                       username=request.state.admin_session["username"], details=f"mcp={item['id']}")
+    return {"ok": True, "server": item}
+
+
+@app.delete("/api/integrations/mcp/{server_id}", dependencies=[Depends(require_admin)])
+async def managed_mcp_delete(server_id: str, request: Request):
+    try:
+        delete_mcp_connection(server_id)
+    except KeyError:
+        raise HTTPException(404, "Unknown MCP server")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    record_admin_audit("mcp_connection_deleted", request,
+                       user_id=request.state.admin_session["user_id"],
+                       username=request.state.admin_session["username"], details=f"mcp={server_id}")
+    return {"ok": True}
+
+
+@app.post("/api/integrations/mcp/discover", dependencies=[Depends(require_admin)])
+async def managed_mcp_discover(body: MCPDiscoveryIn, request: Request):
+    from .custom_integrations import _normalize_url, _normalize_auth_type, _normalize_header
+    from .mcp_connections import _secret_id
+    from .mcp_client import discover_mcp_tools
+    try:
+        url = _normalize_url(body.url)
+        _check_discovery_host(url)
+        auth = _normalize_auth_type(body.auth_type)
+        header = _normalize_header(body.auth_header, auth)
+        token = body.secret
+        if not token and body.existing_id:
+            if any(c["id"] == body.existing_id for c in list_mcp_connections()):
+                token = settings.read_runtime_secret(_secret_id(body.existing_id))
+        headers = {"Authorization": f"Bearer {token}"} if auth == "bearer" and token else (
+            {header: token} if auth == "header" and token else {})
+        tools = await asyncio.wait_for(discover_mcp_tools(url, headers), timeout=12)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception as exc:
+        warning(logger, "mcp_discovery_failed", error_type=type(exc).__name__)
+        raise HTTPException(502, "Cannot list MCP tools. Verify Streamable HTTP URL and credentials.")
+    record_admin_audit("mcp_tools_discovered", request,
+                       user_id=request.state.admin_session["user_id"],
+                       username=request.state.admin_session["username"],
+                       details=f"count={len(tools)}")
+    return {"found": True, "tools": tools}
+
+
+@app.post("/api/integrations/discover", dependencies=[Depends(require_admin)])
+async def custom_integration_discover(body: DiscoverIntegrationIn, request: Request):
+    try:
+        result = await discover_openapi(**body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    record_admin_audit("integration_openapi_discovery", request,
+                       user_id=request.state.admin_session["user_id"],
+                       username=request.state.admin_session["username"],
+                       details=f"found={result['found']}; actions={result['action_count']}")
+    return result
+
+
 @app.get("/api/integrations/config", dependencies=[Depends(require_admin)])
 async def integration_config_get():
     return integration_config_view()
@@ -1445,6 +1583,7 @@ async def integration_config_put(integration_id: str, body: IntegrationConfigIn,
         raise HTTPException(404, "Unknown integration")
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+    await _apply_core_integration_config(integration_id)
     await integrations.reconfigure()
     await _sync_zalo_webhook_registration_task()
     record_admin_audit(
@@ -1465,6 +1604,7 @@ async def integration_config_delete(integration_id: str, request: Request):
         result = reset_integration_config(integration_id)
     except KeyError:
         raise HTTPException(404, "Unknown integration")
+    await _apply_core_integration_config(integration_id)
     await integrations.reconfigure()
     await _sync_zalo_webhook_registration_task()
     record_admin_audit(

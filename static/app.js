@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION='1.5.19';
+const APP_VERSION='1.5.20';
 const $=id=>document.getElementById(id);
 function makeSessionId(){if(globalThis.crypto&&typeof globalThis.crypto.randomUUID==='function')return globalThis.crypto.randomUUID();return 'web-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,12)}
 const uiState={sessionId:localStorage.getItem('hassmind_session')||makeSessionId(),activeTab:'overview',csrf:'',user:null,passwordMinLength:14};
@@ -334,7 +334,8 @@ function customIntegrationEditor(item){
     <div class="field"><label for="${esc(sid)}-secret">Credential ${configured}</label><input id="${esc(sid)}-secret" data-custom-field="secret" class="input mono" type="password" value="" autocomplete="new-password" placeholder="${item.secret_configured?'Để trống để giữ credential hiện tại':'Nhập token / API key'}"><div class="field-hint">Lưu riêng trong /data/secrets; API không trả secret về trình duyệt.</div></div>
     <label class="integration-toggle" for="${esc(sid)}-clear"><span>Xóa credential đang lưu</span><input id="${esc(sid)}-clear" data-custom-field="clear_secret" type="checkbox"></label>
     <div class="field integration-field-full"><label for="${esc(sid)}-description">Mô tả</label><textarea id="${esc(sid)}-description" data-custom-field="description" class="textarea" maxlength="600">${esc(item.description||'')}</textarea></div>
-    <details class="integration-actions-editor integration-field-full"><summary>API Actions / Agent Tools <span class="badge info">${Number(item.action_count||0)}</span></summary><div class="integration-actions-body"><div class="field-hint">Declare fixed API operations here. The Agent never chooses an arbitrary URL or method. Only actions with <span class="mono">enabled=true</span> and <span class="mono">agent_enabled=true</span> are exposed as tools.</div><div class="field mt-10"><label>Actions JSON</label><textarea data-custom-actions-json class="textarea mono custom-actions-json" spellcheck="false">${esc(JSON.stringify(item.actions||[],null,2))}</textarea><div class="field-hint">Fields: id, name, description, enabled, agent_enabled, method, path, mode (read/write), request_target (auto/query/json), input_schema. Use {param} in path and declare the same param in input_schema.properties.</div></div></div></details>
+    <div class="integration-field-full integration-discovery-panel"><div class="integration-discovery-head"><div><strong>🔎 Tự tìm API Actions</strong><div class="field-hint">Quét OpenAPI / Swagger JSON từ Base URL. API phát hiện được sẽ chưa cấp quyền Agent.</div></div><button class="btn small" type="button" data-action="integration-discover">Quét API</button></div><div class="field"><label>OpenAPI path (tùy chọn)</label><input class="input mono" data-discovery-path placeholder="Tự thử /openapi.json, /swagger.json, /v3/api-docs..."></div><div class="integration-discovery-message" data-discovery-message aria-live="polite"></div><div data-action-list class="integration-action-list"></div></div>
+    <details class="integration-actions-editor integration-field-full"><summary>JSON nâng cao · API Actions / Agent Tools <span class="badge info">${Number(item.action_count||0)}</span></summary><div class="integration-actions-body"><div class="field-hint">Declare fixed API operations here. The Agent never chooses an arbitrary URL or method. Only actions with <span class="mono">enabled=true</span> and <span class="mono">agent_enabled=true</span> are exposed as tools.</div><div class="field mt-10"><label>Actions JSON</label><textarea data-custom-actions-json class="textarea mono custom-actions-json" spellcheck="false">${esc(JSON.stringify(item.actions||[],null,2))}</textarea><div class="field-hint">Fields: id, name, description, enabled, agent_enabled, method, path, mode (read/write), request_target (auto/query/json), input_schema. Use {param} in path and declare the same param in input_schema.properties.</div></div></div></details>
   </div><div class="integration-editor-footer"><span class="small-text muted">Nguồn: <span class="mono">web_admin</span></span><div class="row"><button class="btn bad small" data-action="integration-delete-custom" data-id="${esc(item.id)}" type="button">Xóa Integration</button><button class="btn primary small" type="submit">Lưu & áp dụng</button></div></div></form></details>`
 }
 function customIntegrationCreatePanel(){
@@ -349,8 +350,91 @@ function customIntegrationCreatePanel(){
     <div class="field"><label>Credential / token</label><input data-custom-field="secret" class="input mono" type="password" autocomplete="new-password" placeholder="Có thể để trống nếu không cần auth"></div>
     <label class="integration-toggle"><span>Bật ngay sau khi tạo</span><input data-custom-field="enabled" type="checkbox" checked></label>
     <div class="field integration-field-full"><label>Mô tả</label><textarea data-custom-field="description" class="textarea" maxlength="600" placeholder="Integration này dùng để làm gì..."></textarea></div>
-    <details class="integration-actions-editor integration-field-full"><summary>API Actions / Agent Tools</summary><div class="integration-actions-body"><div class="field-hint">Optional. Start with [] for health-only. Add fixed actions when this API has functions HassMind should read or execute.</div><div class="field mt-10"><label>Actions JSON</label><textarea data-custom-actions-json class="textarea mono custom-actions-json" spellcheck="false">[]</textarea><div class="field-hint">Example action: {"id":"get-status","name":"Get status","enabled":true,"agent_enabled":true,"method":"GET","path":"/api/status","mode":"read","request_target":"auto","input_schema":{"type":"object","properties":{},"required":[],"additionalProperties":false}}</div></div></div></details>
+    <div class="integration-field-full integration-discovery-panel"><div class="integration-discovery-head"><div><strong>🔎 Tự tìm API Actions</strong><div class="field-hint">Điền Base URL và credential (nếu có), sau đó bấm Quét API. Agent tools mặc định tắt.</div></div><button class="btn small" type="button" data-action="integration-discover">Quét API</button></div><div class="field"><label>OpenAPI path (tùy chọn)</label><input class="input mono" data-discovery-path placeholder="Tự thử /openapi.json, /swagger.json, /v3/api-docs..."></div><div class="integration-discovery-message" data-discovery-message aria-live="polite"></div><div data-action-list class="integration-action-list"></div></div>
+    <details class="integration-actions-editor integration-field-full"><summary>JSON nâng cao · API Actions / Agent Tools</summary><div class="integration-actions-body"><div class="field-hint">Optional. Start with [] for health-only. Add fixed actions when this API has functions HassMind should read or execute.</div><div class="field mt-10"><label>Actions JSON</label><textarea data-custom-actions-json class="textarea mono custom-actions-json" spellcheck="false">[]</textarea><div class="field-hint">Example action: {"id":"get-status","name":"Get status","enabled":true,"agent_enabled":true,"method":"GET","path":"/api/status","mode":"read","request_target":"auto","input_schema":{"type":"object","properties":{},"required":[],"additionalProperties":false}}</div></div></div></details>
   </div><div class="integration-add-note">🔒 Custom Integration supports health-check plus operator-declared API Actions. Agent access is opt-in per action and disabled by default.</div><div class="row end mt-14"><button class="btn" data-action="integration-add-cancel" type="button">Đóng</button><button class="btn primary" type="submit">Tạo Integration</button></div></form></details>`
+}
+function renderCustomActionList(form){
+  const list=form.querySelector('[data-action-list]'),box=form.querySelector('[data-custom-actions-json]');
+  if(!list||!box)return;
+  let actions;
+  try{actions=JSON.parse(box.value||'[]');if(!Array.isArray(actions))throw new Error('Invalid actions');}
+  catch(e){list.innerHTML='<div class="error-text small-text">JSON Actions chưa hợp lệ; sửa trong phần JSON nâng cao.</div>';return}
+  if(!actions.length){list.innerHTML='<div class="small-text muted">Chưa có API Actions. Bấm Quét API để phát hiện từ dịch vụ.</div>';return}
+  list.innerHTML=actions.map((a,i)=>`<div class="integration-action-row"><div class="integration-action-main"><strong>${esc(a.name||a.id||'Action')}</strong><span class="badge ${a.mode==='read'?'info':'warn'}">${esc(a.method||'GET')}</span><code>${esc(a.path||'/')}</code>${a.description?`<div class="small-text muted">${esc(a.description)}</div>`:''}<div class="small-text muted">${Object.keys(a.input_schema?.properties||{}).length} tham số</div></div><div class="integration-action-switches"><label><input type="checkbox" data-action-index="${i}" data-action-property="enabled" ${a.enabled!==false?'checked':''}> Bật action</label><label><input type="checkbox" data-action-index="${i}" data-action-property="agent_enabled" ${a.agent_enabled?'checked':''}> Cho Agent sử dụng</label></div></div>`).join('');
+}
+async function discoverCustomIntegration(button){
+  const form=button.closest('form'),status=form?.querySelector('[data-discovery-message]');if(!form||!status)return;
+  const field=n=>form.querySelector(`[data-custom-field="${n}"]`)?.value||'';
+  const base_url=field('base_url').trim();if(!base_url){status.textContent='Hãy nhập Base URL trước.';return}
+  const payload={base_url,auth_type:field('auth_type')||'none',auth_header:field('auth_header')||'X-API-Key',secret:field('secret'),existing_id:form.dataset.customIntegrationForm||'',spec_path:form.querySelector('[data-discovery-path]')?.value.trim()||''};
+  button.disabled=true;status.textContent='Đang tìm tài liệu API trên container...';
+  try{
+    const found=await api('/api/integrations/discover',{method:'POST',body:JSON.stringify(payload)});
+    if(!found.found){status.textContent=(found.warnings||[]).join(' ');return}
+    const box=form.querySelector('[data-custom-actions-json]');
+    let current=[];try{current=JSON.parse(box.value||'[]');if(!Array.isArray(current))throw new Error('Not an array')}
+    catch(e){throw new Error('JSON Actions hiện tại không hợp lệ; cần sửa trước khi quét')}
+    const key=a=>String(a.method||'GET').toUpperCase()+' '+String(a.path||'/');
+    const map=new Map(current.map(a=>[key(a),a]));
+    for(const a of found.actions||[]){
+      const prior=map.get(key(a));
+      const stableSchema=prior&&JSON.stringify(prior.input_schema)===JSON.stringify(a.input_schema)&&JSON.stringify(prior.parameter_locations||{})===JSON.stringify(a.parameter_locations||{});
+      map.set(key(a),prior?{...a,id:prior.id,enabled:prior.enabled!==false,agent_enabled:!!(prior.agent_enabled&&stableSchema)}:a);
+    }
+    const merged=Array.from(map.values());
+    if(merged.length>24)throw new Error('Tổng Actions vượt giới hạn 24. Xóa bớt Actions trong JSON nâng cao rồi quét lại.');
+    box.value=JSON.stringify(merged,null,2);renderCustomActionList(form);
+    status.textContent=`Đã tìm thấy ${found.action_count||0} API Actions (${found.source}: ${found.spec_path}). Hiện có ${merged.length} Actions trong bản nháp. Chưa lưu; hãy kiểm tra quyền Agent và bấm Lưu/Tạo Integration.`+((found.warnings||[]).length?` Bỏ qua ${(found.warnings||[]).length} endpoint: ${(found.warnings||[]).slice(0,3).join('; ')}`:'');
+  }catch(e){status.textContent='Lỗi khám phá API: '+e.message}
+  finally{button.disabled=false}
+}
+function mcpServerEditor(item,create=false){
+  const label=create?'Thêm MCP Server':item.name,serverId=item.id||'';
+  const allowed=item.allowed_tools||[];
+  return `<details class="card integration-editor"><summary class="integration-summary"><div class="integration-summary-main"><span class="integration-icon">🧩</span><div class="integration-summary-copy"><div class="integration-summary-title">${esc(label)}</div><div class="integration-summary-description">${esc(item.url||'MCP Streamable HTTP endpoint')}</div><div class="integration-summary-meta mono">${esc(serverId||'mcp-new')} · ${allowed.length} tool được duyệt</div></div></div><span class="integration-chevron">⌄</span></summary>
+  <form class="integration-editor-body" data-mcp-form="${esc(serverId)}"><div class="integration-fields">
+    <div class="field"><label>ID MCP server</label><input class="input mono" data-mcp-field="id" ${create?'required':''} value="${esc(serverId)}" placeholder="my-mcp" ${create?'':'readonly'}></div>
+    <div class="field"><label>Tên hiển thị</label><input class="input" data-mcp-field="name" value="${esc(item.name||'')}"></div>
+    <div class="field"><label>URL (Streamable HTTP)</label><input class="input mono" data-mcp-field="url" required value="${esc(item.url||'')}" placeholder="http://service:3000/mcp"></div>
+    <div class="field"><label>Authentication</label><select class="select" data-mcp-field="auth_type"><option value="none" ${item.auth_type==='none'?'selected':''}>Không dùng</option><option value="bearer" ${item.auth_type==='bearer'?'selected':''}>Bearer token</option><option value="header" ${item.auth_type==='header'?'selected':''}>API key qua header</option></select></div>
+    <div class="field"><label>Tên API key header</label><input class="input mono" data-mcp-field="auth_header" value="${esc(item.auth_header||'X-API-Key')}"></div>
+    <div class="field"><label>Credential ${item.secret_configured?'✓ đã cấu hình':''}</label><input class="input mono" data-mcp-field="secret" type="password" autocomplete="new-password" placeholder="Để trống để giữ credential hiện tại"></div>
+    <label class="integration-toggle"><span>Bật MCP Server</span><input data-mcp-field="enabled" type="checkbox" ${item.enabled!==false?'checked':''}></label>
+    <label class="integration-toggle"><span>Xóa credential</span><input data-mcp-field="clear_secret" type="checkbox"></label>
+    <div class="integration-field-full integration-discovery-panel"><div class="integration-discovery-head"><div><strong>🔎 Khám phá MCP Tools</strong><div class="field-hint">Quét tools/list từ MCP Server. Chỉ tool được duyệt mới được gọi qua MCP.</div></div><button class="btn small" data-action="mcp-discover" type="button">Quét MCP Tools</button></div><div data-mcp-message class="integration-discovery-message" aria-live="polite"></div><input data-mcp-allowed type="hidden" value="${esc(JSON.stringify(allowed))}"><div class="integration-action-list" data-mcp-tools></div></div>
+  </div><div class="integration-editor-footer"><span class="small-text muted">${create?'Server mới · quyền tool mặc định tắt':'MCP · Web Admin'}</span><div class="row">${create?'':`<button class="btn bad small" type="button" data-action="mcp-delete" data-id="${esc(serverId)}">Xóa</button>`}<button class="btn primary small" type="submit">${create?'Tạo MCP Server':'Lưu MCP Server'}</button></div></div></form></details>`;
+}
+function mcpToolList(form,tools){
+  const list=form.querySelector('[data-mcp-tools]'),allowedBox=form.querySelector('[data-mcp-allowed]');if(!list||!allowedBox)return;
+  let allowed=[];try{allowed=JSON.parse(allowedBox.value||'[]')}catch(e){}
+  list.innerHTML=tools.length?tools.map(t=>`<div class="integration-action-row"><div class="integration-action-main"><strong>${esc(t.name)}</strong><div class="small-text muted">${esc(t.description||'')}</div></div><div class="integration-action-switches"><label><input type="checkbox" data-mcp-tool="${esc(t.name)}" ${allowed.includes(t.name)?'checked':''}> Cho Agent sử dụng</label></div></div>`).join(''):'<div class="small-text muted">Chưa có công cụ được duyệt. Hãy quét MCP Tools.</div>';
+}
+function mcpFormPayload(form){
+  const values={};form.querySelectorAll('[data-mcp-field]').forEach(el=>values[el.dataset.mcpField]=el.type==='checkbox'?el.checked:el.value);
+  try{values.allowed_tools=JSON.parse(form.querySelector('[data-mcp-allowed]')?.value||'[]')}
+  catch(e){throw new Error('Danh sách MCP tool không hợp lệ')}
+  return values;
+}
+async function saveMcpServer(form){
+  try{const data=mcpFormPayload(form),id=form.dataset.mcpForm;
+    await api(id?'/api/integrations/mcp/'+encodeURIComponent(id):'/api/integrations/mcp',{method:id?'PUT':'POST',body:JSON.stringify(data)});
+    toast('Đã lưu MCP Server '+(id||data.id));await loadIntegrations();
+  }catch(e){toast(e.message,true)}
+}
+async function discoverMcpServer(button){
+  const form=button.closest('[data-mcp-form]'),msg=form?.querySelector('[data-mcp-message]');if(!form||!msg)return;
+  const payload=mcpFormPayload(form);button.disabled=true;msg.textContent='Đang kết nối và đọc MCP tools/list...';
+  try{const result=await api('/api/integrations/mcp/discover',{method:'POST',body:JSON.stringify({url:payload.url,auth_type:payload.auth_type,auth_header:payload.auth_header,secret:payload.secret,existing_id:form.dataset.mcpForm})});
+    const tools=result.tools||[];
+    const approved=form.querySelector('[data-mcp-allowed]');if(approved){let saved=[];try{saved=JSON.parse(approved.value)}catch(e){}approved.value=JSON.stringify(saved.filter(name=>tools.some(t=>t.name===name)))}
+    mcpToolList(form,tools);msg.textContent=`Đã phát hiện ${tools.length} MCP tools. Chọn những công cụ cho phép Agent sử dụng rồi bấm Lưu. Chỉ quét, chưa gọi tool.`;
+  }catch(e){msg.textContent='Lỗi quét MCP: '+e.message}finally{button.disabled=false}
+}
+async function deleteMcpServer(id){
+  if(!confirm('Xóa MCP Server '+id+'?'))return;
+  try{await api('/api/integrations/mcp/'+encodeURIComponent(id),{method:'DELETE'});toast('Đã xóa MCP Server');await loadIntegrations()}
+  catch(e){toast(e.message,true)}
 }
 function customIntegrationPayload(form){
   const values={};
@@ -379,22 +463,30 @@ async function openIntegrationAddPanel(){let panel=$('integrationAddPanel');if(!
 async function loadIntegrations(){
   const box=$('integrationsBox');
   try{
-    const [status,config]=await Promise.all([api('/api/integrations'),api('/api/integrations/config')]);
-    const builtins=(config.integrations||[]).map(integrationEditor).join('');
+    const [status,config,mcp]=await Promise.all([api('/api/integrations'),api('/api/integrations/config'),api('/api/integrations/mcp')]);
+    const core=(config.integrations||[]).filter(i=>i.kind==='core').map(integrationEditor).join('');
+    const builtins=(config.integrations||[]).filter(i=>i.kind!=='core').map(integrationEditor).join('');
     const customs=(config.custom_integrations||[]).map(customIntegrationEditor).join('');
     const customEmpty=(config.custom_integrations||[]).length?'':'<div class="integration-empty">Chưa có Custom Integration. Nhấn <strong>Thêm Integration</strong> để tạo mới.</div>';
     const cards=[];
     Object.entries(status.companion_containers||{}).forEach(([k,v])=>cards.push(integrationCard(k,v)));
     Object.entries(status.home_assistant_custom_components||{}).forEach(([k,v])=>{if(typeof v==='object')cards.push(integrationCard('HA · '+k,v))});
     box.innerHTML=`<div class="span-12 integrations-layout">
-      <div class="integration-section-title"><div><h2>⚙️ Danh sách Integrations</h2><p>Cấu hình mặc định được thu gọn. Nhấn vào từng Integration để mở phần thiết lập.</p></div><span class="badge info">${(config.integrations||[]).length+(config.custom_integrations||[]).length} integrations</span></div>
+      <div class="integration-section-title"><div><h2>⚙️ Danh sách Integrations</h2><p>Cấu hình mặc định được thu gọn. Nhấn vào từng Integration để mở phần thiết lập.</p></div><span class="badge info">${(config.integrations||[]).length+(config.custom_integrations||[]).length+(mcp.servers||[]).length} integrations</span></div>
+      <div class="integration-subsection"><div class="integration-subhead"><h3>🔑 Kết nối hệ thống</h3><span class="small-text muted">Home Assistant · OpenAI/LLM · SearXNG — cấu hình và secret trong Web Admin</span></div><div class="integration-editor-grid">${core}</div></div>
       ${customIntegrationCreatePanel()}
       <div class="integration-subsection"><div class="integration-subhead"><h3>HassMind adapters</h3><span class="small-text muted">Adapter typed tích hợp sẵn</span></div><div class="integration-editor-grid">${builtins}</div></div>
-      <div class="integration-subsection"><div class="integration-subhead"><h3>Custom Integrations</h3><span class="small-text muted">Bạn tự thêm từ Web Admin</span></div>${customEmpty}<div class="integration-editor-grid">${customs}</div></div>
+      <div class="integration-subsection"><div class="integration-subhead"><h3>Custom HTTP Integrations</h3><span class="small-text muted">OpenAPI / Swagger Discovery</span></div>${customEmpty}<div class="integration-editor-grid">${customs}</div></div>
+      <div class="integration-subsection"><div class="integration-subhead"><h3>🧩 MCP Servers</h3><span class="small-text muted">Streamable HTTP · MCP tools/list · quyền theo từng tool</span></div><div class="integration-editor-grid">${(mcp.servers||[]).map(x=>mcpServerEditor(x)).join('')}${mcpServerEditor({auth_type:'none',enabled:true,allowed_tools:[]},true)}</div></div>
       <div class="integration-section-title integration-status-heading"><div><h2>🩺 Trạng thái kết nối</h2><p>Health/status thực tế của adapter và Home Assistant custom component.</p></div></div>
       <div class="integration-status-grid">${cards.join('')}</div>
       <details class="card integration-policy"><summary>🛡️ Effective policy</summary><pre>${esc(JSON.stringify(status.policy,null,2))}</pre></details>
     </div>`
+    box.querySelectorAll("[data-custom-integration-create],[data-custom-integration-form]").forEach(renderCustomActionList);
+    box.querySelectorAll('[data-mcp-form]').forEach(form=>{
+      let approved=[];try{approved=JSON.parse(form.querySelector('[data-mcp-allowed]')?.value||'[]')}catch(e){}
+      mcpToolList(form,approved.map(name=>({name,description:'Đã duyệt trước đó · quét để cập nhật chi tiết'})));
+    });
   }catch(e){box.innerHTML=`<div class="card card-pad span-12">${errorHtml(e)}</div>`}
 }
 
@@ -743,11 +835,30 @@ function bindEvents(){
   $('recoveryForm').addEventListener('submit',e=>{e.preventDefault();rotateRecoveryKey()});$('copyGeneratedRecoveryKey').addEventListener('click',async()=>{const el=$('generatedRecoveryKey');try{await copyTextSafe(el.value,el);toast('Đã sao chép Recovery Key')}catch(err){toast(err.message||'Không thể sao chép tự động.',true)}});
   $('usernameForm').addEventListener('submit',e=>{e.preventDefault();changeUsernameSubmit()});$('passwordForm').addEventListener('submit',e=>{e.preventDefault();changePasswordSubmit()});
   document.addEventListener('submit',e=>{
+    const mcpForm=e.target.closest('[data-mcp-form]');if(mcpForm){e.preventDefault();saveMcpServer(mcpForm);return}
     const createForm=e.target.closest('[data-custom-integration-create]');if(createForm){e.preventDefault();createCustomIntegration(createForm);return}
     const customForm=e.target.closest('[data-custom-integration-form]');if(customForm){e.preventDefault();saveCustomIntegration(customForm.dataset.customIntegrationForm,customForm);return}
     const form=e.target.closest('[data-integration-form]');if(!form)return;e.preventDefault();saveIntegration(form.dataset.integrationForm,form)
   });
-  document.addEventListener('click',e=>{const log=e.target.closest('.log-row');if(log){toggleLogDetail(log.dataset.logIndex);return}const b=e.target.closest('[data-action]');if(!b||b.disabled)return;const a=b.dataset.action,id=b.dataset.id;const actions={'overview-refresh':loadOverview,'skills-open':()=>setTab('skills'),'skills-refresh':loadSkills,'skill-new':newSkill,'skill-validate':validateSkillDraft,'new-session':newSession,'integrations-refresh':loadIntegrations,'integration-add':openIntegrationAddPanel,'logs-refresh':loadLogs,'logs-export':exportLogs,'audit-refresh':loadAudit,'events-refresh':loadEvents,'approvals-refresh':loadApprovals,'jobs-refresh':loadJobs,'rules-refresh':loadRules,'knowledge-refresh':loadKnowledge,'knowledge-devices-open':openKnowledgeDevices,'knowledge-devices-refresh':loadKnowledgeDevices,'knowledge-scan':scanKnowledge,'knowledge-reindex':reindexKnowledge,'knowledge-search':searchKnowledge,'settings-refresh':loadSettings,'sessions-refresh':loadSessions,'sessions-revoke-others':revokeOtherSessions,'auth-audit-refresh':loadAuthAudit};if(actions[a]){actions[a]();return}if(a==='skill-edit'){editSkill(id);return}if(a==='skill-edit-cancel'){resetSkillForm();return}if(a==='skill-test'){testSkillUI(id);return}if(a==='skill-dry-run-open'){openSkillDryRun(id);return}if(a==='skill-dry-run-example'){fillSkillDryRunExample(true);return}if(a==='skill-dry-run'){runSkillDryRun();return}if(a==='chat-use-skill-example'){useChatSkillExample(id);return}if(a==='skill-versions'){loadSkillVersions(id);return}if(a==='skill-toggle'){toggleSkillUI(id,b.dataset.enabled==='1');return}if(a==='skill-delete'){deleteSkillUI(id);return}if(a==='skill-rollback'){rollbackSkillUI(id,Number(b.dataset.version));return}if(a==='knowledge-device-select'){selectKnowledgeDevice(id);return}if(a==='knowledge-device-page'){deviceUI.page=Math.max(1,Number(b.dataset.page)||1);renderDeviceBrowser();return}if(a==='knowledge-review'){if(!knowledgeUI.busy.has('proposal'))reviewKnowledgeProposal(id);return}if(['knowledge-dry-run','knowledge-approve','knowledge-reject','knowledge-rollback'].includes(a)){knowledgeProposalAction(a.slice('knowledge-'.length),id);return}if(a==='approval-approve')decideApproval(id,true);if(a==='approval-reject')decideApproval(id,false);if(a==='auth-audit-page'){loadAuthAudit(Number(b.dataset.page));return}if(a==='jobs-page')loadJobs(Number(b.dataset.page));if(a==='rules-page')loadRules(Number(b.dataset.page));if(a==='job-weekday-preset'){applyJobWeekdayPreset(b.dataset.group,b.dataset.preset);return}if(a==='job-edit')editJob(Number(id));if(a==='job-edit-cancel')resetJobForm();if(a==='job-toggle')toggleJob(Number(id),b.dataset.enabled==='1');if(a==='job-delete')deleteJob(Number(id));if(a==='rule-edit')editRule(Number(id));if(a==='rule-edit-cancel')resetRuleForm();if(a==='rule-toggle')toggleRule(Number(id),b.dataset.enabled==='1');if(a==='rule-delete')deleteRule(Number(id));if(a==='integration-reset')resetIntegration(id);if(a==='integration-delete-custom')deleteCustomIntegration(id);if(a==='integration-add-cancel'){const panel=$('integrationAddPanel');if(panel)panel.open=false}});
+  document.addEventListener('change',e=>{
+    const target=e.target;
+    if(target.matches('[data-action-index][data-action-property]')){
+      const form=target.closest('form'),box=form?.querySelector('[data-custom-actions-json]');if(!box)return;
+      try{const actions=JSON.parse(box.value);const index=Number(target.dataset.actionIndex);if(!actions[index])return;
+        actions[index][target.dataset.actionProperty]=target.checked;
+        box.value=JSON.stringify(actions,null,2);renderCustomActionList(form);
+      }catch(error){toast('Actions JSON không hợp lệ',true)}
+    }
+    if(target.matches('[data-custom-actions-json]'))renderCustomActionList(target.closest('form'));
+    if(target.matches('[data-mcp-tool]')){
+      const form=target.closest('[data-mcp-form]'),box=form?.querySelector('[data-mcp-allowed]');if(!box)return;
+      let selected=[];try{selected=JSON.parse(box.value||'[]')}catch(e){}
+      selected=selected.filter(t=>t!==target.dataset.mcpTool);
+      if(target.checked)selected.push(target.dataset.mcpTool);
+      box.value=JSON.stringify(selected);
+    }
+  });
+  document.addEventListener('click',e=>{const log=e.target.closest('.log-row');if(log){toggleLogDetail(log.dataset.logIndex);return}const b=e.target.closest('[data-action]');if(!b||b.disabled)return;const a=b.dataset.action,id=b.dataset.id;const actions={'overview-refresh':loadOverview,'skills-open':()=>setTab('skills'),'skills-refresh':loadSkills,'skill-new':newSkill,'skill-validate':validateSkillDraft,'new-session':newSession,'integrations-refresh':loadIntegrations,'integration-add':openIntegrationAddPanel,'logs-refresh':loadLogs,'logs-export':exportLogs,'audit-refresh':loadAudit,'events-refresh':loadEvents,'approvals-refresh':loadApprovals,'jobs-refresh':loadJobs,'rules-refresh':loadRules,'knowledge-refresh':loadKnowledge,'knowledge-devices-open':openKnowledgeDevices,'knowledge-devices-refresh':loadKnowledgeDevices,'knowledge-scan':scanKnowledge,'knowledge-reindex':reindexKnowledge,'knowledge-search':searchKnowledge,'settings-refresh':loadSettings,'sessions-refresh':loadSessions,'sessions-revoke-others':revokeOtherSessions,'auth-audit-refresh':loadAuthAudit};if(actions[a]){actions[a]();return}if(a==='skill-edit'){editSkill(id);return}if(a==='skill-edit-cancel'){resetSkillForm();return}if(a==='skill-test'){testSkillUI(id);return}if(a==='skill-dry-run-open'){openSkillDryRun(id);return}if(a==='skill-dry-run-example'){fillSkillDryRunExample(true);return}if(a==='skill-dry-run'){runSkillDryRun();return}if(a==='chat-use-skill-example'){useChatSkillExample(id);return}if(a==='skill-versions'){loadSkillVersions(id);return}if(a==='skill-toggle'){toggleSkillUI(id,b.dataset.enabled==='1');return}if(a==='skill-delete'){deleteSkillUI(id);return}if(a==='skill-rollback'){rollbackSkillUI(id,Number(b.dataset.version));return}if(a==='knowledge-device-select'){selectKnowledgeDevice(id);return}if(a==='knowledge-device-page'){deviceUI.page=Math.max(1,Number(b.dataset.page)||1);renderDeviceBrowser();return}if(a==='knowledge-review'){if(!knowledgeUI.busy.has('proposal'))reviewKnowledgeProposal(id);return}if(['knowledge-dry-run','knowledge-approve','knowledge-reject','knowledge-rollback'].includes(a)){knowledgeProposalAction(a.slice('knowledge-'.length),id);return}if(a==='approval-approve')decideApproval(id,true);if(a==='approval-reject')decideApproval(id,false);if(a==='auth-audit-page'){loadAuthAudit(Number(b.dataset.page));return}if(a==='jobs-page')loadJobs(Number(b.dataset.page));if(a==='rules-page')loadRules(Number(b.dataset.page));if(a==='job-weekday-preset'){applyJobWeekdayPreset(b.dataset.group,b.dataset.preset);return}if(a==='job-edit')editJob(Number(id));if(a==='job-edit-cancel')resetJobForm();if(a==='job-toggle')toggleJob(Number(id),b.dataset.enabled==='1');if(a==='job-delete')deleteJob(Number(id));if(a==='rule-edit')editRule(Number(id));if(a==='rule-edit-cancel')resetRuleForm();if(a==='rule-toggle')toggleRule(Number(id),b.dataset.enabled==='1');if(a==='rule-delete')deleteRule(Number(id));if(a==='mcp-discover'){discoverMcpServer(b);return}if(a==='mcp-delete'){deleteMcpServer(id);return}if(a==='integration-discover'){discoverCustomIntegration(b);return}if(a==='integration-reset')resetIntegration(id);if(a==='integration-delete-custom')deleteCustomIntegration(id);if(a==='integration-add-cancel'){const panel=$('integrationAddPanel');if(panel)panel.open=false}});
 }
 async function start(){
   const ok=await initAuth();if(!ok)return;

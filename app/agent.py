@@ -80,9 +80,10 @@ def _is_read_only_tool(name: str) -> bool:
 class Agent:
     def __init__(self, runtime: ToolRuntime):
         key = settings.read_openai_key()
-        if not key:
-            raise RuntimeError("OpenAI-compatible API key is empty")
+        # Allow initial Web Admin setup without a preinstalled LLM secret.
+        key = key or "not-configured"
         self.runtime = runtime
+        self._retired_clients = []
         self.client = AsyncOpenAI(api_key=key, base_url=settings.openai_base_url)
         path = Path("/app/config/system_prompt.txt")
         self.system_prompt = path.read_text(encoding="utf-8") if path.exists() else "You are HassMind, a Home Assistant agent."
@@ -97,6 +98,22 @@ class Agent:
             parallel_read_tools=settings.parallel_read_tools,
             system_prompt_chars=len(self.system_prompt),
         )
+
+    async def reconfigure(self) -> None:
+        """New sessions use the updated provider. In-flight calls keep their client."""
+        previous = self.client
+        self.client = AsyncOpenAI(
+            api_key=settings.read_openai_key() or "not-configured",
+            base_url=settings.openai_base_url,
+        )
+        # Prior client may still serve an in-flight conversation; keep it until shutdown.
+        self._retired_clients.append(previous)
+
+    async def close(self) -> None:
+        await self.client.close()
+        for retired in self._retired_clients:
+            await retired.close()
+        self._retired_clients.clear()
 
     async def interpret_device_status(self, user_text: str, candidates: list[dict]) -> dict:
         """One short, read-only LLM classification. It never chooses an HA action.

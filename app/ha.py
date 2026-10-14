@@ -168,6 +168,23 @@ class HomeAssistantClient:
         self._state_cache_lock = asyncio.Lock()
         info(logger, "ha_client_initialized", base_url=self.base, state_cache_ttl=settings.ha_state_cache_ttl)
 
+    async def reconfigure(self):
+        """Apply HA URL/token updates without replacing references held by worker tasks."""
+        base = settings.ha_url.rstrip("/")
+        token = settings.read_ha_token()
+        if (base, token) == (self.base, self.token):
+            return False
+        replacement = httpx.AsyncClient(
+            timeout=20.0,
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        )
+        previous = self.http
+        self.base, self.token, self.http = base, token, replacement
+        self.invalidate_state_cache()
+        self._event_stream_live = False
+        await previous.aclose()
+        return True
+
     async def close(self):
         await self.http.aclose()
         info(logger, "ha_client_closed")

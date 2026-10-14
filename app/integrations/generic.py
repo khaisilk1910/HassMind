@@ -85,6 +85,11 @@ class GenericHTTPIntegrationClient(JsonHttpClient):
             value = remaining.pop(key)
             path = path.replace("{" + key + "}", quote(str(value), safe=""))
 
+        locations = action.get("parameter_locations") or {}
+        if locations:
+            query = {key: value for key, value in remaining.items() if locations.get(key) == "query"}
+            body = {key: value for key, value in remaining.items() if locations.get(key) == "json"}
+            return await self.request(method, path, params=query or None, json=body or None)
         target = str(action.get("request_target") or "auto").lower()
         if target == "auto":
             target = "query" if method in {"GET", "DELETE"} else "json"

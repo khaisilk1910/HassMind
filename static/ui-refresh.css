@@ -294,3 +294,17 @@ tr.log-row:hover {background:#1c344b}
 .note-edit-image{display:flex;align-items:center;flex-direction:column;gap:5px;width:130px}.note-edit-image img{width:130px;height:110px;object-fit:cover;border-radius:9px;border:1px solid #4d7190}
 .chat-note-images{margin:10px 0 4px}.chat-note-images .note-image-link{width:130px;height:110px}
 @media(max-width:640px){.notes-tools{flex-wrap:wrap}.notes-tools .input{max-width:none;flex-basis:100%}.notes-grid{grid-template-columns:1fr}.note-editor-row{flex-direction:column;align-items:stretch}.note-card-bottom{align-items:start}.chat-note-images .note-image-link{width:105px;height:95px}}
+
+/* OpenAPI-assisted custom integration editor */
+.integration-discovery-panel{padding:14px 16px;border:1px solid var(--line, #30506b);border-radius:12px;background:rgba(45,119,174,.06)}
+.integration-discovery-head{display:flex;justify-content:space-between;align-items:center;gap:14px;margin-bottom:12px}
+.integration-discovery-head strong{font-size:14px}
+.integration-discovery-message{font-size:12px;line-height:1.65;overflow-wrap:anywhere;margin:10px 0;color:var(--muted,#a8bfcc)}
+.integration-action-list{display:grid;gap:9px;margin-top:10px}
+.integration-action-row{display:flex;justify-content:space-between;align-items:center;gap:16px;border:1px solid rgba(125,167,203,.2);padding:10px;border-radius:9px;background:rgba(9,23,39,.45)}
+.integration-action-main{min-width:0;flex:1;display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.integration-action-main .small-text{width:100%}
+.integration-action-main code{white-space:normal;overflow-wrap:anywhere;font-size:12px}
+.integration-action-switches{display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:12px}
+.integration-action-switches label{display:flex;align-items:center;gap:5px;cursor:pointer}
+@media(max-width:720px){.integration-action-row,.integration-discovery-head{align-items:stretch;flex-direction:column}.integration-action-switches{justify-content:flex-start}}

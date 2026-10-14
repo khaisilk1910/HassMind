@@ -219,13 +219,13 @@ class Settings(BaseSettings):
         return target
 
     def read_ha_token(self) -> str:
-        token = self._read_optional(self.ha_token_file) or self.ha_token
-        if not token:
-            raise RuntimeError(f"Home Assistant token not found: {self.ha_token_file}")
-        return token
+        # Web Admin credential has precedence; legacy Docker secret/env remains a fallback.
+        return (self.read_runtime_secret("integration_home_assistant_token")
+                or self._read_optional(self.ha_token_file) or self.ha_token)
 
     def read_openai_key(self) -> str:
-        return self._read_optional(self.openai_api_key_file) or self.openai_api_key
+        return (self.read_runtime_secret("integration_openai_api_key")
+                or self._read_optional(self.openai_api_key_file) or self.openai_api_key)
 
     def read_api_token(self) -> str:
         token = (
@@ -295,6 +295,8 @@ class Settings(BaseSettings):
 
     def configured_secret_values(self) -> list[str]:
         values = [
+            self.read_runtime_secret("integration_home_assistant_token"),
+            self.read_runtime_secret("integration_openai_api_key"),
             self._read_optional(self.ha_token_file), self.ha_token,
             self._read_optional(self.openai_api_key_file), self.openai_api_key,
             self.read_runtime_secret(self.runtime_api_token_name), self._read_optional(self.api_token_file), self.api_token,

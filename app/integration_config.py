@@ -18,6 +18,31 @@ logger = get_logger("integration_config")
 # requires declaring its editable settings here; no stack/environment editing is
 # required by the operator afterwards.
 INTEGRATION_CATALOG: dict[str, dict[str, Any]] = {
+    "home_assistant": {
+        "name": "Home Assistant", "icon": "🏠", "kind": "core",
+        "description": "Kết nối Home Assistant REST/WebSocket và dịch vụ thông báo. Có thể thay đổi trực tiếp tại đây.",
+        "fields": [
+            {"name": "url", "setting": "ha_url", "type": "url", "label": "Home Assistant URL", "placeholder": "http://127.0.0.1:8123"},
+            {"name": "token", "type": "secret", "label": "Long-lived access token", "secret_name": "integration_home_assistant_token", "secret_reader": "read_ha_token"},
+            {"name": "notify_service", "setting": "ha_notify_service", "type": "text", "label": "Notify service (tuỳ chọn)", "placeholder": "notify.mobile_app_xxx"},
+        ],
+    },
+    "openai": {
+        "name": "OpenAI / LLM tương thích", "icon": "🧠", "kind": "core",
+        "description": "Cấu hình API endpoint, model và API key cho Agent; hỗ trợ OpenAI-compatible provider.",
+        "fields": [
+            {"name": "base_url", "setting": "openai_base_url", "type": "url", "label": "API Base URL", "placeholder": "https://api.openai.com/v1"},
+            {"name": "model", "setting": "openai_model", "type": "text", "label": "Model", "placeholder": "gemini-auto"},
+            {"name": "api_key", "type": "secret", "label": "API key", "secret_name": "integration_openai_api_key", "secret_reader": "read_openai_key"},
+        ],
+    },
+    "searxng": {
+        "name": "SearXNG Web Search", "icon": "🌐", "kind": "core",
+        "description": "Công cụ tìm kiếm web của Agent (không bắt buộc).",
+        "fields": [
+            {"name": "url", "setting": "searxng_url", "type": "url", "optional": True, "label": "SearXNG Base URL", "placeholder": "http://searxng:8080 (để trống để tắt)"},
+        ],
+    },
     "camera_tts": {
         "name": "Camera TTS EZVIZ",
         "icon": "🔊",
@@ -151,7 +176,7 @@ def _coerce(field: dict[str, Any], value: Any) -> Any:
     if kind == "url":
         # Zalo image base is optional: outgoing signed-image URLs fall back to
         # webhook_callback_base when this field has not been configured yet.
-        if not text and field["name"] == "media_base_url":
+        if not text and (field["name"] == "media_base_url" or field.get("optional")):
             return ""
         if not text:
             raise ValueError(f"{field['name']} must not be empty")
@@ -191,6 +216,12 @@ def load_runtime_integration_overrides() -> None:
             secret = settings.read_runtime_secret(field["secret_name"])
             if secret:
                 register_secret(secret)
+    # MCP secrets are also under the Web Admin; register all for log redaction.
+    from .mcp_connections import list_mcp_connections, _secret_id
+    for item in list_mcp_connections():
+        secret = settings.read_runtime_secret(_secret_id(item["id"]))
+        if secret:
+            register_secret(secret)
     info(logger, "integration_config_overrides_loaded", integrations=len(rows), fields=applied)
 
 

@@ -23,7 +23,7 @@ _AUTH_TYPES = {"none", "bearer", "header"}
 _METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 _ACTION_MODES = {"read", "write"}
 _REQUEST_TARGETS = {"auto", "query", "json"}
-_RESERVED_IDS = {"camera_tts", "facedetect", "zalo", "telegram", "wyoming", "wyoming_vietnamese", "ha_custom"}
+_RESERVED_IDS = {"camera_tts", "facedetect", "zalo", "telegram", "wyoming", "wyoming_vietnamese", "ha_custom", "home_assistant", "openai", "searxng"}
 _MAX_ACTIONS = 24
 
 
@@ -175,6 +175,11 @@ def _normalize_actions(value: Any) -> list[dict[str, Any]]:
         undeclared = sorted(placeholders - params)
         if undeclared:
             raise ValueError(f"Action {action_id} path parameters missing from input_schema: {', '.join(undeclared)}")
+        parameter_locations = raw.get("parameter_locations") or {}
+        if not isinstance(parameter_locations, dict) or any(
+            key not in params or value not in {"query", "json"} for key, value in parameter_locations.items()
+        ):
+            raise ValueError(f"Action {action_id} parameter_locations is invalid")
         description = str(raw.get("description") or "").strip()
         if len(description) > 700:
             raise ValueError("API action description is too long")
@@ -188,6 +193,7 @@ def _normalize_actions(value: Any) -> list[dict[str, Any]]:
             "path": path,
             "mode": mode,
             "request_target": request_target,
+            "parameter_locations": parameter_locations,
             "input_schema": schema,
         })
     return out
