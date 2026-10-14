@@ -74,6 +74,7 @@ class ZaloClient(JsonHttpClient):
         thread_type: int,
         account_selection: str = "",
         ttl: str | int | None = None,
+        attachments: list[dict[str, str]] | None = None,
     ) -> Any:
         await self.ensure_login()
         selected = await self._select_account(account_selection)
@@ -90,10 +91,21 @@ class ZaloClient(JsonHttpClient):
             "type": int(thread_type),
             "accountSelection": str(selected),
         }
+        if attachments:
+            # zca-js MessageContent supports AttachmentSource objects containing URL + filename.
+            body["message"]["attachments"] = attachments
         if ttl is not None and ttl != "":
             body["ttl"] = ttl
         try:
-            return await self.request("POST", "/api/sendMessageByAccount", json=body)
+            result = await self.request("POST", "/api/sendMessageByAccount", json=body)
+            if attachments and isinstance(result, dict):
+                if result.get("success") is False or result.get("error"):
+                    raise IntegrationError(f"Zalo companion rejected image attachment: {result.get('message') or result.get('error')}")
+                detail = result.get('data', result)
+                # zca-js may respond successfully yet report zero uploaded images.
+                if isinstance(detail, dict) and isinstance(detail.get('attachment'), list) and not detail['attachment']:
+                    raise IntegrationError('Zalo companion returned no uploaded image attachments')
+            return result
         except IntegrationError as exc:
             # Older companion servers may validate `message` as msg-only. If
             # they explicitly reject the new styles field, retry once with the
@@ -108,6 +120,8 @@ class ZaloClient(JsonHttpClient):
                 )
                 fallback = dict(body)
                 fallback["message"] = {"msg": message_content["msg"]}
+                if attachments:
+                    fallback["message"]["attachments"] = attachments
                 return await self.request("POST", "/api/sendMessageByAccount", json=fallback)
             raise
 

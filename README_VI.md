@@ -1,3 +1,5 @@
+> **Mới trong v1.5.12 (Ghi chú + Ảnh qua Zalo):** Nhận ảnh qua tin nhắn Zalo cá nhân, tự gắn ảnh vào ghi chú và khi tìm ghi chú qua Zalo sẽ gửi lại cả văn bản lẫn ảnh. Xem [CHANGELOG_V1.5.12.md](CHANGELOG_V1.5.12.md).
+
 > **Mới trong v1.5.11 (Ghi chú + Ảnh):** Tạo ghi chú lâu dài bằng chat kèm ảnh, tìm lại chính xác nguyên văn và hiển thị ảnh; thêm tab Ghi chú có chỉnh sửa, ghim, nhãn và tìm kiếm. Dữ liệu nằm trong `/data`, **không bị xóa cùng lịch sử chat trong ngày**. Xem [CHANGELOG_V1.5.11.md](CHANGELOG_V1.5.11.md).
 
 ## Ghi chú lâu dài bằng Chat (v1.5.11)
@@ -893,3 +895,42 @@ Xem `CHANGELOG_V1.5.3.md` và `KNOWLEDGE_DEVICES_VI.md`.
 - Các lỗi timeout hay mất kết nối API trên giao diện được thông báo rõ hơn; cần xem log server để xác định nguyên nhân hạ tầng.
 
 Xem `CHANGELOG_V1.5.4.md` và `QA_V1.5.4.md`.
+
+## HassMind v1.5.12: Ghi chú hình ảnh trên Zalo cá nhân (zalo-bot-server)
+
+HassMind hỗ trợ nhận ảnh qua webhook Zalo cá nhân, lưu cùng ghi chú của Web Admin và
+trả **ảnh thực qua Zalo** khi người dùng tìm lại ghi chú. Không sử dụng OA OpenAPI;
+kết nối này tiếp tục dùng companion `zalo-bot-server` hiện có.
+
+- Gửi ảnh rồi nhắn `Ghi chú: Hóa đơn điện tháng 10 #hoadon` trong vòng **10 phút**.
+  Ảnh được giữ tạm trong bộ nhớ trong lúc chưa có câu lệnh lưu.
+- Gửi `Ghi chú: ...` trước, sau đó gửi ảnh trong **3 phút**: ảnh sẽ tự được
+  bổ sung vào ghi chú vừa tạo (tối đa 5 ảnh/ghi chú).
+- Có thể gửi ảnh kèm nội dung `Ghi chú: ...` trong cùng một webhook nếu
+  companion chuyển caption và URL ảnh cùng sự kiện.
+- Gửi `Tìm ghi chú hóa đơn điện` hoặc `Xem ghi chú #MÃ`: Zalo nhận nội dung
+  trước, sau đó nhận từng ảnh đính kèm (tối đa 10 ảnh/lượt trả lời).
+- Ghi chú vẫn nằm trong `/data/hassmind.db` và `/data/note_images`, độc lập
+  với lịch sử trò chuyện tự xoá mỗi ngày.
+
+**Thiết lập quan trọng:** Web Admin → Integrations → Zalo Bot Server →
+`URL HassMind để Zalo tải ảnh ghi chú`. Giá trị `ZALO_MEDIA_BASE_URL` cần
+truy cập được **từ container zalo-bot-server**, chẳng hạn `http://192.168.1.10:8090` khi HassMind dùng `network_mode: host`,
+`http://hassmind:8090` nếu cả hai dịch vụ thực sự ở cùng Docker network,
+hoặc URL HTTPS phù hợp. Không dùng `127.0.0.1`
+trừ khi hai dịch vụ chạy chung network namespace. Cần bật Zalo, gửi tin,
+webhook, Agent tự trả lời, allowlist thread, và đặt Zalo webhook secret.
+HassMind sinh URL ảnh riêng có chữ ký HMAC, tự hết hạn sau 10 phút; **không**
+mở thư mục ảnh ra Internet và không chia sẻ khóa đăng nhập admin.
+
+**Yêu cầu phía companion:** `/api/sendMessageByAccount` phải chấp nhận
+`message.attachments=[{url,filename}]` theo định dạng `zca-js`.
+Nếu bản companion hiện tại loại bỏ attachments, ảnh sẽ không được gửi và
+HassMind báo lỗi riêng trên Zalo; cần cập nhật companion hỗ trợ phương thức
+này. Chưa xác nhận tương thích end-to-end với companion thực tế.
+
+**An toàn:** Chỉ tải ảnh từ tên miền CDN Zalo thuộc allowlist, ưu tiên
+HTTPS, không theo chuyển hướng, giới hạn tải 5 MB, xác thực định dạng ảnh
+thực và loại metadata trước khi ghi xuống kho. Chỉ tiếp nhận yêu cầu từ
+thread Zalo được phép. Nếu ảnh đến trước câu lệnh ghi chú, nó chỉ được giữ
+tạm trong RAM và sẽ mất khi container khởi động lại; ảnh đã lưu sẽ bền vững.

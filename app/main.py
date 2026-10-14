@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import notes
+from . import notes, zalo_notes
 from .agent import Agent
 from .approvals import apply_approval, decide_by_action, decide_by_web, get_approval
 from .custom_integrations import create_custom_integration, delete_custom_integration, update_custom_integration
@@ -84,7 +84,7 @@ from .tools import ToolRuntime
 os.umask(0o077)
 configure_process_timezone()
 
-APP_VERSION = "1.5.11"
+APP_VERSION = "1.5.12"
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 setup_logging()
@@ -315,24 +315,26 @@ async def event_callback(event: dict[str, Any]):
 
 
 def _extract_zalo_text(payload: dict[str, Any]) -> str:
+    """Extract the real chat caption/text, not an image URL or thumbnail."""
     message = payload.get("message")
     if isinstance(message, str):
         return message.strip()
     if isinstance(message, dict):
-        for key in ("msg", "content", "text"):
+        for key in ("msg", "text", "caption", "content"):
             value = message.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
     data = payload.get("data")
     if isinstance(data, dict):
-        for key in ("message", "content", "text"):
+        for key in ("message", "text", "caption", "content"):
             value = data.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
             if isinstance(value, dict):
-                nested = value.get("msg") or value.get("content") or value.get("text")
-                if isinstance(nested, str) and nested.strip():
-                    return nested.strip()
+                for nested_key in ("msg", "text", "caption", "content"):
+                    nested = value.get(nested_key)
+                    if isinstance(nested, str) and nested.strip():
+                        return nested.strip()
     return ""
 
 
@@ -362,17 +364,21 @@ def _remember_webhook_task(task: asyncio.Task) -> None:
 
 
 async def _process_zalo_message(payload: dict[str, Any]) -> None:
-    if agent is None or integrations is None or integrations.zalo is None:
-        warning(logger, "zalo_message_skipped", reason="agent or Zalo integration unavailable")
+    if integrations is None or integrations.zalo is None:
+        warning(logger, "zalo_message_skipped", reason="Zalo integration unavailable")
         return
     if not settings.zalo_agent_reply_enabled or not settings.zalo_allow_send:
         info(logger, "zalo_message_skipped", reason="agent reply or send policy disabled")
         return
+    # Never process an echo of our own outgoing Zalo image or message.
+    if payload.get("isSelf") is True or payload.get("_isSelf") is True:
+        return
 
     text = _extract_zalo_text(payload)
+    image_urls = zalo_notes.image_urls_from_webhook(payload)
     thread_id = str(payload.get("threadId") or payload.get("thread_id") or "").removeprefix("zalo:")
-    if not text or not thread_id:
-        warning(logger, "zalo_message_skipped", reason="missing text or thread_id")
+    if (not text and not image_urls) or not thread_id:
+        warning(logger, "zalo_message_skipped", reason="no content or thread_id")
         return
 
     allowed = settings.zalo_allowed_thread_ids
@@ -387,25 +393,119 @@ async def _process_zalo_message(payload: dict[str, Any]) -> None:
     account = str(payload.get("_accountId") or settings.zalo_default_account or "")
     session_id = f"zalo:{account or 'default'}:{thread_id}"
 
-    with log_context(session_id=session_id, source="zalo", component="zalo"):
-        try:
-            info(logger, "zalo_agent_reply_started", thread_id=thread_id, account=account or "default", text_chars=len(text))
-            answer = await agent.chat(session_id, text, source="zalo")
-            chunks = split_zalo_message(answer)
-            for chunk in chunks or ["Đã xử lý yêu cầu nhưng không có nội dung văn bản để gửi."]:
+    async def send_text(answer: str) -> None:
+        for chunk in split_zalo_message(answer) or ["Đã xử lý yêu cầu nhưng không có nội dung văn bản để gửi."]:
+            await integrations.zalo.send_message(
+                thread_id=thread_id, message=chunk, thread_type=thread_type, account_selection=account,
+            )
+
+    async def send_note_images(found_notes: list[dict]) -> None:
+        # Do not send private /api/notes/... URLs to Zalo: that endpoint needs an admin login.
+        media_base = settings.zalo_media_base_url or settings.zalo_webhook_callback_base
+        webhook_secret = settings.read_zalo_webhook_secret()
+        candidates = [(note, image) for note in found_notes for image in note.get('images', [])]
+        if not candidates:
+            return
+        if not webhook_secret or not media_base:
+            await send_text('⚠️ Không thể gửi ảnh: cần cấu hình ZALO_MEDIA_BASE_URL và Zalo webhook secret.')
+            return
+        failures = 0
+        for note, image in candidates[:10]:
+            image_detail = notes.image_info(image['id'])
+            if not image_detail:
+                failures += 1
+                continue
+            try:
+                url = zalo_notes.signed_image_url(image['id'], base=media_base, secret=webhook_secret)
+                # The Zalo companion fetches this time-limited authenticated URL itself.
+                # The SDK should support MessageContent.attachments with URL/filename.
                 await integrations.zalo.send_message(
                     thread_id=thread_id,
-                    message=chunk,
+                    message=f"📷 {note['title']}",
                     thread_type=thread_type,
                     account_selection=account,
+                    attachments=[{'url': url, 'filename': 'hassmind-' + image['id'] + ('.png' if image_detail[1] == 'image/png' else '.jpg')}],
                 )
-            info(
-                logger,
-                "zalo_agent_reply_completed",
-                thread_id=thread_id,
-                answer_chars=len(answer),
-                outbound_chunks=max(1, len(chunks)),
-            )
+            except Exception:
+                failures += 1
+                exception(logger, 'zalo_note_image_send_failed', thread_id=thread_id, note_id=note['id'])
+        if len(candidates) > 10:
+            await send_text(f'Có {len(candidates) - 10} ảnh khác. Hãy xem từng ghi chú bằng mã để nhận thêm.')
+        if failures:
+            await send_text(f'⚠️ Không gửi được {failures} ảnh qua Zalo. Kiểm tra ZALO_MEDIA_BASE_URL có thể truy cập từ zalo-bot-server và companion có hỗ trợ gửi attachments.')
+
+    if not await zalo_notes.claim_event(session_id, payload):
+        info(logger, "zalo_message_duplicate_skipped", thread_id=thread_id)
+        return
+
+    with log_context(session_id=session_id, source="zalo", component="zalo"):
+        try:
+            photos: list[tuple[bytes, str]] = []
+            if image_urls:
+                try:
+                    # Only images from approved Zalo CDN domains are downloaded.
+                    for url in image_urls:
+                        photos.append(await zalo_notes.download_photo(url))
+                except Exception:
+                    exception(logger, 'zalo_note_image_download_failed', thread_id=thread_id)
+                    await send_text('⚠️ Không tải được ảnh từ Zalo (URL hết hạn, sai định dạng hoặc vượt 5 MB). Chưa lưu ảnh; hãy gửi lại ảnh.')
+                    return
+
+            command = notes.parse_note_command(text) if text else None
+            if text and (not command or command[0] not in ('create', 'attach')):
+                await zalo_notes.clear_followup(session_id)
+            if photos and not text:
+                try:
+                    updated = await zalo_notes.append_followup(session_id, photos)
+                except ValueError as exc:
+                    await send_text(str(exc))
+                    return
+                if updated:
+                    await send_text(f'✅ Đã thêm {len(photos)} ảnh vào ghi chú #{updated["id"]}.')
+                    return
+                amount = await zalo_notes.buffer_photos(session_id, photos)
+                await send_text(f'📷 Đã nhận {amount} ảnh, giữ tạm trong 10 phút. Hãy nhắn “Ghi chú: nội dung” để lưu ảnh lâu dài.')
+                return
+
+            if photos and (not command or command[0] not in ('create', 'attach')):
+                amount = await zalo_notes.buffer_photos(session_id, photos)
+                await send_text(f'📷 Đã nhận {amount} ảnh, chưa tạo ghi chú. Hãy nhắn “Ghi chú: nội dung” hoặc “Thêm ảnh vào ghi chú #MÃ”.')
+                return
+
+            note_images: list[tuple[bytes, str]] = []
+            if command and command[0] in ('create', 'attach'):
+                try:
+                    note_images = await zalo_notes.take_photos(session_id, photos)
+                except ValueError as exc:
+                    await send_text(str(exc))
+                    return
+            try:
+                note_result = notes.respond_to_note_command(text, note_images, allow_generic=True) if text else None
+            except ValueError as exc:
+                await send_text(f'⚠️ Không lưu được ghi chú: {exc}')
+                return
+            if note_result is not None:
+                answer = note_result['answer']
+                await send_text(answer)
+                # If the user sends text first then immediately an image, attach that image.
+                if command and command[0] == 'create' and note_result['notes']:
+                    await zalo_notes.register_followup(session_id, note_result['notes'][0]['id'])
+                elif command and command[0] == 'attach' and note_result['notes']:
+                    await zalo_notes.register_followup(session_id, note_result['notes'][0]['id'])
+                # Send retrieved pictures as actual Zalo attachments, not text links.
+                # For newly created notes, avoid echoing the just-uploaded images.
+                if not command or command[0] not in ('create', 'attach'):
+                    await send_note_images(note_result['notes'])
+                info(logger, 'zalo_note_handled', thread_id=thread_id, images_received=len(photos), notes_found=len(note_result['notes']))
+                return
+
+            if agent is None:
+                await send_text('HassMind AI đang khởi động. Bạn vẫn có thể dùng lệnh Ghi chú.')
+                return
+            info(logger, "zalo_agent_reply_started", thread_id=thread_id, account=account or "default", text_chars=len(text))
+            answer = await agent.chat(session_id, text, source="zalo")
+            await send_text(answer)
+            info(logger, "zalo_agent_reply_completed", thread_id=thread_id, answer_chars=len(answer))
         except Exception as exc:
             add_event("zalo_agent_error", thread_id, {"error": f"{type(exc).__name__}: {exc}"})
             exception(logger, "zalo_agent_reply_failed", thread_id=thread_id, error_type=type(exc).__name__)
@@ -1347,8 +1447,9 @@ async def zalo_webhook(secret: str, payload: dict[str, Any], request: Request):
     text = _extract_zalo_text(payload)
     allowed = settings.zalo_allowed_thread_ids
     normalized_thread = thread_id.removeprefix("zalo:")
+    photo_urls = zalo_notes.image_urls_from_webhook(payload)
     can_reply = bool(
-        text
+        (text or photo_urls)
         and normalized_thread
         and settings.zalo_agent_reply_enabled
         and settings.zalo_allow_send
@@ -1360,11 +1461,25 @@ async def zalo_webhook(secret: str, payload: dict[str, Any], request: Request):
         "zalo_webhook_received",
         thread_id=normalized_thread,
         text_chars=len(text),
+        image_count=len(photo_urls),
         reply_scheduled=can_reply,
     )
     if can_reply:
         _remember_webhook_task(asyncio.create_task(_process_zalo_message(payload), name=f"zalo:{normalized_thread}"))
     return {"accepted": True, "agent_reply_scheduled": can_reply}
+
+
+@app.get('/media/zalo-note-images/{image_id}')
+async def signed_zalo_note_image(image_id: str, expires: int = Query(default=0), sig: str = Query(default='')):
+    """Private image accessible to the companion via an expiring HMAC URL only."""
+    secret = settings.read_zalo_webhook_secret()
+    if not zalo_notes.check_image_signature(image_id, expires, sig, secret):
+        raise HTTPException(404, 'Image not found')
+    detail = notes.image_info(image_id)
+    if not detail:
+        raise HTTPException(404, 'Image not found')
+    path, mime = detail
+    return FileResponse(path, media_type=mime, headers={'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff'})
 
 
 @app.post("/api/chat", dependencies=[Depends(require_access)])

@@ -56,6 +56,7 @@ INTEGRATION_CATALOG: dict[str, dict[str, Any]] = {
             {"name": "webhook_secret", "type": "secret", "label": "Webhook secret", "secret_name": "integration_zalo_webhook_secret", "secret_reader": "read_zalo_webhook_secret"},
             {"name": "auto_register_webhook", "setting": "zalo_auto_register_webhook", "type": "boolean", "label": "Tự đăng ký webhook"},
             {"name": "webhook_callback_base", "setting": "zalo_webhook_callback_base", "type": "url", "label": "Callback base URL", "placeholder": "http://127.0.0.1:8090"},
+            {"name": "media_base_url", "setting": "zalo_media_base_url", "type": "url", "label": "URL HassMind để Zalo tải ảnh ghi chú", "placeholder": "http://IP-MAY-HASSMIND:8090 hoặc https://domain"},
             {"name": "agent_reply_enabled", "setting": "zalo_agent_reply_enabled", "type": "boolean", "label": "Cho phép Agent tự trả lời"},
             {"name": "agent_allowed_thread_ids", "setting": "zalo_agent_allowed_thread_ids", "type": "text", "label": "Allowed thread IDs", "placeholder": "id1,id2 hoặc *"},
             {"name": "notification_thread_id", "setting": "zalo_notification_thread_id", "type": "text", "label": "Thread ID thông báo mặc định", "placeholder": "Để trống = dùng thread cụ thể đầu tiên trong Allowed thread IDs"},

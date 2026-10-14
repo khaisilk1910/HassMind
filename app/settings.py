@@ -150,6 +150,8 @@ class Settings(BaseSettings):
     zalo_webhook_secret: str = ""
     zalo_auto_register_webhook: bool = False
     zalo_webhook_callback_base: str = "http://127.0.0.1:8090"
+    # URL reachable by the Zalo companion (Docker service DNS or public HTTPS).
+    zalo_media_base_url: str = ""
     zalo_agent_reply_enabled: bool = False
     zalo_agent_allowed_thread_ids: str = ""
     zalo_notification_thread_id: str = ""
