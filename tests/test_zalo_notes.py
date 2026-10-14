@@ -439,3 +439,138 @@ async def test_background_timeout_persists_note_and_notifies_zalo(tmp_path, monk
     assert 'sau 60 giây' in messages[0]['message']
     assert notes.list_notes()['items'][0]['images'] == []
     assert zalo_note_drafts.get_draft('zalo:acc:922') is None
+
+
+def color_photo(rgb: tuple[int, int, int]) -> bytes:
+    result = BytesIO()
+    Image.new('RGB', (96, 68), rgb).save(result, 'PNG')
+    return result.getvalue()
+
+
+@pytest.mark.parametrize('count', [2, 3, 4, 5])
+def test_note_collage_includes_every_photo(tmp_path, monkeypatch, count):
+    """All images must remain visible, including the final image of odd grids."""
+    from app import zalo_note_collage
+    monkeypatch.setattr(settings, 'db_path', str(tmp_path / 'hassmind.db'))
+    db.init_db()
+    colors = [(220, 20, 20), (10, 200, 15), (15, 25, 220), (225, 220, 30), (200, 20, 220)]
+    note = notes.create_note('Bộ ảnh', 'Bộ ảnh có nhiều hình',
+                             images=[(color_photo(color), f'{i}.png') for i, color in enumerate(colors[:count])])
+    data = zalo_note_collage.render_note_collage(note['id'])
+    assert data.startswith(b'\xff\xd8')
+    with Image.open(BytesIO(data)) as result:
+        assert result.format == 'JPEG'
+        assert result.width == zalo_note_collage.CANVAS_WIDTH
+        assert result.height <= 2000
+        for index, rgb in enumerate(colors[:count]):
+            row, col = divmod(index, 2)
+            x = (zalo_note_collage.CANVAS_WIDTH // 2 if col == 0 and index == count - 1
+                 else zalo_note_collage.MARGIN + col * (zalo_note_collage.CELL_WIDTH + zalo_note_collage.GAP) + zalo_note_collage.CELL_WIDTH // 2)
+            y = zalo_note_collage.MARGIN + row * (zalo_note_collage.CELL_HEIGHT + zalo_note_collage.GAP) + zalo_note_collage.CELL_HEIGHT // 2
+            pixel = result.getpixel((x, y))
+            assert all(abs(pixel[channel] - rgb[channel]) < 26 for channel in range(3)), (index, pixel, rgb)
+    assert all(notes.image_info(item['id']) is not None for item in note['images'])
+
+
+def test_album_signed_url_is_private_and_distinct_from_photo(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, 'db_path', str(tmp_path / 'hassmind.db'))
+    db.init_db()
+    note = notes.create_note('Bộ ảnh', 'Cả hai ảnh', images=[(photo(), 'one.png'), (photo(), 'two.png')])
+    url = zalo_notes.signed_album_url(note['id'], base='http://hassmind:8090', secret='secret-v1515')
+    parsed = urlsplit(url)
+    assert parsed.path == f'/media/zalo-note-albums/{note["id"]}'
+    args = parse_qs(parsed.query)
+    expires = int(args['expires'][0])
+    sig = args['sig'][0]
+    assert zalo_notes.check_album_signature(note['id'], expires, sig, 'secret-v1515')
+    assert not zalo_notes.check_album_signature(note['id'], expires, sig, 'wrong-secret')
+    assert not zalo_notes.check_album_signature(note['id'], expires - 11, sig, 'secret-v1515')
+    assert not zalo_notes.check_album_signature(note['id'], int(time.time()) - 1, sig, 'secret-v1515')
+    assert not zalo_notes.check_album_signature(note['id'], expires, 'a' * 64, 'secret-v1515')
+    # HMAC domains are separated: signed individual-photo URLs cannot unlock albums.
+    assert not zalo_notes.check_album_signature(note['id'], expires,
+                                               zalo_notes.image_signature(note['id'], expires, 'secret-v1515'),
+                                               'secret-v1515')
+    with pytest.raises(ValueError):
+        zalo_notes.signed_album_url(note['id'], base='https://example.com?redirect=attacker', secret='secret-v1515')
+
+
+@pytest.mark.asyncio
+async def test_production_multi_photo_recall_sends_one_captioned_media_message(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, 'db_path', str(tmp_path / 'hassmind.db'))
+    monkeypatch.setattr(settings, 'zalo_agent_reply_enabled', True)
+    monkeypatch.setattr(settings, 'zalo_allow_send', True)
+    monkeypatch.setattr(settings, 'zalo_agent_allowed_thread_ids', '123')
+    monkeypatch.setattr(settings, 'zalo_media_base_url', 'http://hassmind:8090')
+    monkeypatch.setattr(settings, 'zalo_webhook_secret', 'a-secure-secret')
+    monkeypatch.setattr(settings, 'zalo_webhook_secret_file', '')
+    monkeypatch.setattr(settings, 'runtime_secret_dir', str(tmp_path / 'secrets'))
+    db.init_db()
+    note = notes.create_note('Nhà thờ tổ', 'Ảnh nhà thờ tổ họ tộc #giadinh',
+                             images=[(color_photo(rgb), f'{i}.png') for i, rgb in enumerate([
+                                 (240, 10, 10), (10, 240, 10), (10, 10, 240)
+                             ])])
+    handle, zalo = build_chat_handler()
+    await handle({'threadId': '123', 'msgId': 'query-album-1', 'message': 'Tìm ghi chú nhà thờ tổ'})
+    assert len(zalo.sent) == 1, zalo.sent
+    sent = zalo.sent[0]
+    assert sent.get('_is_image') is True
+    assert sent['message'] == note['content']
+    assert sent['image_url'].startswith(f'http://hassmind:8090/media/zalo-note-albums/{note["id"]}?')
+    params = parse_qs(urlsplit(sent['image_url']).query)
+    assert zalo_notes.check_album_signature(note['id'], int(params['expires'][0]), params['sig'][0], 'a-secure-secret')
+
+
+@pytest.mark.asyncio
+async def test_photo_recall_single_still_has_full_note_caption(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, 'db_path', str(tmp_path / 'hassmind.db'))
+    monkeypatch.setattr(settings, 'zalo_agent_reply_enabled', True)
+    monkeypatch.setattr(settings, 'zalo_allow_send', True)
+    monkeypatch.setattr(settings, 'zalo_agent_allowed_thread_ids', '999')
+    monkeypatch.setattr(settings, 'zalo_media_base_url', 'http://hassmind:8090')
+    monkeypatch.setattr(settings, 'zalo_webhook_secret', 'secret-v1515')
+    monkeypatch.setattr(settings, 'zalo_webhook_secret_file', '')
+    db.init_db()
+    note = notes.create_note('Sổ đỏ', 'Ảnh giấy tờ nhà tháng 10', images=[(photo(), 'paper.png')])
+    handle, zalo = build_chat_handler()
+    await handle({'threadId': '999', 'msgId': 'query-single-1', 'message': f'Xem ghi chú #{note["id"]}'})
+    assert len(zalo.sent) == 1
+    assert zalo.sent[0]['message'] == note['content']
+    assert f'/media/zalo-note-images/{note["images"][0]["id"]}' in zalo.sent[0]['image_url']
+
+
+@pytest.mark.asyncio
+async def test_album_endpoint_serves_signed_image_only(tmp_path, monkeypatch):
+    """Exercise actual FastAPI route body even when optional AI deps are absent."""
+    import ast
+    from pathlib import Path
+    from fastapi import HTTPException, Query
+    from fastapi.responses import Response
+    from app import zalo_note_collage
+    monkeypatch.setattr(settings, 'db_path', str(tmp_path / 'hassmind.db'))
+    monkeypatch.setattr(settings, 'zalo_webhook_secret', 'test-album-secret')
+    monkeypatch.setattr(settings, 'zalo_webhook_secret_file', '')
+    db.init_db()
+    note = notes.create_note('Cổng nhà', 'Ảnh trước sau sửa chữa', images=[(photo(), 'a.png'), (photo(), 'b.png')])
+    tree = ast.parse((Path(__file__).parent.parent / 'app/main.py').read_text(encoding='utf-8'))
+    node = next(n for n in tree.body if isinstance(n, ast.AsyncFunctionDef) and n.name == 'signed_zalo_note_album')
+    node.decorator_list = []
+    scope = {'settings': settings, 'zalo_notes': zalo_notes, 'zalo_note_collage': zalo_note_collage,
+             'asyncio': asyncio, 'HTTPException': HTTPException, 'Response': Response, 'Query': Query}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), 'app/main.py', 'exec'), scope)
+    handler = scope['signed_zalo_note_album']
+    url = zalo_notes.signed_album_url(note['id'], base='http://hassmind:8090', secret='test-album-secret')
+    query = parse_qs(urlsplit(url).query)
+    expires = int(query['expires'][0])
+    signature = query['sig'][0]
+    response = await handler(note['id'], expires, signature)
+    assert response.status_code == 200 and response.media_type == 'image/jpeg'
+    assert response.headers['cache-control'] == 'private, no-store'
+    with Image.open(BytesIO(response.body)) as result:
+        assert result.width == 1440
+    with pytest.raises(HTTPException) as invalid:
+        await handler(note['id'], expires, '0' * 64)
+    assert invalid.value.status_code == 404
+    with pytest.raises(HTTPException) as invalid_id:
+        await handler('0' * 16, expires, signature)
+    assert invalid_id.value.status_code == 404

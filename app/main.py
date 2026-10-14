@@ -16,11 +16,11 @@ from typing import Any
 
 import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, UploadFile, File, Form
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import notes, zalo_notes, zalo_note_drafts
+from . import notes, zalo_notes, zalo_note_drafts, zalo_note_collage
 from .agent import Agent
 from .approvals import apply_approval, decide_by_action, decide_by_web, get_approval
 from .custom_integrations import create_custom_integration, delete_custom_integration, update_custom_integration
@@ -85,7 +85,7 @@ from .tools import ToolRuntime
 os.umask(0o077)
 configure_process_timezone()
 
-APP_VERSION = "1.5.14"
+APP_VERSION = "1.5.15"
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 setup_logging()
@@ -409,39 +409,47 @@ async def _process_zalo_message(payload: dict[str, Any]) -> None:
             )
 
     async def send_note_images(found_notes: list[dict]) -> None:
-        # Do not send private /api/notes/... URLs to Zalo: that endpoint needs an admin login.
+        """Exactly one image message per note, with the note body as its caption.
+
+        zca-js cannot attach a text caption to a multi-photo layout without
+        also emitting a separate text message. A contact sheet preserves all
+        photos visibly in one captioned media message; originals stay in DB.
+        """
         media_base = settings.zalo_media_base_url or settings.zalo_webhook_callback_base
         webhook_secret = settings.read_zalo_webhook_secret()
-        candidates = [(note, image) for note in found_notes for image in note.get('images', [])]
-        if not candidates:
+        photo_notes = [note for note in found_notes if note.get('images')]
+        if not photo_notes:
             return
         if not webhook_secret or not media_base:
             await send_text('⚠️ Không thể gửi ảnh: cần cấu hình ZALO_MEDIA_BASE_URL và Zalo webhook secret.')
             return
         failures = 0
-        for note, image in candidates[:10]:
-            image_detail = notes.image_info(image['id'])
-            if not image_detail:
+        for note in photo_notes[:5]:
+            images = note['images']
+            if any(notes.image_info(item['id']) is None for item in images):
                 failures += 1
                 continue
             try:
-                url = zalo_notes.signed_image_url(image['id'], base=media_base, secret=webhook_secret)
-                # The provided companion downloads the signed URL to a local
-                # file via /api/sendImageByAccount before zca-js uploads it.
+                if len(images) == 1:
+                    url = zalo_notes.signed_image_url(images[0]['id'], base=media_base, secret=webhook_secret)
+                else:
+                    url = zalo_notes.signed_album_url(note['id'], base=media_base, secret=webhook_secret)
+                content = str(note.get('content') or note['title']).strip()
+                caption = content if len(content) <= 1800 else content[:1790].rstrip() + '… (xem toàn bộ trên HassMind)'
                 await integrations.zalo.send_image(
                     thread_id=thread_id,
                     image_url=url,
-                    message=f"📷 {note['title']}",
+                    message=caption,
                     thread_type=thread_type,
                     account_selection=account,
                 )
             except Exception:
                 failures += 1
                 exception(logger, 'zalo_note_image_send_failed', thread_id=thread_id, note_id=note['id'])
-        if len(candidates) > 10:
-            await send_text(f'Có {len(candidates) - 10} ảnh khác. Hãy xem từng ghi chú bằng mã để nhận thêm.')
+        if len(photo_notes) > 5:
+            await send_text(f'Còn {len(photo_notes) - 5} ghi chú có ảnh; hãy tìm cụ thể theo mã.')
         if failures:
-            await send_text(f'⚠️ Không gửi được {failures} ảnh qua Zalo. Kiểm tra ZALO_MEDIA_BASE_URL có thể truy cập từ zalo-bot-server và server có endpoint /api/sendImageByAccount và đường dẫn ảnh có thể truy cập.')
+            await send_text(f'⚠️ Không gửi được {failures} ghi chú có ảnh qua Zalo. Kiểm tra ZALO_MEDIA_BASE_URL và kết nối từ zalo-bot-server tới HassMind.')
 
     async with zalo_notes.processing_lock(session_id):
         if not await zalo_notes.claim_event(session_id, payload):
@@ -565,9 +573,16 @@ async def _process_zalo_message(payload: dict[str, Any]) -> None:
                     await send_text(f'⚠️ Không xử lý được ghi chú: {exc}')
                     return
                 if note_result is not None:
-                    await send_text(note_result['answer'])
-                    if not command or command[0] not in ('create', 'attach'):
+                    # A photo note is sent as ONE media message with its original
+                    # text as the caption. Do not first send the same text again.
+                    is_retrieval = (command is None or command[0] in ('show', 'search', 'list'))
+                    if is_retrieval and any(n.get('images') for n in note_result['notes']):
+                        text_only_notes = [n for n in note_result['notes'] if not n.get('images')]
+                        if text_only_notes:
+                            await send_text('\n\n---\n\n'.join(notes.note_response(n) for n in text_only_notes))
                         await send_note_images(note_result['notes'])
+                    else:
+                        await send_text(note_result['answer'])
                     info(logger, 'zalo_note_handled', thread_id=thread_id,
                          notes_found=len(note_result['notes']))
                     return
@@ -1573,6 +1588,20 @@ async def zalo_webhook(secret: str, payload: dict[str, Any], request: Request):
     if can_reply:
         _remember_webhook_task(asyncio.create_task(_process_zalo_message(payload), name=f"zalo:{normalized_thread}"))
     return {"accepted": True, "agent_reply_scheduled": can_reply}
+
+
+@app.get('/media/zalo-note-albums/{note_id}')
+async def signed_zalo_note_album(note_id: str, expires: int = Query(default=0), sig: str = Query(default='')):
+    secret = settings.read_zalo_webhook_secret()
+    if not zalo_notes.check_album_signature(note_id, expires, sig, secret):
+        raise HTTPException(404, 'Album not found')
+    try:
+        album = await asyncio.to_thread(zalo_note_collage.render_note_collage, note_id)
+    except ValueError:
+        raise HTTPException(404, 'Album not found') from None
+    return Response(album, media_type='image/jpeg', headers={
+        'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff',
+    })
 
 
 @app.get('/media/zalo-note-images/{image_id}')

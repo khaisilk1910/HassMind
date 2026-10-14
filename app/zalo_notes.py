@@ -279,6 +279,32 @@ def signed_image_url(image_id: str, *, base: str, secret: str) -> str:
     return f'{base.strip().rstrip("/")}/media/zalo-note-images/{quote(image_id)}?expires={expires}&sig={sig}'
 
 
+
+def album_signature(note_id: str, expires: int, secret: str) -> str:
+    """Domain-separated HMAC; an image token cannot authorize an album."""
+    return hmac.new(secret.encode('utf-8'), f'album:{note_id}:{expires}'.encode('ascii'), hashlib.sha256).hexdigest()
+
+
+def check_album_signature(note_id: str, expires: int, signature: str, secret: str) -> bool:
+    if not re.fullmatch(r'[0-9a-f]{16}', note_id):
+        return False
+    now = int(time.time())
+    if not secret or expires < now or expires > now + SIGNED_URL_SECONDS or not re.fullmatch(r'[0-9a-f]{64}', signature):
+        return False
+    return hmac.compare_digest(album_signature(note_id, expires, secret), signature)
+
+
+def signed_album_url(note_id: str, *, base: str, secret: str) -> str:
+    if not secret or not re.fullmatch(r'[0-9a-f]{16}', note_id):
+        raise ValueError('Invalid note id or missing signing secret')
+    parsed = urlsplit(base.strip().rstrip('/'))
+    if parsed.scheme not in ('http', 'https') or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError('Cần cấu hình ZALO_MEDIA_BASE_URL hợp lệ.')
+    expires = int(time.time()) + SIGNED_URL_SECONDS
+    sig = album_signature(note_id, expires, secret)
+    return f'{base.strip().rstrip("/")}/media/zalo-note-albums/{quote(note_id)}?expires={expires}&sig={sig}'
+
+
 def bridge_tokens_from_webhook(payload: dict[str, Any]) -> list[str]:
     """Opaque server-side capture tokens. They are never remote URLs."""
     tokens = payload.get('_hassmindImages')
