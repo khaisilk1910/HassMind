@@ -1,7 +1,7 @@
 {
-  "version": "1.5.12",
-  "baseline": "HassMind-v1.5.11-notes-images.zip",
-  "release_type": "zalo_personal_chat_note_images_bidirectional",
+  "version": "1.5.13",
+  "baseline": "HassMind-v1.5.12-zalo-notes-images.zip",
+  "release_type": "zalo_photo_bidirectional_bridge_and_transport_fix",
   "security_fixes_inherited_from": "1.5.9",
   "layout_fix_inherited_from": "1.5.10",
   "new_features": [
@@ -17,7 +17,11 @@
     "zalo_note_image_recall",
     "signed_ephemeral_image_urls",
     "zalo_photo_command_followup",
-    "zalo_webhook_deduplication"
+    "zalo_webhook_deduplication",
+    "zalo_server_authenticated_temporary_photo_capture",
+    "correct_zalo_sendImageByAccount_photo_delivery",
+    "zalo_photo_command_processing_order",
+    "zalo_15mb_incoming_photo_transcode"
   ],
   "security_controls": [
     "auth_and_csrf",
@@ -34,12 +38,12 @@
     "signed_10_minute_image_urls"
   ],
   "qa": {
-    "python_targeted_passed": 53,
+    "python_targeted_passed": 57,
     "python_skipped": 1,
     "javascript_regression_passed": 35,
+    "zalo_server_node_passed": 29,
     "python_compileall_passed": true,
-    "zalo_real_companion_not_verified": true,
-    "docker_or_api_integration_not_verified": "openai/mcp dependencies unavailable in local QA"
+    "zalo_real_companion_not_verified": true
   },
   "sha256_files": {
     ".dockerignore": "c94eaab6c6af5cf051bad7332bfb885e2dcdef5756010d1fc8f24a8616925527",
@@ -65,6 +69,7 @@
     "CHANGELOG_V1.5.10.md": "27ee5e5f27993a479f4ff45b0f7d5987ff764efdaa747221d1e5a761b36cfba5",
     "CHANGELOG_V1.5.11.md": "be95d7de3904e9fc20b306103cb16599a5dacb60d1c29e5c405184595c452334",
     "CHANGELOG_V1.5.12.md": "e8265ed869070ca903e95c4ab86d174a90bd445c4a29265eef31af5cf1daf533",
+    "CHANGELOG_V1.5.13.md": "0948090a6f2ed14099d445a77664e2bcbc1f9b9687ab4a5f638265820e71b086",
     "CHANGELOG_V1.5.2.md": "7ff2717346c02497ff746031ad2e3105562abdf1e72a9365278f39addd99e846",
     "CHANGELOG_V1.5.3.md": "3d2a814cb15197bea5c146598a89776e4a618a2b2054022c94b3ed300c06e70a",
     "CHANGELOG_V1.5.4.md": "76103cef3278a81d1e5d22849a330ee4ae26a80c494c27bf60351ae1fdac75f1",
@@ -99,6 +104,7 @@
     "QA_V1.5.10.md": "45312a0bcdbc1bae24b66b82e13be4f2fdee3b43fc71afdacf4da493014fefc4",
     "QA_V1.5.11.md": "35d749b5acbb89f840962ef2eacd7a1b99718187b36effb290be1cb94e608453",
     "QA_V1.5.12.md": "f085cd9050410fa8adac35138e89dda1b303ba6c7f09321f923d7dfe8346cb9b",
+    "QA_V1.5.13.md": "88ee4fb92455636623a1aaa02ab8ccfd1089842d3381ca89ceb4b0ece8d54808",
     "QA_V1.5.2.md": "763b77347915d892a02f17bc7a8e5ae3a3d34681008b4b572736750daf9bf21f",
     "QA_V1.5.3.md": "d53026f933d8a279bdb171aac64a8dfa074e570859b5f6c92aec261ba057ce88",
     "QA_V1.5.4.md": "dd273d03489fe359255b5ec0a1b2fbe2484fd27852bcd518d15368558d248c24",
@@ -106,7 +112,7 @@
     "QA_V1.5.6.md": "8a4e8ddfecd99fc54701e28cb1280a164b5cff400bacdb540048b6f8614464e7",
     "QA_V1.5.8.md": "5e1e55fac195f4b127f8407ef156cf2f56f7d3fcd35e0e457e3551858b7dc27a",
     "QA_V1.5.9.md": "679c88ca485674564163622eac83ddb5c0f4211728083cac402f506a86d62aa9",
-    "README_VI.md": "e17c01837fa95a35337295b34bafa82115f9793bc55f99785f3fe97d318b7a1a",
+    "README_VI.md": "dedfb35ee5d9e14a30ebd7ae58b5c46e9bb4aac1b19f46fe068b36dd3b049452",
     "SECURITY.md": "486fa3566d3efca68d6ea9c0813fee633731c67f709e32f0d9bd283fc081a3a2",
     "SESSION_FIX.md": "41f86af3ed4f7a22f922c421bf2ca54398280f460b22a1ea94127272fad49fbe",
     "V1.2.2_FIXES.md": "d93a4664c1c59c3deec34204145c0bcaee96cb8b4577bdd2128ed2a796136be1",
@@ -117,7 +123,7 @@
     "V1.2.7_FIXES.md": "86f077d733187e494794489da96d5ca5dbfc4acb62b6a35a661d1881a456e058",
     "V1.2.8_FIXES.md": "f2579e56196917b3184e4db886b336a07d1e9a1d074af35ae430fc468c0f6970",
     "V1.2.9_FIXES.md": "9a7b9c8a7b4858619d9c2263376d707d25696cfb3daafd0d7b8d24afe2131ccb",
-    "VERSION": "1529b361b7f9d7241db1c6d08e904033a0d2e90fab3d44c43a8333e136a9ba6c",
+    "VERSION": "42c4a6120f79b4a9745000fe22d0d4c91dc462231c7f98421e26f26992cd1d42",
     "app/__init__.py": "f2b9b1877e179154fbcaee73818ba98a97c3acab368601828ce30420adc4e282",
     "app/agent.py": "80012e1f8dac980d8e7b798b1f397b1f4d604a3332e9ec2799d0ba82626f8c30",
     "app/approvals.py": "9c9f04fa4dd1c29f734579cbe668fbd680fd01223f34bd4bb927dc65f9b7fbe4",
@@ -139,16 +145,16 @@
     "app/integrations/facedetect.py": "50918033c7278694a6102327d48ca5d48899aab2ce097e22dcf0617fa56e7458",
     "app/integrations/generic.py": "e87f0464dba8f56f17a3e1d8933f2e61fef59eb99c7e532d25120b7e40269aaa",
     "app/integrations/hub.py": "02d2d06c7448e047094f5b849ad6640252f86176c62e46a9b1c2ae6c18d1a00d",
-    "app/integrations/zalo.py": "be4edf6890db3ac765f39c5f956ea97de46fe194848ba10ecd4250dc83e7d59b",
+    "app/integrations/zalo.py": "d8c4fbe137b64434a51db4dc85d1ce217a0db1593bfebf4719e2523089b068f7",
     "app/intent_parser.py": "5acab32336bc41c138c4ba5bb4d173a9d7bf4383f83846585442eea20dc969a8",
     "app/knowledge_governance.py": "18c11d2921df178b25c46b89fe077e7cf96b749a15c0562d691990e38202c5c7",
     "app/logic_engine.py": "a7a5049764e41a4ce00600d2af74d9cb0aa7d5442b17e3c87cdab0906fbbc483",
-    "app/main.py": "ebb74004d7ddf9125668dbfdf6f5747604c5f99dd7685d526c64e7fcfa5a1880",
+    "app/main.py": "daeebd9b990d6eed1272dc6e84d0f2011434f13647bc6698afd523dec406f86d",
     "app/mcp_client.py": "624b4e9c884802dca63407cd4cd6c84037d6af3edd1125e06d0e504d385d73f1",
     "app/message_format.py": "6130f21fb034e078afadf2ed0449422bf42802693e9a0bba54a7bdd30a82bedc",
-    "app/notes.py": "6f93d3426f256a767199ace55949ee72f18e1af735d7581950b7b3d97a6e1059",
+    "app/notes.py": "9230a513c510eb7a1a837617c6d4944c2ebfca4b9ae293376ef2f250aeac900f",
     "app/notifications.py": "ccd5fd3f879ab52cb8433cdf22fae36005da315e130ae1c2cfadc706532c902e",
-    "app/observability.py": "8bfdd3dca4a622b8dcabb6e3bbbb69ced21e65fd76c3cee41c3dedc4077d76fc",
+    "app/observability.py": "82b24798a7d2c15fb26719fd06f81a005efa91120a2e3dca058b77cf3a302505",
     "app/policy.py": "75513b2491bf028f7d7ef0bc951ebea67fa45551a70ca134af1b529dac46cdde",
     "app/rag.py": "b4f0ce8e2e6da13e802de47218d7b1542d4330aa563b3fefb0849b45c6e356b9",
     "app/scheduler.py": "df464a646a40353a079f5d9c1dde7ccac3ded63393e25a4b23742e8bfbd21695",
@@ -159,7 +165,7 @@
     "app/time_utils.py": "d8700f9aff046c8ea8655b9c87430f9a82f2aa41db1e77bd0e00c6a828685d5b",
     "app/tools.py": "331e7c87538f3bdc7b70900aa3755920c35522d2b9081c1e8d2abdec15330005",
     "app/websearch.py": "5a106fe49675f5d847ee28526928b348d85cdb53a11b1d692a91bedf614ad469",
-    "app/zalo_notes.py": "4a77d36dd1b18c51b1d2a6895d67c4cd4ac4c61adc7fc4169275df49748baf84",
+    "app/zalo_notes.py": "e57f5439ec32b51ba12177f744bbf88567587246b1e266c51bdaf2f79520f180",
     "config/logic_profiles/bedroom-climate-comfort.json": "ba179ccb11e2143c3ac90e21b1ba3ab91b6838292912624592a99f121f61b566",
     "config/logic_profiles/job3-vacancy-shutdown.json": "71ecd0967c9534ea41f79a8682115393641787d4f2e6eaf2f605ab63d261be1f",
     "config/mcp_servers.yaml": "f573b9cddcfe51e339e8a010c7717f9723ffbf860fff0319c9455f9967bf91d6",
@@ -246,8 +252,7 @@
     "tests/test_skills_management.py": "b3284a018fb4ae231e227ff25fe31fcbf982faf04c2446817f585a2c9c2492d1",
     "tests/test_skills_ui_layout.py": "e7f88bd736b12ebfc04d74e475c3fb4899f60288752036405dce812d47e0c017",
     "tests/test_timezone_behavior.py": "921e0da19d0541d314e1e7d5d80549a4d69eaae1e2b5f686445d8bed3cc73fba",
-    "tests/test_zalo_notes.py": "12669e1e71b04d54f7edfd4240b54ab0a61bfc210400e643517c7fca42ef5377",
-    "tests/test_zalo_transport.py": "50bcb0c27133af282336b4275bb902574143549feb688f622c9415784cdfc242",
-    "tests/test_zalo_transport.py.tmp": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    "tests/test_zalo_notes.py": "bb3f628ec62bda5ea02a5d4702a7010c5ae4f9ce7af362501fe43e1269c2aac3",
+    "tests/test_zalo_transport.py": "50bcb0c27133af282336b4275bb902574143549feb688f622c9415784cdfc242"
   }
 }

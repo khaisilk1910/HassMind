@@ -29,6 +29,7 @@ SENSITIVE_KEY_RE = re.compile(
 )
 BEARER_RE = re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]+")
 ZALO_WEBHOOK_RE = re.compile(r"(/webhooks/zalo/)[^/?#]+")
+SIGNED_NOTE_IMAGE_RE = re.compile(r"(?i)(/media/zalo-note-images/[0-9a-f]{16}\?expires=\d+&sig=)[0-9a-f]{64}")
 GENERIC_SECRET_ASSIGN_RE = re.compile(
     r"(?i)(\b(?:token|password|passwd|secret|api[_-]?key|authorization|cookie|access[_-]?token|refresh[_-]?token|credential)\b\s*[:=]\s*)([^\s,;]+)"
 )
@@ -92,6 +93,7 @@ def sanitize_url(value: str) -> str:
 def _sanitize_string(value: str, max_chars: int = 12000) -> str:
     value = BEARER_RE.sub("Bearer [REDACTED]", value)
     value = ZALO_WEBHOOK_RE.sub(r"\1[REDACTED]", value)
+    value = SIGNED_NOTE_IMAGE_RE.sub(r"\1[REDACTED]", value)
     value = OPENAI_KEY_RE.sub("[REDACTED_API_KEY]", value)
     value = GITHUB_KEY_RE.sub("[REDACTED_API_KEY]", value)
     value = TELEGRAM_BOT_RE.sub("[REDACTED_TOKEN]", value)

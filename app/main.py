@@ -84,7 +84,7 @@ from .tools import ToolRuntime
 os.umask(0o077)
 configure_process_timezone()
 
-APP_VERSION = "1.5.12"
+APP_VERSION = "1.5.13"
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 setup_logging()
@@ -326,6 +326,10 @@ def _extract_zalo_text(payload: dict[str, Any]) -> str:
                 return value.strip()
     data = payload.get("data")
     if isinstance(data, dict):
+        # Photo content may be a JSON-encoded object, never user chat text.
+        marker = str(data.get('msgType') or '').lower()
+        if 'photo' in marker or 'image' in marker or 'picture' in marker:
+            return str(data.get('caption') or '').strip()
         for key in ("message", "text", "caption", "content"):
             value = data.get(key)
             if isinstance(value, str) and value.strip():
@@ -376,8 +380,9 @@ async def _process_zalo_message(payload: dict[str, Any]) -> None:
 
     text = _extract_zalo_text(payload)
     image_urls = zalo_notes.image_urls_from_webhook(payload)
+    bridge_tokens = zalo_notes.bridge_tokens_from_webhook(payload)
     thread_id = str(payload.get("threadId") or payload.get("thread_id") or "").removeprefix("zalo:")
-    if (not text and not image_urls) or not thread_id:
+    if (not text and not image_urls and not bridge_tokens) or not thread_id:
         warning(logger, "zalo_message_skipped", reason="no content or thread_id")
         return
 
@@ -417,14 +422,14 @@ async def _process_zalo_message(payload: dict[str, Any]) -> None:
                 continue
             try:
                 url = zalo_notes.signed_image_url(image['id'], base=media_base, secret=webhook_secret)
-                # The Zalo companion fetches this time-limited authenticated URL itself.
-                # The SDK should support MessageContent.attachments with URL/filename.
-                await integrations.zalo.send_message(
+                # The provided companion downloads the signed URL to a local
+                # file via /api/sendImageByAccount before zca-js uploads it.
+                await integrations.zalo.send_image(
                     thread_id=thread_id,
+                    image_url=url,
                     message=f"📷 {note['title']}",
                     thread_type=thread_type,
                     account_selection=account,
-                    attachments=[{'url': url, 'filename': 'hassmind-' + image['id'] + ('.png' if image_detail[1] == 'image/png' else '.jpg')}],
                 )
             except Exception:
                 failures += 1
@@ -432,83 +437,98 @@ async def _process_zalo_message(payload: dict[str, Any]) -> None:
         if len(candidates) > 10:
             await send_text(f'Có {len(candidates) - 10} ảnh khác. Hãy xem từng ghi chú bằng mã để nhận thêm.')
         if failures:
-            await send_text(f'⚠️ Không gửi được {failures} ảnh qua Zalo. Kiểm tra ZALO_MEDIA_BASE_URL có thể truy cập từ zalo-bot-server và companion có hỗ trợ gửi attachments.')
+            await send_text(f'⚠️ Không gửi được {failures} ảnh qua Zalo. Kiểm tra ZALO_MEDIA_BASE_URL có thể truy cập từ zalo-bot-server và server có endpoint /api/sendImageByAccount và đường dẫn ảnh có thể truy cập.')
 
-    if not await zalo_notes.claim_event(session_id, payload):
-        info(logger, "zalo_message_duplicate_skipped", thread_id=thread_id)
-        return
+    async with zalo_notes.processing_lock(session_id):
+        if not await zalo_notes.claim_event(session_id, payload):
+            info(logger, "zalo_message_duplicate_skipped", thread_id=thread_id)
+            return
 
-    with log_context(session_id=session_id, source="zalo", component="zalo"):
-        try:
-            photos: list[tuple[bytes, str]] = []
-            if image_urls:
-                try:
-                    # Only images from approved Zalo CDN domains are downloaded.
-                    for url in image_urls:
-                        photos.append(await zalo_notes.download_photo(url))
-                except Exception:
-                    exception(logger, 'zalo_note_image_download_failed', thread_id=thread_id)
-                    await send_text('⚠️ Không tải được ảnh từ Zalo (URL hết hạn, sai định dạng hoặc vượt 5 MB). Chưa lưu ảnh; hãy gửi lại ảnh.')
-                    return
-
-            command = notes.parse_note_command(text) if text else None
-            if text and (not command or command[0] not in ('create', 'attach')):
-                await zalo_notes.clear_followup(session_id)
-            if photos and not text:
-                try:
-                    updated = await zalo_notes.append_followup(session_id, photos)
-                except ValueError as exc:
-                    await send_text(str(exc))
-                    return
-                if updated:
-                    await send_text(f'✅ Đã thêm {len(photos)} ảnh vào ghi chú #{updated["id"]}.')
-                    return
-                amount = await zalo_notes.buffer_photos(session_id, photos)
-                await send_text(f'📷 Đã nhận {amount} ảnh, giữ tạm trong 10 phút. Hãy nhắn “Ghi chú: nội dung” để lưu ảnh lâu dài.')
-                return
-
-            if photos and (not command or command[0] not in ('create', 'attach')):
-                amount = await zalo_notes.buffer_photos(session_id, photos)
-                await send_text(f'📷 Đã nhận {amount} ảnh, chưa tạo ghi chú. Hãy nhắn “Ghi chú: nội dung” hoặc “Thêm ảnh vào ghi chú #MÃ”.')
-                return
-
-            note_images: list[tuple[bytes, str]] = []
-            if command and command[0] in ('create', 'attach'):
-                try:
-                    note_images = await zalo_notes.take_photos(session_id, photos)
-                except ValueError as exc:
-                    await send_text(str(exc))
-                    return
+        with log_context(session_id=session_id, source="zalo", component="zalo"):
             try:
-                note_result = notes.respond_to_note_command(text, note_images, allow_generic=True) if text else None
-            except ValueError as exc:
-                await send_text(f'⚠️ Không lưu được ghi chú: {exc}')
-                return
-            if note_result is not None:
-                answer = note_result['answer']
-                await send_text(answer)
-                # If the user sends text first then immediately an image, attach that image.
-                if command and command[0] == 'create' and note_result['notes']:
-                    await zalo_notes.register_followup(session_id, note_result['notes'][0]['id'])
-                elif command and command[0] == 'attach' and note_result['notes']:
-                    await zalo_notes.register_followup(session_id, note_result['notes'][0]['id'])
-                # Send retrieved pictures as actual Zalo attachments, not text links.
-                # For newly created notes, avoid echoing the just-uploaded images.
-                if not command or command[0] not in ('create', 'attach'):
-                    await send_note_images(note_result['notes'])
-                info(logger, 'zalo_note_handled', thread_id=thread_id, images_received=len(photos), notes_found=len(note_result['notes']))
-                return
+                photos: list[tuple[bytes, str]] = []
+                if bridge_tokens:
+                    # Prefer the authenticated capture made immediately on receipt
+                    # inside zalo-bot-server, avoiding expiring Zalo CDN URLs.
+                    try:
+                        for token in bridge_tokens:
+                            raw = await integrations.zalo.download_incoming_image(token)
+                            ext, normalized, _ = notes.encode_image(raw, 'zalo-photo', max_input_bytes=15 * 1024 * 1024)
+                            photos.append((normalized, 'zalo-photo' + ext))
+                    except Exception:
+                        exception(logger, 'zalo_cached_image_download_failed', thread_id=thread_id)
+                        photos.clear()
+                if image_urls and not photos:
+                    # Compatibility fallback when companion is not yet upgraded.
+                    try:
+                        for url in image_urls:
+                            photos.append(await zalo_notes.download_photo(url))
+                    except Exception:
+                        exception(logger, 'zalo_note_image_download_failed', thread_id=thread_id)
+                        await send_text('⚠️ Không tải được ảnh Zalo: bản CDN có thể đã hết hạn, lỗi quyền truy cập hoặc vượt 15 MB. Hãy cập nhật cả zalo-bot-server và gửi lại ảnh.')
+                        return
+                if bridge_tokens and not photos:
+                    await send_text('⚠️ Không thể lấy ảnh từ bộ nhớ tạm Zalo Server; kiểm tra bản Zalo Server đang chạy và tài khoản API.')
+                    return
 
-            if agent is None:
-                await send_text('HassMind AI đang khởi động. Bạn vẫn có thể dùng lệnh Ghi chú.')
-                return
-            info(logger, "zalo_agent_reply_started", thread_id=thread_id, account=account or "default", text_chars=len(text))
-            answer = await agent.chat(session_id, text, source="zalo")
-            await send_text(answer)
-            info(logger, "zalo_agent_reply_completed", thread_id=thread_id, answer_chars=len(answer))
-        except Exception as exc:
-            add_event("zalo_agent_error", thread_id, {"error": f"{type(exc).__name__}: {exc}"})
-            exception(logger, "zalo_agent_reply_failed", thread_id=thread_id, error_type=type(exc).__name__)
+                command = notes.parse_note_command(text) if text else None
+                if text and (not command or command[0] not in ('create', 'attach')):
+                    await zalo_notes.clear_followup(session_id)
+                if photos and not text:
+                    try:
+                        updated = await zalo_notes.append_followup(session_id, photos)
+                    except ValueError as exc:
+                        await send_text(str(exc))
+                        return
+                    if updated:
+                        await send_text(f'✅ Đã thêm {len(photos)} ảnh vào ghi chú #{updated["id"]}.')
+                        return
+                    amount = await zalo_notes.buffer_photos(session_id, photos)
+                    await send_text(f'📷 Đã nhận {amount} ảnh, giữ tạm trong 10 phút. Hãy nhắn “Ghi chú: nội dung” để lưu ảnh lâu dài.')
+                    return
+
+                if photos and (not command or command[0] not in ('create', 'attach')):
+                    amount = await zalo_notes.buffer_photos(session_id, photos)
+                    await send_text(f'📷 Đã nhận {amount} ảnh, chưa tạo ghi chú. Hãy nhắn “Ghi chú: nội dung” hoặc “Thêm ảnh vào ghi chú #MÃ”.')
+                    return
+
+                note_images: list[tuple[bytes, str]] = []
+                if command and command[0] in ('create', 'attach'):
+                    try:
+                        note_images = await zalo_notes.take_photos(session_id, photos)
+                    except ValueError as exc:
+                        await send_text(str(exc))
+                        return
+                try:
+                    note_result = notes.respond_to_note_command(text, note_images, allow_generic=True) if text else None
+                except ValueError as exc:
+                    await send_text(f'⚠️ Không lưu được ghi chú: {exc}')
+                    return
+                if note_result is not None:
+                    answer = note_result['answer']
+                    await send_text(answer)
+                    # If the user sends text first then immediately an image, attach that image.
+                    if command and command[0] == 'create' and note_result['notes']:
+                        await zalo_notes.register_followup(session_id, note_result['notes'][0]['id'])
+                    elif command and command[0] == 'attach' and note_result['notes']:
+                        await zalo_notes.register_followup(session_id, note_result['notes'][0]['id'])
+                    # Send retrieved pictures as actual Zalo attachments, not text links.
+                    # For newly created notes, avoid echoing the just-uploaded images.
+                    if not command or command[0] not in ('create', 'attach'):
+                        await send_note_images(note_result['notes'])
+                    info(logger, 'zalo_note_handled', thread_id=thread_id, images_received=len(photos), notes_found=len(note_result['notes']))
+                    return
+
+                if agent is None:
+                    await send_text('HassMind AI đang khởi động. Bạn vẫn có thể dùng lệnh Ghi chú.')
+                    return
+                info(logger, "zalo_agent_reply_started", thread_id=thread_id, account=account or "default", text_chars=len(text))
+                answer = await agent.chat(session_id, text, source="zalo")
+                await send_text(answer)
+                info(logger, "zalo_agent_reply_completed", thread_id=thread_id, answer_chars=len(answer))
+            except Exception as exc:
+                add_event("zalo_agent_error", thread_id, {"error": f"{type(exc).__name__}: {exc}"})
+                exception(logger, "zalo_agent_reply_failed", thread_id=thread_id, error_type=type(exc).__name__)
 
 
 async def _zalo_webhook_registration_loop() -> None:
@@ -1448,8 +1468,9 @@ async def zalo_webhook(secret: str, payload: dict[str, Any], request: Request):
     allowed = settings.zalo_allowed_thread_ids
     normalized_thread = thread_id.removeprefix("zalo:")
     photo_urls = zalo_notes.image_urls_from_webhook(payload)
+    bridge_tokens = zalo_notes.bridge_tokens_from_webhook(payload)
     can_reply = bool(
-        (text or photo_urls)
+        (text or photo_urls or bridge_tokens)
         and normalized_thread
         and settings.zalo_agent_reply_enabled
         and settings.zalo_allow_send
@@ -1461,7 +1482,7 @@ async def zalo_webhook(secret: str, payload: dict[str, Any], request: Request):
         "zalo_webhook_received",
         thread_id=normalized_thread,
         text_chars=len(text),
-        image_count=len(photo_urls),
+        image_count=max(len(photo_urls), len(bridge_tokens)),
         reply_scheduled=can_reply,
     )
     if can_reply:

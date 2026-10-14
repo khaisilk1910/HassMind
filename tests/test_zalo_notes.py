@@ -137,13 +137,12 @@ class FakeZalo(ZaloClient):
 @pytest.mark.asyncio
 async def test_companion_image_attachment_transport_contract():
     client = FakeZalo()
-    await client.send_message(thread_id='23', message='📷 Hóa đơn điện', thread_type=0,
-                              attachments=[{'url': 'http://hassmind:8090/media/zalo-note-images/abc?expires=1&sig=x',
-                                            'filename': 'anh.jpg'}])
+    await client.send_image(thread_id='23', message='📷 Hóa đơn điện', thread_type=0,
+                            image_url='http://hassmind:8090/media/zalo-note-images/abc?expires=1&sig=x')
     method, path, body = client.recorded
     assert method == 'POST'
-    assert path == '/api/sendMessageByAccount'
-    assert body['message']['attachments'][0]['filename'] == 'anh.jpg'
+    assert path == '/api/sendImageByAccount'
+    assert body['imagePath'].startswith('http://hassmind:8090/media/')
     assert body['threadId'] == '23'
 
 
@@ -165,6 +164,13 @@ def build_chat_handler():
         return {'success': True}
 
     stub.send_message = send_message
+    async def send_image(**data):
+        stub.sent.append({'_is_image': True, **data})
+        return {'success': True, 'deliveryStatus': 'accepted'}
+    async def download_incoming_image(token):
+        return photo()
+    stub.send_image = send_image
+    stub.download_incoming_image = download_incoming_image
     scope = {
         'Any': __import__('typing').Any,
         'notes': notes, 'zalo_notes': zalo_notes, 'settings': settings,
@@ -208,9 +214,9 @@ async def test_production_handler_zalo_photo_first_then_note_and_photo_recall(tm
     await handle({'threadId': '123', 'message': {'text': 'Tìm ghi chú hóa đơn điện'}})
     assert len(zalo.sent) >= 4
     assert any('Hóa đơn điện' in message['message'] for message in zalo.sent)
-    attachments = [message['attachments'] for message in zalo.sent if message.get('attachments')]
-    assert len(attachments) == 1
-    photo_url = attachments[0][0]['url']
+    images = [message for message in zalo.sent if message.get('_is_image')]
+    assert len(images) == 1
+    photo_url = images[0]['image_url']
     params = parse_qs(urlsplit(photo_url).query)
     assert zalo_notes.check_image_signature(note['images'][0]['id'], int(params['expires'][0]), params['sig'][0], settings.read_zalo_webhook_secret())
 
@@ -268,6 +274,75 @@ async def test_empty_image_attachment_result_is_reported_not_ignored():
         return {'success': True, 'data': {'message': None, 'attachment': []}}
 
     client.request = empty_response
-    with pytest.raises(IntegrationError, match='no uploaded image'):
-        await client.send_message(thread_id='23', message='Ảnh ghi chú', thread_type=0,
-                                  attachments=[{'url': 'https://example.org/signed', 'filename': 'anh.jpg'}])
+    with pytest.raises(IntegrationError, match='empty attachment receipt'):
+        await client.send_image(thread_id='23', message='Ảnh ghi chú', thread_type=0,
+                                image_url='https://example.org/signed')
+
+
+def test_zalo_photo_content_as_json_string_not_text():
+    from json import dumps
+    base = 'https://f6.photo.talk.zdn.vn/photo.jpg'
+    payload = {'data': {'msgType': 'chat.photo', 'content': dumps({'href': base, 'thumb': base + '?low'})}}
+    assert zalo_notes.image_urls_from_webhook(payload) == [base]
+    from pathlib import Path
+    import ast
+    node = next(n for n in ast.parse((Path(__file__).parent.parent/'app'/'main.py').read_text()).body
+                if isinstance(n, ast.FunctionDef) and n.name == '_extract_zalo_text')
+    scope = {'Any': __import__('typing').Any}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), 'main.py', 'exec'), scope)
+    assert scope['_extract_zalo_text'](payload) == ''
+
+@pytest.mark.asyncio
+async def test_cached_zalo_photo_reaches_note_without_public_cdn(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, 'db_path', str(tmp_path / 'hassmind.db'))
+    monkeypatch.setattr(settings, 'zalo_agent_reply_enabled', True)
+    monkeypatch.setattr(settings, 'zalo_allow_send', True)
+    monkeypatch.setattr(settings, 'zalo_agent_allowed_thread_ids', '700')
+    db.init_db()
+    handler, zalo = build_chat_handler()
+    # No reachable external URL; media is received through the authenticated server.
+    await handler({'threadId': '700', '_hassmindImages': [{'token': 'a'*48}],
+                   'data': {'msgType': 'chat.photo', 'content': '{}'}})
+    assert 'Đã nhận 1 ảnh' in zalo.sent[-1]['message']
+    await handler({'threadId': '700', 'message': 'Ghi chú: Ảnh gia đình họ tộc'})
+    assert len(notes.search_notes('gia đình họ tộc')[0]['images']) == 1
+
+@pytest.mark.asyncio
+async def test_bad_cached_token_does_not_access_remote_url(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, 'db_path', str(tmp_path / 'hassmind.db'))
+    monkeypatch.setattr(settings, 'zalo_agent_reply_enabled', True)
+    monkeypatch.setattr(settings, 'zalo_allow_send', True)
+    monkeypatch.setattr(settings, 'zalo_agent_allowed_thread_ids', '700')
+    db.init_db()
+    handler, zalo = build_chat_handler()
+    await handler({'threadId': '700', '_hassmindImages': [{'token': 'a'*48}],
+                   'data': {'msgType': 'chat.photo', 'content': '{}'}})
+    assert 'Đã nhận' in zalo.sent[-1]['message']
+
+@pytest.mark.asyncio
+async def test_fast_followup_command_waits_until_photo_is_buffered(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, 'db_path', str(tmp_path / 'hassmind.db'))
+    monkeypatch.setattr(settings, 'zalo_agent_reply_enabled', True)
+    monkeypatch.setattr(settings, 'zalo_allow_send', True)
+    monkeypatch.setattr(settings, 'zalo_agent_allowed_thread_ids', '800')
+    db.init_db()
+    handler, zalo = build_chat_handler()
+    start = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def late_photo(token):
+        start.set()
+        await finish.wait()
+        return photo()
+
+    zalo.download_incoming_image = late_photo
+    first = asyncio.create_task(handler({'threadId': '800', '_hassmindImages': [{'token': 'b'*48}],
+                                         'data': {'msgType': 'chat.photo', 'content': '{}'}}))
+    await start.wait()
+    second = asyncio.create_task(handler({'threadId': '800', 'message': 'Ghi chú: Ảnh trên Zalo'}))
+    await asyncio.sleep(0.01)
+    assert notes.list_notes()['total'] == 0
+    finish.set()
+    await asyncio.gather(first, second)
+    note = notes.search_notes('Ảnh trên Zalo')[0]
+    assert len(note['images']) == 1

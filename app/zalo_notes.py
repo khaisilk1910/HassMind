@@ -9,6 +9,7 @@ import asyncio
 import hashlib
 import hmac
 import ipaddress
+import json
 import re
 import socket
 import time
@@ -33,6 +34,26 @@ _pending: OrderedDict[str, tuple[float, list[tuple[bytes, str]]]] = OrderedDict(
 _followup: dict[str, tuple[float, str]] = {}
 _seen_events: OrderedDict[str, float] = OrderedDict()
 _pending_lock = asyncio.Lock()
+_processing_locks: OrderedDict[str, tuple[float, asyncio.Lock]] = OrderedDict()
+
+
+def processing_lock(session: str) -> asyncio.Lock:
+    """Serialize Zalo photo/command handling in each chat thread.
+
+    The companion acknowledges webhooks before HassMind finishes downloading
+    photos. Without this lock, a fast follow-up 'Ghi chú:' can overtake its image.
+    """
+    now = time.monotonic()
+    for key, (at, lock) in list(_processing_locks.items()):
+        if key != session and now - at > PENDING_SECONDS and not lock.locked():
+            _processing_locks.pop(key, None)
+    if session in _processing_locks:
+        lock = _processing_locks.pop(session)[1]
+    else:
+        lock = asyncio.Lock()
+    _processing_locks[session] = (now, lock)
+    return lock
+
 
 
 def image_urls_from_webhook(payload: dict[str, Any]) -> list[str]:
@@ -45,6 +66,12 @@ def image_urls_from_webhook(payload: dict[str, Any]) -> list[str]:
 
     def inspect(obj: Any, *, depth: int = 0, image_context: bool = False) -> None:
         if depth > 5:
+            return
+        if isinstance(obj, str) and image_context and obj.lstrip().startswith('{'):
+            try:
+                inspect(json.loads(obj), depth=depth + 1, image_context=True)
+            except (ValueError, TypeError):
+                pass
             return
         if isinstance(obj, list):
             for item in obj[:notes.MAX_IMAGES]:
@@ -59,8 +86,12 @@ def image_urls_from_webhook(payload: dict[str, Any]) -> list[str]:
         if isinstance(obj.get('image_url'), str):
             add(obj['image_url'])
         if is_photo:
-            for key in ('href', 'url', 'oriUrl', 'hdUrl', 'normalUrl', 'photoUrl'):
-                add(obj.get(key))
+            # Each Zalo photo has multiple resolutions. Prefer the original,
+            # keeping just one candidate rather than saving duplicate thumbnails.
+            for key in ('hdUrl', 'oriUrl', 'href', 'normalUrl', 'photoUrl', 'url', 'thumbUrl', 'thumb'):
+                if isinstance(obj.get(key), str) and obj[key]:
+                    add(obj[key])
+                    break
         # zca-js content object has an image href and thumbnail even when msgType is on its parent.
         if isinstance(obj.get('href'), str) and ('thumb' in obj or 'width' in obj) and not marker.startswith('link'):
             add(obj['href'])
@@ -68,7 +99,7 @@ def image_urls_from_webhook(payload: dict[str, Any]) -> list[str]:
             if key == 'content' and marker and not is_photo and any(t in marker for t in ('sticker', 'link')):
                 continue
             child = obj.get(key)
-            if isinstance(child, (dict, list)):
+            if isinstance(child, (dict, list)) or (is_photo and key == 'content' and isinstance(child, str)):
                 inspect(child, depth=depth + 1, image_context=is_photo if key in ('payload', 'content') else False)
 
     inspect(payload)
@@ -116,24 +147,24 @@ def _public_dns_only(host: str) -> None:
 async def download_photo(url: str) -> tuple[bytes, str]:
     safe_url = allowed_photo_url(url)
     await asyncio.to_thread(_public_dns_only, urlsplit(safe_url).hostname or '')
-    async with httpx.AsyncClient(timeout=httpx.Timeout(12, connect=5), follow_redirects=False, trust_env=False) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(15, connect=6), follow_redirects=False, trust_env=False) as client:
         async with client.stream('GET', safe_url, headers={'Accept': 'image/jpeg,image/png,image/webp,image/gif'}) as response:
             response.raise_for_status()
             mime = response.headers.get('content-type', '').split(';', 1)[0].lower()
             if mime not in ('image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/octet-stream'):
                 raise ValueError('Zalo không trả về nội dung ảnh hợp lệ.')
-            if int(response.headers.get('content-length', '0') or 0) > notes.MAX_IMAGE_BYTES:
-                raise ValueError('Ảnh Zalo vượt giới hạn 5 MB.')
+            if int(response.headers.get('content-length', '0') or 0) > 15 * 1024 * 1024:
+                raise ValueError('Ảnh Zalo vượt giới hạn 15 MB.')
             chunks: list[bytes] = []
             total = 0
             async for chunk in response.aiter_bytes():
                 total += len(chunk)
-                if total > notes.MAX_IMAGE_BYTES:
-                    raise ValueError('Ảnh Zalo vượt giới hạn 5 MB.')
+                if total > 15 * 1024 * 1024:
+                    raise ValueError('Ảnh Zalo vượt giới hạn 15 MB.')
                 chunks.append(chunk)
     raw = b''.join(chunks)
     # Decode and re-encode immediately, stripping EXIF/malicious ancillary data.
-    ext, normalized, _ = notes.encode_image(raw, 'zalo-photo')
+    ext, normalized, _ = notes.encode_image(raw, 'zalo-photo', max_input_bytes=15 * 1024 * 1024)
     return normalized, 'zalo-photo' + ext
 
 
@@ -246,3 +277,13 @@ def signed_image_url(image_id: str, *, base: str, secret: str) -> str:
     expires = int(time.time()) + SIGNED_URL_SECONDS
     sig = image_signature(image_id, expires, secret)
     return f'{base.strip().rstrip("/")}/media/zalo-note-images/{quote(image_id)}?expires={expires}&sig={sig}'
+
+
+def bridge_tokens_from_webhook(payload: dict[str, Any]) -> list[str]:
+    """Opaque server-side capture tokens. They are never remote URLs."""
+    tokens = payload.get('_hassmindImages')
+    if not isinstance(tokens, list):
+        return []
+    return [entry['token'] for entry in tokens[:notes.MAX_IMAGES]
+            if isinstance(entry, dict) and isinstance(entry.get('token'), str)
+            and re.fullmatch(r'[0-9a-f]{48}', entry['token'])]

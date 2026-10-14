@@ -4,6 +4,8 @@ import asyncio
 from typing import Any
 from urllib.parse import quote
 
+import httpx
+
 from .base import IntegrationError, JsonHttpClient
 from ..message_format import build_zalo_message_content
 from ..observability import get_logger, info, warning
@@ -92,19 +94,11 @@ class ZaloClient(JsonHttpClient):
             "accountSelection": str(selected),
         }
         if attachments:
-            # zca-js MessageContent supports AttachmentSource objects containing URL + filename.
-            body["message"]["attachments"] = attachments
+            raise IntegrationError("Use send_image() for Zalo photos; remote image URLs must go through /api/sendImageByAccount")
         if ttl is not None and ttl != "":
             body["ttl"] = ttl
         try:
             result = await self.request("POST", "/api/sendMessageByAccount", json=body)
-            if attachments and isinstance(result, dict):
-                if result.get("success") is False or result.get("error"):
-                    raise IntegrationError(f"Zalo companion rejected image attachment: {result.get('message') or result.get('error')}")
-                detail = result.get('data', result)
-                # zca-js may respond successfully yet report zero uploaded images.
-                if isinstance(detail, dict) and isinstance(detail.get('attachment'), list) and not detail['attachment']:
-                    raise IntegrationError('Zalo companion returned no uploaded image attachments')
             return result
         except IntegrationError as exc:
             # Older companion servers may validate `message` as msg-only. If
@@ -120,10 +114,55 @@ class ZaloClient(JsonHttpClient):
                 )
                 fallback = dict(body)
                 fallback["message"] = {"msg": message_content["msg"]}
-                if attachments:
-                    fallback["message"]["attachments"] = attachments
                 return await self.request("POST", "/api/sendMessageByAccount", json=fallback)
             raise
+
+    async def send_image(
+        self, *, thread_id: str, image_url: str, thread_type: int,
+        account_selection: str = "", message: str = "",
+    ) -> Any:
+        """Use the companion's actual URL-to-local-file image transport.
+
+        zca-js requires a local filename (or a supported upload source), not an
+        arbitrary URL/filename object in sendMessage.attachments.
+        """
+        await self.ensure_login()
+        selected = await self._select_account(account_selection)
+        result = await self.request(
+            "POST", "/api/sendImageByAccount",
+            json={"imagePath": image_url, "threadId": str(thread_id).removeprefix("zalo:"),
+                  "type": int(thread_type), "accountSelection": str(selected), "message": message},
+            timeout=40,
+        )
+        if not isinstance(result, dict) or result.get("success") is not True:
+            raise IntegrationError(f"Zalo image upload rejected: {result}")
+        receipt = result.get("data")
+        if isinstance(receipt, dict) and isinstance(receipt.get("attachment"), list) and not receipt["attachment"]:
+            raise IntegrationError("Zalo returned an empty attachment receipt")
+        if result.get('deliveryStatus') not in (None, 'accepted'):
+            raise IntegrationError(f"Zalo image send was not confirmed ({result['deliveryStatus']})")
+        return result
+
+    async def download_incoming_image(self, token: str) -> bytes:
+        """Read an authenticated temporary photo captured by zalo-bot-server."""
+        import re
+        if not re.fullmatch(r"[0-9a-f]{48}", token):
+            raise IntegrationError("Invalid incoming image token")
+        await self.ensure_login()
+        try:
+            async with self.client.stream("GET", f"/api/incomingImage/{token}", timeout=20) as response:
+                if response.status_code != 200:
+                    raise IntegrationError(f"Zalo image relay HTTP {response.status_code}")
+                chunks: list[bytes] = []
+                size = 0
+                async for chunk in response.aiter_bytes():
+                    size += len(chunk)
+                    if size > 15 * 1024 * 1024:
+                        raise IntegrationError("Incoming image exceeds 15 MB")
+                    chunks.append(chunk)
+                return b"".join(chunks)
+        except httpx.HTTPError as exc:
+            raise IntegrationError("Zalo image relay connection failed") from exc
 
     async def get_webhook_account(self, own_id: str) -> dict[str, Any] | None:
         await self.ensure_login()

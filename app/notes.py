@@ -181,8 +181,8 @@ def image_info(image_id: str) -> tuple[Path, str] | None:
     return path, row['mime']
 
 
-def encode_image(data: bytes, original_name: str) -> tuple[str, bytes, str]:
-    if not data or len(data) > MAX_IMAGE_BYTES:
+def encode_image(data: bytes, original_name: str, *, max_input_bytes: int = MAX_IMAGE_BYTES) -> tuple[str, bytes, str]:
+    if not data or len(data) > max_input_bytes:
         raise ValueError('Mỗi ảnh phải nhỏ hơn hoặc bằng 5 MB.')
     if len(original_name or '') > 255:
         raise ValueError('Tên ảnh quá dài.')

@@ -923,14 +923,18 @@ webhook, Agent tự trả lời, allowlist thread, và đặt Zalo webhook secre
 HassMind sinh URL ảnh riêng có chữ ký HMAC, tự hết hạn sau 10 phút; **không**
 mở thư mục ảnh ra Internet và không chia sẻ khóa đăng nhập admin.
 
-**Yêu cầu phía companion:** `/api/sendMessageByAccount` phải chấp nhận
-`message.attachments=[{url,filename}]` theo định dạng `zca-js`.
-Nếu bản companion hiện tại loại bỏ attachments, ảnh sẽ không được gửi và
-HassMind báo lỗi riêng trên Zalo; cần cập nhật companion hỗ trợ phương thức
-này. Chưa xác nhận tương thích end-to-end với companion thực tế.
+**Yêu cầu phía companion (từ HassMind v1.5.13):** Cập nhật đồng thời
+`zalo-bot-server` với bản vá nhận ảnh. Chiều gửi sử dụng đúng endpoint
+`POST /api/sendImageByAccount` (server tải URL ảnh có chữ ký về file tạm,
+`zca-js` gửi file). Chiều nhận: Zalo Server chụp ảnh CDN ngay khi nhận tin,
+cache riêng tối đa 10 phút, cấp mã opaque trong webhook; HassMind truy xuất qua
+`GET /api/incomingImage/{token}` với phiên đăng nhập Zalo Server. Nếu chưa cập
+nhật server, HassMind vẫn thử tải URL CDN trực tiếp nhưng không đảm bảo được
+ảnh khi CDN chặn hoặc hết hạn. HACS Zalo Bot hiện có không cần sửa cho luồng
+HassMind ↔ Zalo Server này.
 
 **An toàn:** Chỉ tải ảnh từ tên miền CDN Zalo thuộc allowlist, ưu tiên
-HTTPS, không theo chuyển hướng, giới hạn tải 5 MB, xác thực định dạng ảnh
+HTTPS, không theo chuyển hướng, giới hạn đầu vào Zalo 15 MB (ảnh web 5 MB), xác thực định dạng ảnh
 thực và loại metadata trước khi ghi xuống kho. Chỉ tiếp nhận yêu cầu từ
 thread Zalo được phép. Nếu ảnh đến trước câu lệnh ghi chú, nó chỉ được giữ
 tạm trong RAM và sẽ mất khi container khởi động lại; ảnh đã lưu sẽ bền vững.
