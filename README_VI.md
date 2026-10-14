@@ -953,3 +953,15 @@ tạm trong RAM và sẽ mất khi container khởi động lại; ảnh đã l�
 Nếu gửi ảnh trước khi gửi nội dung `Ghi chú: ...`, HassMind **không** tự giữ ảnh đó để tạo ghi chú; hãy gửi nội dung trước rồi gửi ảnh **mới**. URL CDN Zalo có thể yêu cầu proxy/quyền truy cập và không phải ảnh nào cũng tải được. Nếu ảnh lỗi, xem log `zalo.incoming_photo_cache_failed` bên Zalo Server; mã lỗi HTTP được gửi về trong thông báo HassMind. Không chia sẻ URL CDN/token/cookie Zalo trong log hỗ trợ.
 
 **Triển khai:** rebuild từ mã nguồn **cả HassMind v1.5.14 và Zalo Server Photo Bridge v1.5.14**; giữ nguyên mount `/data` và `/app/data` như cấu hình hiện có. HACS không đổi. Xem `CHANGELOG_V1.5.14.md`.
+
+
+## HassMind v1.5.16: Trả ảnh đã lưu qua Zalo thành nhóm ảnh gốc
+
+Từ v1.5.16, ghi chú có 2–5 ảnh được gửi bằng **từng tệp ảnh đã lưu**, không tạo ảnh ghép. HassMind ký URL truy cập ngắn hạn cho từng ảnh; Zalo Server tải các ảnh rồi gửi nhóm bằng `zca-js`. Nội dung ghi chú được đính kèm ở trường `message`. Do giới hạn `zca-js`, nội dung chữ có thể hiển thị dưới dạng tin nhắn riêng khỏi nhóm ảnh. Ảnh đã lưu trong HassMind có thể từng được chuẩn hóa khi nhận (tối đa 2200 pixel, JPEG quality 85); Zalo có thể nén thêm khi chuyển đi.
+
+**Bắt buộc** cập nhật đồng bộ HassMind và Zalo Server đi kèm: API `POST /api/sendImagesByAccount` chưa có trong Zalo Server cũ. Giữ dữ liệu tại `/data` và `/app/data`. Tích hợp Zalo HACS không phải nâng cấp.
+
+
+## HassMind v1.5.17: Khac phuc loi nhan anh tu Zalo
+
+Zalo Server moi thu anh HD, URL thuong va thumbnail bang session dang nhap, dong thoi kiem tra bytes JPEG/PNG/WebP/GIF thay vi Content-Type. HassMind co them URL du phong, van luu ghi chu theo quy trinh noi dung truoc/anh sau 60 giay. Phai build lai ca Zalo Server va HassMind; khong can cap nhat Zalo HACS. Neu Zalo CDN tu choi toan bo URL, xem log `zalo.incoming_photo_cache_failed` voi ma `cdn_html`, `cdn_json`, `http_403` de chan doan.

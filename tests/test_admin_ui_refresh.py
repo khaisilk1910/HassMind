@@ -9,9 +9,9 @@ LOGIN = (ROOT / 'static/login.html').read_text(encoding='utf-8')
 
 
 def test_admin_navigation_and_content_remain_intact():
-    assert HTML.count('class="nav-btn') == 13
-    assert HTML.count('class="panel') == 13
-    assert HTML.count('class="nav-icon" aria-hidden="true"') == 13
+    assert HTML.count('class="nav-btn') == 14
+    assert HTML.count('class="panel') == 14
+    assert HTML.count('class="nav-icon" aria-hidden="true"') == 14
     assert 'id="chatbox"' in HTML
     assert 'id="authAuditPageSize"' in HTML
     assert 'id="authAuditPagination"' in HTML

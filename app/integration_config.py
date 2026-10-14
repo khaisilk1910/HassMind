@@ -149,6 +149,10 @@ def _coerce(field: dict[str, Any], value: Any) -> Any:
         return number
     text = str(value or "").strip()
     if kind == "url":
+        # Zalo image base is optional: outgoing signed-image URLs fall back to
+        # webhook_callback_base when this field has not been configured yet.
+        if not text and field["name"] == "media_base_url":
+            return ""
         if not text:
             raise ValueError(f"{field['name']} must not be empty")
         parsed = urlparse(text)

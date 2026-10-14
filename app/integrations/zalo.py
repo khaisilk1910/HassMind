@@ -143,6 +143,35 @@ class ZaloClient(JsonHttpClient):
             raise IntegrationError(f"Zalo image send was not confirmed ({result['deliveryStatus']})")
         return result
 
+    async def send_images(
+        self, *, thread_id: str, image_urls: list[str], thread_type: int,
+        account_selection: str = "", message: str = "",
+    ) -> Any:
+        """Send 2-5 original stored image files in one Zalo grouped-photo operation.
+
+        The companion's SDK may render the caption as its own text bubble.
+        An unconfirmed/partial upload is NEVER retried automatically.
+        """
+        if not 2 <= len(image_urls) <= 5 or any(not isinstance(url, str) or not url for url in image_urls):
+            raise IntegrationError("Expected two to five valid Zalo note image URLs")
+        await self.ensure_login()
+        selected = await self._select_account(account_selection)
+        result = await self.request(
+            "POST", "/api/sendImagesByAccount",
+            json={"imagePaths": image_urls, "threadId": str(thread_id).removeprefix("zalo:"),
+                  "type": int(thread_type), "accountSelection": str(selected), "message": message},
+            timeout=90,
+        )
+        if not isinstance(result, dict) or result.get("success") is not True:
+            raise IntegrationError(f"Zalo multi-image upload rejected: {result}")
+        receipts = result.get("data", {}).get("attachment") if isinstance(result.get("data"), dict) else None
+        if (not isinstance(receipts, list) or len(receipts) != len(image_urls)
+                or any(not isinstance(item, dict) or not item.get("msgId") for item in receipts)):
+            raise IntegrationError("Zalo multi-image album was not fully confirmed; check chat before resending")
+        if result.get("deliveryStatus") != "accepted":
+            raise IntegrationError("Zalo multi-image album delivery was not confirmed; check chat before resending")
+        return result
+
     async def download_incoming_image(self, token: str) -> bytes:
         """Read an authenticated temporary photo captured by zalo-bot-server."""
         import re

@@ -86,12 +86,12 @@ def image_urls_from_webhook(payload: dict[str, Any]) -> list[str]:
         if isinstance(obj.get('image_url'), str):
             add(obj['image_url'])
         if is_photo:
-            # Each Zalo photo has multiple resolutions. Prefer the original,
-            # keeping just one candidate rather than saving duplicate thumbnails.
-            for key in ('hdUrl', 'oriUrl', 'href', 'normalUrl', 'photoUrl', 'url', 'thumbUrl', 'thumb'):
+            # Each resolution is a fallback candidate for the same photo.
+            # The caller stops after the FIRST successfully decoded image,
+            # so thumbnail URLs never become duplicate note attachments.
+            for key in ('hdUrl', 'oriUrl', 'rawUrl', 'href', 'normalUrl', 'photoUrl', 'url', 'thumbUrl', 'thumb'):
                 if isinstance(obj.get(key), str) and obj[key]:
                     add(obj[key])
-                    break
         # zca-js content object has an image href and thumbnail even when msgType is on its parent.
         if isinstance(obj.get('href'), str) and ('thumb' in obj or 'width' in obj) and not marker.startswith('link'):
             add(obj['href'])
@@ -103,7 +103,7 @@ def image_urls_from_webhook(payload: dict[str, Any]) -> list[str]:
                 inspect(child, depth=depth + 1, image_context=is_photo if key in ('payload', 'content') else False)
 
     inspect(payload)
-    return found[:notes.MAX_IMAGES]
+    return found[:12]
 
 
 def allowed_photo_url(value: str) -> str:
@@ -148,11 +148,13 @@ async def download_photo(url: str) -> tuple[bytes, str]:
     safe_url = allowed_photo_url(url)
     await asyncio.to_thread(_public_dns_only, urlsplit(safe_url).hostname or '')
     async with httpx.AsyncClient(timeout=httpx.Timeout(15, connect=6), follow_redirects=False, trust_env=False) as client:
-        async with client.stream('GET', safe_url, headers={'Accept': 'image/jpeg,image/png,image/webp,image/gif'}) as response:
+        async with client.stream('GET', safe_url, headers={'Accept': 'image/jpeg,image/png,image/webp,image/gif,image/*;q=0.9,*/*;q=0.5',
+                                                                'Referer': 'https://chat.zalo.me/',
+                                                                'User-Agent': 'Mozilla/5.0'}) as response:
             response.raise_for_status()
             mime = response.headers.get('content-type', '').split(';', 1)[0].lower()
-            if mime not in ('image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/octet-stream'):
-                raise ValueError('Zalo không trả về nội dung ảnh hợp lệ.')
+            # Content-Type is unreliable on photo CDNs. Inspect and decode
+            # image bytes with Pillow instead (which also rejects HTML/JSON).
             if int(response.headers.get('content-length', '0') or 0) > 15 * 1024 * 1024:
                 raise ValueError('Ảnh Zalo vượt giới hạn 15 MB.')
             chunks: list[bytes] = []
@@ -278,31 +280,6 @@ def signed_image_url(image_id: str, *, base: str, secret: str) -> str:
     sig = image_signature(image_id, expires, secret)
     return f'{base.strip().rstrip("/")}/media/zalo-note-images/{quote(image_id)}?expires={expires}&sig={sig}'
 
-
-
-def album_signature(note_id: str, expires: int, secret: str) -> str:
-    """Domain-separated HMAC; an image token cannot authorize an album."""
-    return hmac.new(secret.encode('utf-8'), f'album:{note_id}:{expires}'.encode('ascii'), hashlib.sha256).hexdigest()
-
-
-def check_album_signature(note_id: str, expires: int, signature: str, secret: str) -> bool:
-    if not re.fullmatch(r'[0-9a-f]{16}', note_id):
-        return False
-    now = int(time.time())
-    if not secret or expires < now or expires > now + SIGNED_URL_SECONDS or not re.fullmatch(r'[0-9a-f]{64}', signature):
-        return False
-    return hmac.compare_digest(album_signature(note_id, expires, secret), signature)
-
-
-def signed_album_url(note_id: str, *, base: str, secret: str) -> str:
-    if not secret or not re.fullmatch(r'[0-9a-f]{16}', note_id):
-        raise ValueError('Invalid note id or missing signing secret')
-    parsed = urlsplit(base.strip().rstrip('/'))
-    if parsed.scheme not in ('http', 'https') or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment:
-        raise ValueError('Cần cấu hình ZALO_MEDIA_BASE_URL hợp lệ.')
-    expires = int(time.time()) + SIGNED_URL_SECONDS
-    sig = album_signature(note_id, expires, secret)
-    return f'{base.strip().rstrip("/")}/media/zalo-note-albums/{quote(note_id)}?expires={expires}&sig={sig}'
 
 
 def bridge_tokens_from_webhook(payload: dict[str, Any]) -> list[str]:
