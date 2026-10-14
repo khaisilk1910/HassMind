@@ -589,3 +589,31 @@ def test_zalo_photo_fallback_candidates_are_not_separate_attachments():
     }}})
     assert result == [original, preview]
     assert len(result) == 2  # distinct download candidates, not two note images
+
+
+@pytest.mark.asyncio
+async def test_zalo_precise_note_search_only_sends_matching_stored_photo(tmp_path, monkeypatch):
+    """Zalo must never receive a gallery of unrelated note photos."""
+    monkeypatch.setattr(settings, 'db_path', str(tmp_path / 'hassmind.db'))
+    monkeypatch.setattr(settings, 'zalo_agent_reply_enabled', True)
+    monkeypatch.setattr(settings, 'zalo_allow_send', True)
+    monkeypatch.setattr(settings, 'zalo_agent_allowed_thread_ids', '123')
+    monkeypatch.setattr(settings, 'zalo_media_base_url', 'http://hassmind:8090')
+    monkeypatch.setattr(settings, 'zalo_webhook_secret', 'secret-from-a-test')
+    monkeypatch.setattr(settings, 'zalo_webhook_secret_file', '')
+    monkeypatch.setattr(settings, 'runtime_secret_dir', str(tmp_path / 'secrets'))
+    db.init_db()
+    notes.create_note('mẫu thuốc giảm đau', 'mẫu thuốc giảm đau', images=[(photo(), 'pain.png')])
+    target = notes.create_note('mẫu thuốc an thần', 'mẫu thuốc an thần', images=[(photo(), 'sleep.png')])
+    notes.create_note('Ảnh nhà thờ tổ', 'Ảnh nhà thờ tổ họ tiên', images=[(photo(), 'church.png')])
+    handle, zalo = build_chat_handler()
+    await handle({'threadId': '123', 'msgId': 'precise-search-1', 'message': 'tìm ghi chú thuốc an thần'})
+    image_sends = [item for item in zalo.sent if item.get('_is_image') or item.get('_is_images')]
+    assert len(image_sends) == 1
+    assert target['images'][0]['id'] in image_sends[0]['image_url']
+    assert image_sends[0]['message'] == 'mẫu thuốc an thần'
+    assert len(zalo.sent) == 1
+    await handle({'threadId': '123', 'msgId': 'precise-search-2', 'message': 'tìm ghi chú thuốc cảm lạnh'})
+    assert len(zalo.sent) == 2
+    assert 'Không tìm thấy ghi chú' in zalo.sent[-1]['message']
+    assert not zalo.sent[-1].get('_is_image')

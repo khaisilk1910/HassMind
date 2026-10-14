@@ -121,3 +121,51 @@ def test_chat_append_photo_to_existing_note(note_db):
     assert 'ảnh mặt sau' in notes.get_note(note['id'])['content']
     assert notes.respond_to_note_command(f'Thêm ảnh vào ghi chú #{note["id"]}')['notes'][0]['images']
     assert len(notes.list_notes()['items']) == 1
+
+
+def test_precise_vietnamese_note_search_does_not_return_unrelated_photos(note_db):
+    """Regression: Zalo used to send every stored photo for 'thuốc an thần'."""
+    pain = notes.create_note('mẫu thuốc giảm đau', 'mẫu thuốc giảm đau',
+                             images=[(photo_bytes(), 'pain.png')])
+    sleep = notes.create_note('mẫu thuốc an thần', 'mẫu thuốc an thần',
+                              images=[(photo_bytes(), 'sleep.png')])
+    church = notes.create_note('Ảnh nhà thờ tổ', 'Ảnh nhà thờ tổ họ tiên',
+                               tags=['gia', 'dinh'], images=[(photo_bytes(), 'church.png')])
+
+    for query in ('tìm ghi chú thuốc an thần', 'Tìm ghi chú về thuốc an thần',
+                  'TIM GHI CHU THUOC AN THAN', 'tìm ghi chú mẫu thuốc an thần',
+                  'tìm ghi chú thuốc an thần của tôi'):
+        # The chat parser supports accented and unaccented retrieval intents.
+        matches = notes.respond_to_note_command(query)['notes']
+        assert [x['id'] for x in matches] == [sleep['id']], query
+        assert [img['id'] for img in matches[0]['images']] == [sleep['images'][0]['id']]
+
+    assert [x['id'] for x in notes.respond_to_note_command('tìm ghi chú thuốc giảm đau')['notes']] == [pain['id']]
+    assert [x['id'] for x in notes.respond_to_note_command('tìm ghi chú nhà thờ tổ')['notes']] == [church['id']]
+    assert {x['id'] for x in notes.respond_to_note_command('tìm ghi chú thuốc')['notes']} == {pain['id'], sleep['id']}
+    assert {x['id'] for x in notes.respond_to_note_command('danh sách ghi chú')['notes']} == {pain['id'], sleep['id'], church['id']}
+    assert notes.respond_to_note_command('tìm ghi chú thuốc cảm lạnh')['notes'] == []
+
+
+def test_search_requires_complete_words_and_prefers_exact_phrases(note_db):
+    exact = notes.create_note('Danh mục thuốc an thần', 'Thông tin chính')
+    # All words match, but not the phrase, so it must not beat the exact note.
+    scattered = notes.create_note('Thuốc cần nhớ', 'Thông tin về an toàn khi dùng thuốc thần kinh')
+    substring = notes.create_note('Thuốc giảm đau', 'Gửi anh Thành xem trước')
+    assert [n['id'] for n in notes.search_notes('thuốc an thần')] == [exact['id']]
+    assert [n['id'] for n in notes.search_notes('thuốc an')] == [exact['id']]
+    assert notes.search_notes('thuốc ngủ sai tên') == []
+    assert notes.search_notes('thuốc không tồn tại') == []
+    assert substring['id'] not in {n['id'] for n in notes.search_notes('an')}
+    # A full-token match remains possible if there is no contiguous phrase.
+    assert [n['id'] for n in notes.search_notes('nhớ thông tin')] == [scattered['id']]
+
+
+def test_exact_search_fallback_when_sqlite_fts_unavailable(note_db):
+    target = notes.create_note('Mẫu thuốc an thần', 'Thông tin ảnh')
+    notes.create_note('Thuốc giảm đau', 'Nội dung không liên quan')
+    notes.create_note('Ảnh nhà thờ tổ', 'Gia đình')
+    with db.conn() as c:
+        c.execute('DROP TABLE IF EXISTS notes_fts')
+    assert [n['id'] for n in notes.search_notes('thuoc an than')] == [target['id']]
+    assert notes.search_notes('thuoc an nghi') == []
