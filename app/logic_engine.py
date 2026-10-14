@@ -1604,6 +1604,17 @@ class LogicFirstOrchestrator:
             return await self._chat_with_trace_turn(session_id, user_text, source)
 
     async def _chat_with_trace_turn(self, session_id: str, user_text: str, source: str) -> dict[str, Any]:
+        # Explicit note commands and high-confidence note recall run before HA
+        # control and AI, preserving literal note text and attached-image IDs.
+        if source != "system":
+            from .notes import respond_to_note_command
+            note_result = respond_to_note_command(user_text)
+            if note_result is not None:
+                ids = [n['id'] for n in note_result['notes']]
+                add_message(session_id, "user", user_text, source)
+                add_message(session_id, "assistant", note_result['answer'], source, note_ids=ids)
+                return {"text": note_result['answer'], "notes": note_result['notes'],
+                        "tools": [], "engine": "notes", "reason": "note_command"}
         # Session-local read context, never shared with Scheduler or another chat.
         focus = conversation_context.focused_device(session_id, source)
         explicit = conversation_context.explicit_device(user_text) if source != "system" else {"status": "not_found"}

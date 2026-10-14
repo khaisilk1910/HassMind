@@ -4,17 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="color-scheme" content="dark">
-  <title>HassMind v1.5.10</title>
+  <title>HassMind v1.5.11</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/app.css?v=1.5.10">
-  <link rel="stylesheet" href="/static/ui-refresh.css?v=1.5.10">
-  <script src="/static/app.js?v=1.5.10" defer></script>
+  <link rel="stylesheet" href="/static/app.css?v=1.5.11">
+  <link rel="stylesheet" href="/static/ui-refresh.css?v=1.5.11">
+  <script src="/static/app.js?v=1.5.11" defer></script>
 </head>
 <body>
 <a class="skip-link" href="#mainContent">Đến nội dung chính</a>
 <div class="app">
   <header class="topbar">
-    <div class="brand"><img class="brand-logo" src="/favicon.svg" alt="HassMind"><div><div class="brand-title">HassMind</div><div class="version">v1.5.10 · Logic-First · Session Context</div></div></div>
+    <div class="brand"><img class="brand-logo" src="/favicon.svg" alt="HassMind"><div><div class="brand-title">HassMind</div><div class="version">v1.5.11 · Logic-First · Session Context</div></div></div>
     <div class="workspace-crumb" aria-live="polite"><span>KHÔNG GIAN QUẢN TRỊ</span><strong id="currentSection">Tổng quan</strong></div>
     <div id="healthPill" class="health-pill"><span class="health-dot"></span><span id="healthText">Đang kiểm tra…</span></div>
     <div class="top-spacer"></div>
@@ -26,6 +26,7 @@
       <div class="nav-label">Điều khiển</div>
       <button class="nav-btn active" data-tab="overview" type="button"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg></span>Tổng quan</button>
       <button class="nav-btn" data-tab="chat" type="button"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 11.5a8 8 0 0 1-8 8 8.7 8.7 0 0 1-3.5-.8L4 20l1.3-4.4A8 8 0 1 1 20 11.5Z"/><path d="M8.5 11.5h7"/></svg></span>Chat</button>
+      <button class="nav-btn" data-tab="notes" type="button"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></span>Ghi chú</button>
       <button class="nav-btn" data-tab="integrations" type="button"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/><path d="M10 6.5h4a3 3 0 0 1 3 3V14M14 17.5h-4a3 3 0 0 1-3-3V10"/></svg></span>Integrations</button>
       <div class="nav-label">Tự động hóa</div>
       <button class="nav-btn" data-tab="approvals" type="button"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 12l2.5 2.5L16 10"/><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/></svg></span>Approvals</button>
@@ -53,10 +54,27 @@
     </section>
 
     <section id="chat" class="panel">
-      <div class="page-head"><div><h1 class="page-title">Chat với HassMind</h1><p class="page-sub">Mỗi lỗi API có Request ID để tra trực tiếp trong Logs.</p></div><button class="btn" data-action="new-session" type="button">Phiên mới</button></div>
+      <div class="page-head"><div><h1 class="page-title">Chat với HassMind</h1><p class="page-sub">Hỏi đáp, lưu ghi chú lâu dài và gửi ảnh đính kèm trong cùng một khung chat.</p></div><button class="btn" data-action="new-session" type="button">Phiên mới</button></div>
       <div class="help-box"><div class="help-cell"><strong>Mục đích</strong><span>Ra lệnh và hỏi trạng thái Home Assistant qua agent.</span></div><div class="help-cell"><strong>Cách dùng</strong><span>Mô tả mục tiêu rõ ràng; thao tác nhạy cảm vẫn đi qua policy và approval.</span></div><div class="help-cell"><strong>Ví dụ</strong><span>“Kiểm tra nhiệt độ phòng khách, điều hòa và cho tôi biết có gì bất thường.”</span></div></div>
       <details id="skillPromptExamples" class="chat-skill-prompts mb-14"><summary><span>Câu hỏi mẫu cho Skills</span><span class="badge info">22 mẫu</span></summary><div class="chat-skill-prompts-body"><div class="row between skill-prompt-toolbar"><div class="small-text muted">Nhấn “Chèn câu hỏi” để đưa mẫu vào ô Chat; bạn có thể sửa lại trước khi gửi.</div><input id="skillPromptSearch" class="input skill-prompt-search" placeholder="Tìm skill hoặc nội dung…"></div><div id="skillPromptList" class="skill-prompt-list"><div class="empty">Đang tải câu mẫu…</div></div></div></details>
-      <div class="small-text muted chat-retention-note">Tin nhắn hiển thị ngày/tháng/năm và giờ:phút:giây. Lịch sử chat chỉ lưu trong ngày và tự xóa khi sang ngày mới (múi giờ máy chủ).</div><div class="chat-shell"><div class="card chat-box" id="chatbox"><div class="chat-empty" id="chatEmpty"><div><strong>HassMind sẵn sàng</strong><div class="small-text mt-10">Ctrl/⌘ + Enter để gửi.</div></div></div></div><div class="card composer"><textarea id="chatinput" class="textarea" placeholder="Nhập yêu cầu…"></textarea><div class="composer-foot"><div id="session" class="session mono"></div><button id="sendBtn" class="btn primary" type="button">Gửi</button></div></div></div>
+      <div class="small-text muted chat-retention-note">Tin nhắn hiển thị ngày/tháng/năm và giờ:phút:giây. Lịch sử chat chỉ lưu trong ngày và tự xóa khi sang ngày mới (múi giờ máy chủ).</div><div class="chat-shell"><div class="card chat-box" id="chatbox"><div class="chat-empty" id="chatEmpty"><div><strong>HassMind sẵn sàng</strong><div class="small-text mt-10">Ctrl/⌘ + Enter để gửi.</div></div></div></div><div class="card composer"><textarea id="chatinput" class="textarea" placeholder="Nhập yêu cầu… Ví dụ: Ghi chú: Hóa đơn điện tháng 10 (đính kèm ảnh)"></textarea><div id="chatImagePreview" class="note-upload-previews" aria-live="polite"></div><div class="composer-foot"><label class="btn note-upload-button" for="chatImageFiles" title="Gửi ảnh kèm câu lệnh Ghi chú: …">📎 Thêm ảnh</label><input id="chatImageFiles" class="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple><div id="session" class="session mono"></div><button id="sendBtn" class="btn primary" type="button">Gửi</button></div><div class="small-text muted mt-10">Gửi tối đa 5 ảnh, mỗi ảnh ≤ 5 MB. Khi có ảnh, tin nhắn phải bắt đầu bằng <strong>Ghi chú:</strong>. Có thể dán ảnh hoặc kéo thả vào khung chat.</div></div></div>
+    </section>
+
+
+    <section id="notes" class="panel">
+      <div class="page-head"><div><h1 class="page-title">Sổ ghi chú</h1><p class="page-sub">Kho ghi nhớ riêng, giữ lại qua ngày và qua phiên chat. Tìm lại nội dung cùng ảnh gốc đã lưu.</p></div><button class="btn primary" id="noteNewBtn" type="button">＋ Ghi chú mới</button></div>
+      <div class="notes-intro"><span>💬 <strong>Qua Chat:</strong> “Ghi chú: Lịch bảo trì máy lạnh thứ bảy #giadinh”</span><span>🔎 <strong>Tìm lại:</strong> “Tìm ghi chú về máy lạnh” hoặc “Lịch bảo trì máy lạnh của tôi là gì?”</span></div>
+      <div class="notes-tools"><input id="notesSearch" class="input" type="search" aria-label="Tìm ghi chú" placeholder="Tìm tên, nội dung, #nhãn…"><button id="notesRefresh" class="btn" type="button">Làm mới</button><span id="notesCount" class="small-text muted"></span></div>
+      <div id="notesList" class="notes-grid"><div class="empty">Mở Ghi chú để tải dữ liệu.</div></div>
+      <form id="noteEditor" class="card note-editor hidden">
+        <div class="card-title"><h3 id="noteEditorTitle">Ghi chú mới</h3><button id="noteCancel" class="btn small" type="button">Đóng</button></div>
+        <div class="field"><label for="noteTitle">Tiêu đề</label><input id="noteTitle" class="input" maxlength="160" required></div>
+        <div class="field mt-10"><label for="noteContent">Nội dung</label><textarea id="noteContent" class="textarea" rows="7" maxlength="12000" required></textarea></div>
+        <div class="note-editor-row mt-10"><div class="field"><label for="noteTags">Nhãn (cách nhau bằng dấu phẩy)</label><input id="noteTags" class="input" maxlength="400" placeholder="gia đình, công việc"></div><label class="check"><input id="notePinned" type="checkbox"> 📌 Ghim ghi chú</label></div>
+        <div class="field mt-10"><label for="noteAddImages">Ảnh đính kèm (JPEG / PNG / WebP / GIF)</label><input id="noteAddImages" class="input" type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple><div class="field-hint">Mỗi ghi chú tối đa 5 ảnh, tối đa 5 MB/ảnh; file sẽ được làm sạch metadata.</div></div>
+        <div id="noteExistingImages" class="note-images mt-10"></div>
+        <div class="row end mt-14"><button id="noteSaveBtn" type="submit" class="btn primary">Lưu ghi chú</button></div>
+      </form>
     </section>
 
     <section id="integrations" class="panel">

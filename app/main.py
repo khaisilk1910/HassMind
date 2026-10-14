@@ -14,11 +14,12 @@ from time import perf_counter
 from typing import Any
 
 import uvicorn
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, UploadFile, File, Form
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from . import notes
 from .agent import Agent
 from .approvals import apply_approval, decide_by_action, decide_by_web, get_approval
 from .custom_integrations import create_custom_integration, delete_custom_integration, update_custom_integration
@@ -83,7 +84,7 @@ from .tools import ToolRuntime
 os.umask(0o077)
 configure_process_timezone()
 
-APP_VERSION = "1.5.10"
+APP_VERSION = "1.5.11"
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 setup_logging()
@@ -590,6 +591,7 @@ async def request_observability(request: Request, call_next):
     with log_context(request_id=request_id, source="http", component="api"):
         body_limit = (16384 if path in {"/api/auth/login", "/api/auth/reset-password"}
                       else 131072 if path.startswith("/webhooks/zalo/")
+                      else 16777216 if path in {"/api/chat/notes"} or (path.startswith("/api/notes/") and path.endswith("/images"))
                       else 65536 if path == "/api/chat"
                       else 12582912 if path == "/api/knowledge/proposals"
                       else settings.max_request_body_bytes)
@@ -708,6 +710,13 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 class ChatIn(BaseModel):
     message: str = Field(min_length=1, max_length=20000)
     session_id: str | None = Field(default=None, max_length=128)
+
+
+class NoteIn(BaseModel):
+    title: str = Field(min_length=1, max_length=160)
+    content: str = Field(min_length=1, max_length=12000)
+    tags: list[str] = Field(default_factory=list, max_length=12)
+    pinned: bool = False
 
 
 class ToggleIn(BaseModel):
@@ -1360,21 +1369,152 @@ async def zalo_webhook(secret: str, payload: dict[str, Any], request: Request):
 
 @app.post("/api/chat", dependencies=[Depends(require_access)])
 async def chat(body: ChatIn):
+    sid = body.session_id or uuid.uuid4().hex
+    # Notes work even when the optional AI backend is offline. Keep literal
+    # retrieved note content and image references tied to this chat turn.
+    note_result = notes.respond_to_note_command(body.message)
+    if note_result is not None:
+        from .db import add_message
+        add_message(sid, 'user', body.message, 'web')
+        add_message(sid, 'assistant', note_result['answer'], 'web',
+                    note_ids=[note['id'] for note in note_result['notes']])
+        return {'session_id': sid, 'answer': note_result['answer'], 'engine': 'notes',
+                'notes': note_result['notes'], 'request_id': current_request_id()}
     if agent is None:
         raise HTTPException(503, "Agent is starting")
-    sid = body.session_id or uuid.uuid4().hex
     with log_context(session_id=sid, source="web", component="chat_api"):
         info(logger, "chat_api_request", message_chars=len(body.message), component="chat_api")
         detailed = await agent.chat_with_trace(sid, body.message, source="web")
         answer = str(detailed.get("text") or "") if isinstance(detailed, dict) else str(detailed or "")
         engine = str(detailed.get("engine") or "ai") if isinstance(detailed, dict) else "ai"
         info(logger, "chat_api_response", answer_chars=len(answer), engine=engine, component="chat_api")
-    return {"session_id": sid, "answer": answer, "engine": engine, "request_id": current_request_id()}
+    return {"session_id": sid, "answer": answer, "engine": engine,
+            "notes": detailed.get("notes", []) if isinstance(detailed, dict) else [],
+            "request_id": current_request_id()}
 
 
 @app.get("/api/messages/{session_id}", dependencies=[Depends(require_access)])
 async def messages(session_id: str):
-    return get_messages(session_id, 100, source="web", include_created_at=True)
+    rows = get_messages(session_id, 100, source="web", include_created_at=True)
+    for row in rows:
+        ids = row.pop('note_ids', [])
+        if ids:
+            row['notes'] = [note for key in ids if (note := notes.get_note(key))]
+    return rows
+
+
+
+
+async def _read_note_uploads(files: list[UploadFile]) -> list[tuple[bytes, str]]:
+    if len(files) > notes.MAX_IMAGES:
+        raise HTTPException(422, 'Tối đa 5 ảnh cho một ghi chú.')
+    result = []
+    for file in files:
+        try:
+            blob = await file.read(notes.MAX_IMAGE_BYTES + 1)
+            if len(blob) > notes.MAX_IMAGE_BYTES:
+                raise HTTPException(413, 'Mỗi ảnh không được vượt 5 MB.')
+            if not blob:
+                raise HTTPException(422, 'Ảnh rỗng.')
+            result.append((blob, file.filename or 'Ảnh'))
+        finally:
+            await file.close()
+    return result
+
+
+@app.post('/api/chat/notes', dependencies=[Depends(require_access)])
+async def chat_with_note_images(message: str = Form(min_length=1, max_length=12000),
+                                session_id: str = Form(max_length=128),
+                                files: list[UploadFile] = File(...)):
+    """Atomic chat note creation; no multipart data is sent to the LLM."""
+    if not (command := notes.parse_note_command(message)) or command[0] not in ('create', 'attach') or not command[1]:
+        raise HTTPException(422, 'Khi gửi ảnh, dùng “Ghi chú: ...” hoặc “Thêm ảnh vào ghi chú #MÃ”.')
+    blobs = await _read_note_uploads(files)
+    try:
+        result = notes.respond_to_note_command(message, blobs, allow_generic=False)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    sid = session_id or uuid.uuid4().hex
+    # A chat image must have a persisted note before appearing in conversation.
+    from .db import add_message
+    add_message(sid, 'user', message, 'web')
+    add_message(sid, 'assistant', result['answer'], 'web', note_ids=[n['id'] for n in result['notes']])
+    return {'session_id': sid, 'answer': result['answer'], 'engine': 'notes',
+            'notes': result['notes'], 'request_id': current_request_id()}
+
+
+@app.get('/api/notes', dependencies=[Depends(require_access)])
+async def notes_list(q: str = Query(default='', max_length=400), limit: int = Query(default=50, ge=1, le=100),
+                     offset: int = Query(default=0, ge=0)):
+    if q.strip():
+        found = notes.search_notes(q, limit)
+        return {'items': found, 'total': len(found)}
+    return notes.list_notes(limit, offset)
+
+
+@app.post('/api/notes', dependencies=[Depends(require_access)])
+async def notes_create(body: NoteIn):
+    try:
+        return notes.create_note(body.title, body.content, body.tags, pinned=body.pinned)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.get('/api/notes/{note_id}', dependencies=[Depends(require_access)])
+async def notes_get(note_id: str):
+    result = notes.get_note(note_id)
+    if not result:
+        raise HTTPException(404, 'Không tìm thấy ghi chú.')
+    return result
+
+
+@app.put('/api/notes/{note_id}', dependencies=[Depends(require_access)])
+async def notes_update(note_id: str, body: NoteIn):
+    try:
+        result = notes.update_note(note_id, title=body.title, content=body.content,
+                                   tags=body.tags, pinned=body.pinned)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if result is None:
+        raise HTTPException(404, 'Không tìm thấy ghi chú.')
+    return result
+
+
+@app.delete('/api/notes/{note_id}', dependencies=[Depends(require_access)])
+async def notes_delete(note_id: str):
+    if not notes.delete_note(note_id):
+        raise HTTPException(404, 'Không tìm thấy ghi chú.')
+    return {'ok': True}
+
+
+@app.post('/api/notes/{note_id}/images', dependencies=[Depends(require_access)])
+async def notes_add_images(note_id: str, files: list[UploadFile] = File(...)):
+    data = await _read_note_uploads(files)
+    try:
+        result = notes.append_images(note_id, data)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if result is None:
+        raise HTTPException(404, 'Không tìm thấy ghi chú.')
+    return result
+
+
+@app.delete('/api/notes/{note_id}/images/{image_id}', dependencies=[Depends(require_access)])
+async def notes_delete_image(note_id: str, image_id: str):
+    if not notes.remove_image(note_id, image_id):
+        raise HTTPException(404, 'Không tìm thấy ảnh.')
+    return {'ok': True}
+
+
+@app.get('/api/notes/images/{image_id}', dependencies=[Depends(require_access)])
+async def notes_image(image_id: str):
+    result = notes.image_info(image_id)
+    if not result:
+        raise HTTPException(404, 'Không tìm thấy ảnh.')
+    path, mime = result
+    return FileResponse(path, media_type=mime,
+                        headers={'Content-Disposition': 'inline', 'Cache-Control': 'private, no-store',
+                                 'X-Content-Type-Options': 'nosniff'})
 
 
 @app.get("/api/events", dependencies=[Depends(require_access)])

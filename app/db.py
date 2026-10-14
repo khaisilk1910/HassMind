@@ -20,6 +20,7 @@ def utcnow() -> str:
 
 _TIMESTAMP_COLUMNS: dict[str, tuple[str, ...]] = {
     "messages": ("created_at",),
+    "notes": ("created_at", "updated_at"),
     "approvals": ("created_at", "decided_at", "applied_at"),
     "events": ("created_at",),
     "jobs": ("next_run", "last_run", "created_at"),
@@ -400,6 +401,10 @@ def init_db():
             );
             """
         )
+        # Keep note-image references in today's chat without affecting note longevity.
+        message_columns = {row["name"] for row in c.execute("PRAGMA table_info(messages)").fetchall()}
+        if "note_ids_json" not in message_columns:
+            c.execute("ALTER TABLE messages ADD COLUMN note_ids_json TEXT")
         job_columns = {row["name"] for row in c.execute("PRAGMA table_info(jobs)").fetchall()}
         if "notify_channel" not in job_columns:
             c.execute("ALTER TABLE jobs ADD COLUMN notify_channel TEXT NOT NULL DEFAULT 'mobile'")
@@ -417,6 +422,8 @@ def init_db():
         custom_columns = {row["name"] for row in c.execute("PRAGMA table_info(custom_integrations)").fetchall()}
         if "actions_json" not in custom_columns:
             c.execute("ALTER TABLE custom_integrations ADD COLUMN actions_json TEXT NOT NULL DEFAULT '[]'")
+        from .notes import init_notes_db
+        init_notes_db(c)
         try:
             c.execute("CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(chunk_id UNINDEXED, path, text)")
             c.execute("CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(fact_id UNINDEXED, text, tags)")
@@ -447,10 +454,10 @@ def cleanup_chat_history() -> int:
     return deleted
 
 
-def add_message(session_id: str, role: str, content: str, source: str = "web"):
+def add_message(session_id: str, role: str, content: str, source: str = "web", *, note_ids: list[str] | None = None):
     with conn() as c:
-        c.execute("INSERT INTO messages(session_id,role,content,source,created_at) VALUES(?,?,?,?,?)",
-                  (session_id, role, content, source, utcnow()))
+        c.execute("INSERT INTO messages(session_id,role,content,source,created_at,note_ids_json) VALUES(?,?,?,?,?,?)",
+                  (session_id, role, content, source, utcnow(), json.dumps(note_ids) if note_ids else None))
 
 
 def replace_last_assistant_message(session_id: str, content: str, source: str = "web") -> bool:
@@ -476,7 +483,7 @@ def get_messages(
     include_created_at: bool = False,
 ) -> list[dict[str, str]]:
     """Today's messages only; optional timestamps for Web UI, not agent prompts."""
-    columns = "role,content,created_at" if include_created_at else "role,content"
+    columns = "role,content,created_at,note_ids_json" if include_created_at else "role,content"
     cutoff = chat_history_cutoff()
     with conn() as c:
         if source is None:
@@ -491,7 +498,18 @@ def get_messages(
                 "AND julianday(created_at)>=julianday(?) ORDER BY id DESC LIMIT ?",
                 (session_id, source, cutoff, limit),
             ).fetchall()
-    return [dict(r) for r in reversed(rows)]
+    result = []
+    for row in reversed(rows):
+        item = dict(row)
+        if include_created_at:
+            raw = item.pop('note_ids_json', None)
+            if raw:
+                try:
+                    item['note_ids'] = json.loads(raw)[:8]
+                except (ValueError, TypeError):
+                    pass
+        result.append(item)
+    return result
 
 
 def get_older_session_messages(session_id: str, source: str, *, skip: int, limit: int) -> list[dict[str, str]]:

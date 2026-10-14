@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION='1.5.9';
+const APP_VERSION='1.5.11';
 const $=id=>document.getElementById(id);
 function makeSessionId(){if(globalThis.crypto&&typeof globalThis.crypto.randomUUID==='function')return globalThis.crypto.randomUUID();return 'web-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,12)}
 const uiState={sessionId:localStorage.getItem('hassmind_session')||makeSessionId(),activeTab:'overview',csrf:'',user:null,passwordMinLength:14};
@@ -99,7 +99,7 @@ class ApiError extends Error{constructor(message,status,requestId){super(message
 async function api(path,opt={}){
   const method=(opt.method||'GET').toUpperCase();
   const headers=Object.assign({},opt.headers||{});
-  if(opt.body!==undefined&&!headers['Content-Type'])headers['Content-Type']='application/json';
+  if(opt.body!==undefined&&!(typeof FormData!=='undefined'&&opt.body instanceof FormData)&&!headers['Content-Type'])headers['Content-Type']='application/json';
   if(!['GET','HEAD','OPTIONS'].includes(method)&&uiState.csrf)headers['X-CSRF-Token']=uiState.csrf;
   const r=await fetch(path,Object.assign({},opt,{method,headers,credentials:'same-origin'}));
   const rid=r.headers.get('x-request-id')||'';const text=await r.text();let data;try{data=JSON.parse(text)}catch{data=text}
@@ -215,7 +215,7 @@ async function restoreChatHistory(){
     const chat=$('chatbox');
     if(!chat||chat.querySelector('.msg-row'))return;
     for(const row of (Array.isArray(history)?history:[])){
-      if(row&&(row.role==='user'||row.role==='assistant'))addMsg(row.role,String(row.content||''),'',false,row.created_at);
+      if(row&&(row.role==='user'||row.role==='assistant'))addMsg(row.role,String(row.content||''),'',false,row.created_at,row.notes||[]);
     }
   }catch(e){console.warn('Could not restore chat history',e.message)}
 }
@@ -224,35 +224,73 @@ function localChatTimestamp(){
   const pad=n=>String(Math.abs(n)).padStart(2,'0');
   return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}${sign}${pad(Math.floor(Math.abs(offset)/60))}:${pad(offset%60)}`;
 }
-function addMsg(role,text,meta='',isError=false,createdAt=localChatTimestamp()){
+function renderNotePhotos(container,notes){
+  if(!Array.isArray(notes)||!notes.length)return;
+  const photos=notes.flatMap(note=>(note.images||[]).map(img=>({img,title:note.title}))).slice(0,20);
+  if(!photos.length)return;
+  const gallery=document.createElement('div');gallery.className='note-images chat-note-images';
+  for(const entry of photos){const link=document.createElement('a');link.className='note-image-link';link.href=entry.img.url;link.target='_blank';link.rel='noopener noreferrer';link.title=entry.title+' · '+entry.img.name;
+    const image=document.createElement('img');image.loading='lazy';image.src=entry.img.url;image.alt=entry.img.name||'Ảnh ghi chú';link.appendChild(image);gallery.appendChild(link)}
+  container.appendChild(gallery);
+}
+function addMsg(role,text,meta='',isError=false,createdAt=localChatTimestamp(),notes=[]){
   clearChatEmpty();const row=document.createElement('div');row.className='msg-row '+role;
   const bubble=document.createElement('div');bubble.className='msg'+(isError?' error':'');
-  const body=document.createElement('div');renderChatText(body,text,role==='assistant'&&!isError);bubble.appendChild(body);
+  const body=document.createElement('div');renderChatText(body,text,role==='assistant'&&!isError);bubble.appendChild(body);renderNotePhotos(bubble,notes);
   if(meta){const m=document.createElement('div');m.className='msg-meta mono';m.textContent=meta;bubble.appendChild(m)}
   const time=document.createElement('time');time.className='msg-time mono';time.dateTime=createdAt||'';
   time.textContent=fmtTime(createdAt||localChatTimestamp());bubble.appendChild(time);
   row.appendChild(bubble);$('chatbox').appendChild(row);$('chatbox').scrollTop=$('chatbox').scrollHeight;
   return {row,bubble,body,time};
 }
+const chatFiles={items:[]};
+function syncChatImages(){
+  const host=$('chatImagePreview');host.replaceChildren();
+  chatFiles.items.forEach((file,index)=>{
+    const item=document.createElement('div');item.className='note-upload-tile';
+    const img=document.createElement('img');img.src=URL.createObjectURL(file);img.alt=file.name;img.onload=()=>URL.revokeObjectURL(img.src);
+    const remove=document.createElement('button');remove.type='button';remove.className='note-upload-remove';remove.textContent='×';remove.title='Bỏ ảnh';remove.addEventListener('click',()=>{chatFiles.items.splice(index,1);syncChatImages()});
+    item.append(img,remove);host.appendChild(item);
+  });
+}
+function addChatImages(files){
+  const allowed=['image/jpeg','image/png','image/webp','image/gif'];
+  for(const file of files){if(!allowed.includes(file.type)){toast('Chỉ chọn ảnh JPEG, PNG, WebP, GIF.',true);continue}
+    if(file.size>5*1024*1024){toast('Ảnh '+file.name+' vượt 5 MB.',true);continue}
+    if(chatFiles.items.length>=5){toast('Chỉ gửi tối đa 5 ảnh.',true);break}
+    chatFiles.items.push(file);
+  }
+  syncChatImages();
+}
 async function sendChat(){
-  const el=$('chatinput'),text=el.value.trim();if(!text)return;
+  const el=$('chatinput'),text=el.value.trim(),files=[...chatFiles.items];if(!text)return;
+  if(files.reduce((total,f)=>total+f.size,0)>15*1024*1024){toast('Tổng dung lượng ảnh tối đa khoảng 15 MB mỗi lần gửi.',true);return}
+  if(files.length&&!/^\s*(?:hãy\s+)?(?:ghi\s+chú|ghi\s+nhớ|lưu\s+(?:lại|ghi\s+chú|giúp)|tạo\s+ghi\s+chú|note\s*:)/i.test(text)){
+    toast('Khi gửi ảnh, dùng “Ghi chú: ...” hoặc “Thêm ảnh vào ghi chú #MÃ”.',true);return;
+  }
   el.value='';addMsg('user',text);
   const pending=addMsg('assistant','Đang xử lý…');$('sendBtn').disabled=true;
   try{
-    const j=await api('/api/chat',{method:'POST',body:JSON.stringify({session_id:uiState.sessionId,message:text})});
+    let j;
+    if(files.length){const form=new FormData();form.append('message',text);form.append('session_id',uiState.sessionId);files.forEach(f=>form.append('files',f,f.name));
+      j=await api('/api/chat/notes',{method:'POST',body:form});
+    }else{j=await api('/api/chat',{method:'POST',body:JSON.stringify({session_id:uiState.sessionId,message:text})})}
     renderChatText(pending.body,j.answer,true);
+    renderNotePhotos(pending.bubble,j.notes||[]);
     const responseTime=localChatTimestamp();pending.time.dateTime=responseTime;pending.time.textContent=fmtTime(responseTime);
     const meta=[];
-    if(j.engine)meta.push(j.engine==='logic'?'⚙ logic':j.engine==='ai+logic'?'🤖 AI → ⚙ Logic':'🤖 AI');
+    if(j.engine)meta.push(j.engine==='notes'?'📝 Ghi chú':j.engine==='logic'?'⚙ logic':j.engine==='ai+logic'?'🤖 AI → ⚙ Logic':'🤖 AI');
     if(j.request_id)meta.push('request: '+j.request_id);
     if(meta.length){const m=document.createElement('div');m.className='msg-meta mono';m.textContent=meta.join(' · ');pending.bubble.insertBefore(m,pending.time)}
+    if(files.length){chatFiles.items=[];syncChatImages()}
+    if(j.engine==='notes'&&uiState.activeTab==='notes')loadNotes();
   }catch(e){
     pending.bubble.classList.add('error');
     const responseTime=localChatTimestamp();pending.time.dateTime=responseTime;pending.time.textContent=fmtTime(responseTime);
     const networkError=e instanceof TypeError && /Failed to fetch|NetworkError|Load failed/i.test(e.message);
     const hint=networkError?'Không kết nối được API HassMind. Kiểm tra container, reverse proxy và mạng; xem log server theo thời điểm gửi.':('ERROR: '+e.message);
     renderChatText(pending.body,hint,false);
-    if(networkError && !el.value.trim())el.value=text;
+    if(!el.value.trim())el.value=text;
     if(e.requestId){const m=document.createElement('div');m.className='msg-meta mono';m.textContent='Request ID: '+e.requestId;pending.bubble.insertBefore(m,pending.time)}
     reportClientError('chat_error',e.message,e.stack||'',{request_id:e.requestId||''});
   }finally{$('sendBtn').disabled=false;el.focus()}
@@ -596,7 +634,7 @@ async function changePasswordSubmit(){const current=$('currentPassword').value,n
 async function revokeOtherSessions(){if(!confirm('Đăng xuất tất cả phiên khác?'))return;try{const j=await api('/api/auth/sessions/revoke-others',{method:'POST',body:'{}'});toast(`Đã thu hồi ${j.revoked} phiên`);loadSessions()}catch(e){toast(e.message,true)}}
 
 function clearOneTimeSecrets(){const token=$('generatedToken'),recovery=$('generatedRecoveryKey');if(token)token.value='';if(recovery)recovery.value='';$('generatedTokenBox')?.classList.add('hidden');$('generatedRecoveryBox')?.classList.add('hidden');$('tokenCurrentPassword').value='';$('newApiToken').value='';$('recoveryCurrentPassword').value=''}
-function setTab(id){if(uiState.activeTab==='settings'&&id!=='settings')clearOneTimeSecrets();uiState.activeTab=id;document.querySelectorAll('.panel').forEach(x=>x.classList.toggle('active',x.id===id));document.querySelectorAll('.nav-btn').forEach(x=>{const active=x.dataset.tab===id;x.classList.toggle('active',active);if(active)x.setAttribute('aria-current','page');else x.removeAttribute('aria-current')});const current=document.querySelector(`.nav-btn[data-tab="${id}"]`);if(current&&$('currentSection'))$('currentSection').textContent=current.textContent.trim();const loaders={overview:loadOverview,integrations:loadIntegrations,logs:loadLogs,audit:loadAudit,events:loadEvents,approvals:loadApprovals,jobs:loadJobs,rules:loadRules,knowledge:loadKnowledge,skills:loadSkills,settings:loadSettings};if(loaders[id])loaders[id]()}
+function setTab(id){if(uiState.activeTab==='settings'&&id!=='settings')clearOneTimeSecrets();uiState.activeTab=id;document.querySelectorAll('.panel').forEach(x=>x.classList.toggle('active',x.id===id));document.querySelectorAll('.nav-btn').forEach(x=>{const active=x.dataset.tab===id;x.classList.toggle('active',active);if(active)x.setAttribute('aria-current','page');else x.removeAttribute('aria-current')});const current=document.querySelector(`.nav-btn[data-tab="${id}"]`);if(current&&$('currentSection'))$('currentSection').textContent=current.textContent.trim();const loaders={overview:loadOverview,notes:loadNotes,integrations:loadIntegrations,logs:loadLogs,audit:loadAudit,events:loadEvents,approvals:loadApprovals,jobs:loadJobs,rules:loadRules,knowledge:loadKnowledge,skills:loadSkills,settings:loadSettings};if(loaders[id])loaders[id]()}
 // Progressive enhancement: reduce instructional clutter while keeping every hint reachable.
 function initAdminPresentation(){
   document.querySelectorAll('.panel > .help-box').forEach(help=>{
@@ -622,10 +660,77 @@ function setSettingsView(view){
     button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));
   });
 }
+const noteUI={editing:null,items:[],offset:0,total:0};
+function noteTagsInput(value){return String(value||'').split(/[,\s]+/).map(x=>x.trim().replace(/^#/,'' )).filter(Boolean).slice(0,12)}
+function noteCard(item){
+  return `<article class="note-card ${item.pinned?'is-pinned':''}">
+    <div class="note-card-header"><strong>${esc(item.title)}</strong>${item.pinned?'<span class="note-pin" title="Đã ghim">📌</span>':''}</div>
+    <p class="note-card-body">${esc(item.content)}</p>
+    ${(item.images||[]).length?`<div class="note-card-photos">${item.images.slice(0,3).map(img=>`<img loading="lazy" src="${esc(img.url)}" alt="${esc(img.name)}">`).join('')}</div>`:''}
+    <div class="note-tags">${(item.tags||[]).map(t=>`<span>#${esc(t)}</span>`).join('')}</div>
+    <div class="note-card-bottom"><time class="small-text muted">${esc(fmtTime(item.updated_at))}</time><div class="row"><button class="btn small" type="button" data-action="notes-edit" data-id="${esc(item.id)}">Mở / Sửa</button><button class="btn small bad" type="button" data-action="notes-delete" data-id="${esc(item.id)}">Xóa</button></div></div>
+  </article>`;
+}
+async function loadNotes(append=false){
+  const search=$('notesSearch')?.value.trim()||'';const box=$('notesList');if(!box)return;
+  if(!append){noteUI.offset=0;box.innerHTML='<div class="empty">Đang tìm ghi chú…</div>'}
+  try{const data=await api('/api/notes?'+new URLSearchParams({q:search,limit:'50',offset:String(noteUI.offset)}));
+    noteUI.total=data.total||0;noteUI.items=append?noteUI.items.concat(data.items||[]):data.items||[];
+    box.innerHTML=noteUI.items.map(noteCard).join('')||'<div class="empty">Chưa có ghi chú phù hợp. Hãy tạo ghi chú mới hoặc gửi “Ghi chú: …” trong Chat.</div>';
+    $('notesCount').textContent=search?`${noteUI.items.length} kết quả`:`${noteUI.items.length}/${noteUI.total} ghi chú`;
+    if(!search&&noteUI.items.length<noteUI.total){const more=document.createElement('button');more.type='button';more.className='btn note-more';more.textContent='Tải thêm';more.addEventListener('click',()=>{noteUI.offset+=50;loadNotes(true)});box.appendChild(more)}
+  }catch(e){box.innerHTML=errorHtml(e)}
+}
+function openNoteEditor(note=null){
+  noteUI.editing=note?.id||null;$('noteEditorTitle').textContent=note?'Chỉnh sửa ghi chú':'Ghi chú mới';
+  $('noteTitle').value=note?.title||'';$('noteContent').value=note?.content||'';
+  $('noteTags').value=(note?.tags||[]).join(', ');$('notePinned').checked=!!note?.pinned;
+  $('noteAddImages').value='';
+  $('noteExistingImages').innerHTML=(note?.images||[]).map(img=>`<div class="note-edit-image"><img src="${esc(img.url)}" alt="${esc(img.name)}" loading="lazy"><button class="btn small bad" type="button" data-action="notes-remove-image" data-id="${esc(img.id)}">Xóa ảnh</button></div>`).join('');
+  $('noteEditor').classList.remove('hidden');$('noteEditor').scrollIntoView({behavior:'smooth',block:'start'});$('noteTitle').focus();
+}
+async function editNote(id){try{const note=await api('/api/notes/'+encodeURIComponent(id));openNoteEditor(note)}catch(e){toast(e.message,true)}}
+function closeNoteEditor(){noteUI.editing=null;$('noteEditor').classList.add('hidden');$('noteEditor').reset()}
+async function saveNote(){
+  const title=$('noteTitle').value.trim(),content=$('noteContent').value.trim(),files=[...$('noteAddImages').files];
+  if(!title||!content){toast('Hãy nhập tiêu đề và nội dung.',true);return}
+  if(files.some(f=>f.size>5*1024*1024)){toast('Mỗi ảnh tối đa 5 MB.',true);return}
+  const body={title,content,tags:noteTagsInput($('noteTags').value),pinned:$('notePinned').checked};
+  const button=$('noteSaveBtn');button.disabled=true;
+  try{
+    let note=await api(noteUI.editing?'/api/notes/'+encodeURIComponent(noteUI.editing):'/api/notes',
+      {method:noteUI.editing?'PUT':'POST',body:JSON.stringify(body)});
+    if(files.length){const form=new FormData();files.forEach(f=>form.append('files',f,f.name));
+      note=await api('/api/notes/'+encodeURIComponent(note.id)+'/images',{method:'POST',body:form})}
+    toast('Đã lưu ghi chú'+(files.length?' và ảnh':''));closeNoteEditor();await loadNotes();
+  }catch(e){toast(e.message,true)}finally{button.disabled=false}
+}
+async function removeNote(id){if(!confirm('Xóa vĩnh viễn ghi chú cùng tất cả ảnh? Thao tác không thể hoàn tác.'))return;
+  try{await api('/api/notes/'+encodeURIComponent(id),{method:'DELETE'});if(noteUI.editing===id)closeNoteEditor();toast('Đã xóa ghi chú');loadNotes()}catch(e){toast(e.message,true)}
+}
+async function removeNoteImage(imageId){const id=noteUI.editing;if(!id||!confirm('Xóa ảnh này khỏi ghi chú?'))return;
+  try{await api('/api/notes/'+encodeURIComponent(id)+'/images/'+encodeURIComponent(imageId),{method:'DELETE'});
+    const draft={title:$('noteTitle').value,content:$('noteContent').value,tags:$('noteTags').value,pinned:$('notePinned').checked};
+    const note=await api('/api/notes/'+encodeURIComponent(id));openNoteEditor(note);
+    $('noteTitle').value=draft.title;$('noteContent').value=draft.content;$('noteTags').value=draft.tags;$('notePinned').checked=draft.pinned;
+    toast('Đã xóa ảnh');loadNotes();
+  }catch(e){toast(e.message,true)}
+}
+
 function bindEvents(){
   document.querySelectorAll('[data-settings-view]').forEach(button=>button.addEventListener('click',()=>setSettingsView(button.dataset.settingsView)));
   document.querySelectorAll('.nav-btn').forEach(b=>b.addEventListener('click',()=>setTab(b.dataset.tab)));
   $('logoutBtn').addEventListener('click',logout);$('sendBtn').addEventListener('click',sendChat);$('chatinput').addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();sendChat()}});
+  $('chatImageFiles').addEventListener('change',e=>{addChatImages([...e.target.files]);e.target.value=''});
+  $('chatinput').addEventListener('paste',e=>{const images=[...(e.clipboardData?.files||[])].filter(f=>f.type.startsWith('image/'));if(images.length){e.preventDefault();addChatImages(images)}});
+  $('chat').addEventListener('dragover',e=>{if([...e.dataTransfer?.types||[]].includes('Files'))e.preventDefault()});
+  $('chat').addEventListener('drop',e=>{const images=[...(e.dataTransfer?.files||[])].filter(f=>f.type.startsWith('image/'));if(images.length){e.preventDefault();addChatImages(images)}});
+  $('noteNewBtn').addEventListener('click',()=>openNoteEditor());$('noteCancel').addEventListener('click',closeNoteEditor);
+  $('notesRefresh').addEventListener('click',()=>loadNotes());
+  let notesSearchTimer; $('notesSearch').addEventListener('input',()=>{clearTimeout(notesSearchTimer);notesSearchTimer=setTimeout(()=>loadNotes(),200)});
+  $('noteEditor').addEventListener('submit',e=>{e.preventDefault();saveNote()});
+  $('notesList').addEventListener('click',e=>{const btn=e.target.closest('[data-action]');if(!btn)return;if(btn.dataset.action==='notes-edit')editNote(btn.dataset.id);if(btn.dataset.action==='notes-delete')removeNote(btn.dataset.id)});
+  $('noteExistingImages').addEventListener('click',e=>{const btn=e.target.closest('[data-action="notes-remove-image"]');if(btn)removeNoteImage(btn.dataset.id)});
   ['logLevel','logLimit'].forEach(id=>$(id).addEventListener('change',loadLogs));$('auditLimit').addEventListener('change',loadAudit);$('authAuditPageSize').addEventListener('change',()=>loadAuthAudit(1));['logComponent','logQuery'].forEach(id=>$(id).addEventListener('keydown',e=>{if(e.key==='Enter')loadLogs()}));
   $('jobForm').addEventListener('submit',e=>{e.preventDefault();saveJob()});$('ruleForm').addEventListener('submit',e=>{e.preventDefault();saveRule()});$('approvalNotifyForm').addEventListener('submit',e=>{e.preventDefault();saveApprovalNotification()});
   $('skillForm').addEventListener('submit',e=>{e.preventDefault();saveSkill()});$('skillSearch').addEventListener('input',renderSkillsManage);$('skillStatusFilter').addEventListener('change',renderSkillsManage);$('skillDryRunSelect').addEventListener('change',()=>{updateSkillDryRunMeta();fillSkillDryRunExample(false)});$('skillPromptSearch').addEventListener('input',renderSkillPromptExamples);renderSkillPromptExamples();

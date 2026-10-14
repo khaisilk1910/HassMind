@@ -1,3 +1,15 @@
+> **Mới trong v1.5.11 (Ghi chú + Ảnh):** Tạo ghi chú lâu dài bằng chat kèm ảnh, tìm lại chính xác nguyên văn và hiển thị ảnh; thêm tab Ghi chú có chỉnh sửa, ghim, nhãn và tìm kiếm. Dữ liệu nằm trong `/data`, **không bị xóa cùng lịch sử chat trong ngày**. Xem [CHANGELOG_V1.5.11.md](CHANGELOG_V1.5.11.md).
+
+## Ghi chú lâu dài bằng Chat (v1.5.11)
+
+1. Trong Chat, gửi `Ghi chú: Đơn điện tháng 10 đã thanh toán #hoadon`. Có thể chọn tối đa 5 ảnh (JPEG/PNG/WebP/GIF) qua nút **📎 Thêm ảnh**, dán ảnh hoặc kéo thả rồi gửi cùng nội dung.
+2. Hỏi `Tìm ghi chú về đơn điện`, `Đơn điện tháng 10 của tôi đã thanh toán chưa?`, `Ghi chú về hóa đơn` hoặc `Liệt kê ghi chú`. HassMind trích đúng bản ghi đã lưu; nếu có ảnh sẽ hiện ngay dưới câu trả lời.
+3. Sau khi tạo, phản hồi hiển thị **mã ghi chú**. Dùng `Xem ghi chú #MÃ`, `Thêm vào ghi chú #MÃ: Chi tiết mới`, `Sửa ghi chú #MÃ: Nội dung thay thế`, `Ghim ghi chú #MÃ`, `Bỏ ghim ghi chú #MÃ`, hoặc `Thêm ảnh vào ghi chú #MÃ: Ảnh mặt sau` kèm file.
+4. Xóa qua Chat phải dùng `Xóa ghi chú #MÃ xác nhận`; hoặc dùng nút Xóa trong tab **Ghi chú** với hộp xác nhận. Tab Ghi chú hỗ trợ tạo/sửa, ghim, nhãn, thêm và xóa ảnh.
+5. Ghi chú sống qua ngày và phiên mới, khác với chat history chỉ lưu trong ngày. Back up **toàn bộ `/data`**, bao gồm `/data/hassmind.db` và `/data/note_images`.
+
+**An toàn:** chỉ người dùng đã xác thực có thể đọc/xóa ảnh; ảnh được làm sạch metadata khi lưu. Ảnh không được tự OCR nên cần ghi vài từ khóa mô tả để tìm kiếm nhanh. Tổng request tải ảnh lên giới hạn khoảng 16 MB, ảnh riêng lẻ ≤5 MB. Câu hỏi về trạng thái Home Assistant *hiện tại* vẫn dùng state trực tiếp, không lấy dữ liệu lịch sử trong ghi chú làm trạng thái live.
+
 > **Mới trong v1.5.9 (Security):** Telegram deny-by-default, kiểm tra thành viên group + tuổi tin nhắn; Host/Origin guard, giới hạn request/webhook, chống nghẽn Argon2 và ghi secret an toàn. Khi dùng tên miền HTTPS, thêm `ADMIN_ALLOWED_HOSTS=ten-mien-cua-ban` trong `.env`. Xem [CHANGELOG_V1.5.9.md](CHANGELOG_V1.5.9.md).
 
 > **Đã cập nhật giao diện trong v1.5.8:** Web Admin được thiết kế lại theo phong cách Aurora với biểu tượng điều hướng, card/status dễ phân biệt, hiệu ứng nhẹ, hướng dẫn thu gọn và Settings chia ba nhóm (Tài khoản & API / Phiên & bảo mật / Nhật ký bảo mật). Các API và cơ chế xóa chat theo ngày của v1.5.7 được giữ nguyên. Xem [CHANGELOG_V1.5.8.md](CHANGELOG_V1.5.8.md).
