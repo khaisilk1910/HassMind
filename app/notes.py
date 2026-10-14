@@ -183,7 +183,7 @@ def image_info(image_id: str) -> tuple[Path, str] | None:
 
 def encode_image(data: bytes, original_name: str, *, max_input_bytes: int = MAX_IMAGE_BYTES) -> tuple[str, bytes, str]:
     if not data or len(data) > max_input_bytes:
-        raise ValueError('Mỗi ảnh phải nhỏ hơn hoặc bằng 5 MB.')
+        raise ValueError(f'Mỗi ảnh phải nhỏ hơn hoặc bằng {max_input_bytes // (1024 * 1024)} MB.')
     if len(original_name or '') > 255:
         raise ValueError('Tên ảnh quá dài.')
     try:
@@ -213,14 +213,15 @@ def encode_image(data: bytes, original_name: str, *, max_input_bytes: int = MAX_
 
 
 def create_note(title: str, content: str, tags: list[str] | str | None = None,
-                *, pinned: bool = False, images: list[tuple[bytes, str]] | None = None) -> dict:
+                *, pinned: bool = False, images: list[tuple[bytes, str]] | None = None,
+                max_input_bytes: int = MAX_IMAGE_BYTES) -> dict:
     title, content = str(title).strip(), str(content).strip()
     if not content or not title or len(content) > MAX_NOTE_CHARS or len(title) > 160:
         raise ValueError('Tiêu đề và nội dung phải có dữ liệu (tối đa 160 / 12.000 ký tự).')
     images = images or []
     if len(images) > MAX_IMAGES:
         raise ValueError('Tối đa 5 ảnh cho mỗi ghi chú.')
-    encoded = [(*encode_image(blob, name), str(name or 'Ảnh')[:120]) for blob, name in images]
+    encoded = [(*encode_image(blob, name, max_input_bytes=max_input_bytes), str(name or 'Ảnh')[:120]) for blob, name in images]
     note_id = secrets.token_hex(8)
     now = utcnow()
     tags_clean = normalize_tags(tags)
@@ -263,14 +264,15 @@ def update_note(note_id: str, *, title: str, content: str, tags: list[str] | str
     return get_note(note_id)
 
 
-def append_images(note_id: str, images: list[tuple[bytes, str]]) -> dict | None:
+def append_images(note_id: str, images: list[tuple[bytes, str]],
+                  *, max_input_bytes: int = MAX_IMAGE_BYTES) -> dict | None:
     if not get_note(note_id):
         return None
     with conn() as c:
         count = c.execute('SELECT count(*) FROM note_images WHERE note_id=?', (note_id,)).fetchone()[0]
     if count + len(images) > MAX_IMAGES:
         raise ValueError('Một ghi chú chỉ được có tối đa 5 ảnh.')
-    encoded = [(*encode_image(blob, name), str(name or 'Ảnh')[:120]) for blob, name in images]
+    encoded = [(*encode_image(blob, name, max_input_bytes=max_input_bytes), str(name or 'Ảnh')[:120]) for blob, name in images]
     stored = []
     try:
         for position, (ext, blob, mime, original_name) in enumerate(encoded, count):

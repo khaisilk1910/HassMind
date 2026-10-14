@@ -896,7 +896,9 @@ Xem `CHANGELOG_V1.5.3.md` và `KNOWLEDGE_DEVICES_VI.md`.
 
 Xem `CHANGELOG_V1.5.4.md` và `QA_V1.5.4.md`.
 
-## HassMind v1.5.12: Ghi chú hình ảnh trên Zalo cá nhân (zalo-bot-server)
+## HassMind v1.5.12: Ghi chú hình ảnh trên Zalo cá nhân (mô tả phiên bản cũ)
+
+**Lưu ý:** Các bước ảnh-trước-nội-dung bên dưới chỉ đúng cho v1.5.12–1.5.13. Từ v1.5.14, hãy xem hướng dẫn **nội dung trước, chờ ảnh 60 giây** ở cuối tài liệu.
 
 HassMind hỗ trợ nhận ảnh qua webhook Zalo cá nhân, lưu cùng ghi chú của Web Admin và
 trả **ảnh thực qua Zalo** khi người dùng tìm lại ghi chú. Không sử dụng OA OpenAPI;
@@ -938,3 +940,16 @@ HTTPS, không theo chuyển hướng, giới hạn đầu vào Zalo 15 MB (ảnh
 thực và loại metadata trước khi ghi xuống kho. Chỉ tiếp nhận yêu cầu từ
 thread Zalo được phép. Nếu ảnh đến trước câu lệnh ghi chú, nó chỉ được giữ
 tạm trong RAM và sẽ mất khi container khởi động lại; ảnh đã lưu sẽ bền vững.
+
+## HassMind v1.5.14: Tạo ghi chú qua Zalo – nội dung trước, ảnh sau
+
+**Chỉ áp dụng cho Zalo; thao tác tạo ghi chú trên web không thay đổi.**
+
+1. Gửi `Ghi chú: Ảnh nhà thờ tổ` → HassMind hỏi có muốn đính kèm ảnh không và bắt đầu đếm **60 giây**.
+2. Trong 60 giây, gửi lần lượt 1–5 ảnh từ Zalo. Sau mỗi ảnh, HassMind xác nhận số ảnh đã nhận. Để kết thúc sớm, gửi `Xong`, `Không có ảnh` hoặc `Lưu ngay`.
+3. Sau 60 giây, nếu chưa kết thúc, HassMind tự hoàn tất. Nếu ảnh không tải được, vẫn lưu phần chữ và thông báo lý do lỗi ảnh. Bản nháp được ghi vào SQLite và có thể tự hoàn tất sau restart.
+4. Gửi `Tìm ghi chú nhà thờ tổ` → trả lại nội dung và ảnh đính kèm qua Zalo như trước.
+
+Nếu gửi ảnh trước khi gửi nội dung `Ghi chú: ...`, HassMind **không** tự giữ ảnh đó để tạo ghi chú; hãy gửi nội dung trước rồi gửi ảnh **mới**. URL CDN Zalo có thể yêu cầu proxy/quyền truy cập và không phải ảnh nào cũng tải được. Nếu ảnh lỗi, xem log `zalo.incoming_photo_cache_failed` bên Zalo Server; mã lỗi HTTP được gửi về trong thông báo HassMind. Không chia sẻ URL CDN/token/cookie Zalo trong log hỗ trợ.
+
+**Triển khai:** rebuild từ mã nguồn **cả HassMind v1.5.14 và Zalo Server Photo Bridge v1.5.14**; giữ nguyên mount `/data` và `/app/data` như cấu hình hiện có. HACS không đổi. Xem `CHANGELOG_V1.5.14.md`.

@@ -287,3 +287,12 @@ def bridge_tokens_from_webhook(payload: dict[str, Any]) -> list[str]:
     return [entry['token'] for entry in tokens[:notes.MAX_IMAGES]
             if isinstance(entry, dict) and isinstance(entry.get('token'), str)
             and re.fullmatch(r'[0-9a-f]{48}', entry['token'])]
+
+
+def is_finish_command(value: str) -> bool:
+    """Complete only an explicitly pending Zalo note."""
+    return fold_for_finish(value) in ('xong', 'luu ngay', 'khong co anh', 'khong dinh kem anh', 'het anh')
+
+
+def fold_for_finish(value: str) -> str:
+    return notes.fold(str(value or '').strip().strip('!.')).lower()

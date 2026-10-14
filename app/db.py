@@ -424,6 +424,8 @@ def init_db():
             c.execute("ALTER TABLE custom_integrations ADD COLUMN actions_json TEXT NOT NULL DEFAULT '[]'")
         from .notes import init_notes_db
         init_notes_db(c)
+        from .zalo_note_drafts import init_draft_db
+        init_draft_db(c)
         try:
             c.execute("CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(chunk_id UNINDEXED, path, text)")
             c.execute("CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(fact_id UNINDEXED, text, tags)")
