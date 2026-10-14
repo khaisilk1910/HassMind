@@ -70,7 +70,8 @@ INTEGRATION_CATALOG: dict[str, dict[str, Any]] = {
         "fields": [
             {"name": "enabled", "setting": "telegram_enabled", "type": "boolean", "label": "B\u1eadt integration"},
             {"name": "bot_token", "type": "secret", "label": "Bot token", "secret_name": "integration_telegram_bot_token", "secret_reader": "read_telegram_token"},
-            {"name": "allowed_chat_ids", "setting": "telegram_allowed_chat_ids", "type": "text", "label": "Allowed chat IDs", "placeholder": "123456789,-1001234567890; \u0111\u1ec3 tr\u1ed1ng = cho ph\u00e9p m\u1ecdi chat"},
+            {"name": "allowed_chat_ids", "setting": "telegram_allowed_chat_ids", "type": "text", "label": "Allowed chat IDs", "placeholder": "123456789,-1001234567890; để trống = từ chối mọi chat"},
+            {"name": "allowed_user_ids", "setting": "telegram_allowed_user_ids", "type": "text", "label": "Allowed sender user IDs (bắt buộc cho group)", "placeholder": "123456789,987654321; từ chối mọi người gửi trong group nếu trống"},
         ],
     },
     "wyoming": {

@@ -272,3 +272,32 @@ test('Device import is a CSRF-protected approval proposal, never an instant file
   assert.deepEqual(JSON.parse(called.opt.body).aliases,['bơm nước','ổ cắm bơm']);
   assert.equal(h.calls.some(x=>x.url.endsWith('/approve')),false);
 });
+
+test('Admin security audit requests paged data and renders 20 rows by default',async()=>{
+  const h=harness();
+  assert.match(html,/id="authAuditPageSize"/);
+  assert.match(html,/<option value="20" selected>20<\/option>/);
+  assert.match(css,/\.auth-audit-scroll\{max-height:/);
+  h.nodes.get('authAuditPageSize').value='20';
+  h.respond(async()=>({body:{items:Array.from({length:20},(_,i)=>({event:'event-'+i,username:'admin',ip:'192.168.1.1',success:1,created_at:'2026-10-13T15:47:41+07:00'})),page:1,page_size:20,pages:3,total:47}}));
+  await h.run('loadAuthAudit(1)');
+  assert.equal(h.calls[0].url,'/api/auth/audit?page=1&page_size=20');
+  assert.equal((h.nodes.get('authAuditBox').innerHTML.match(/class="item"/g)||[]).length,20);
+  assert.match(h.nodes.get('authAuditPagination').innerHTML,/auth-audit-page/);
+  assert.match(h.nodes.get('authAuditPagination').innerHTML,/Trang 1\/3/);
+  h.nodes.get('authAuditPageSize').value='10';
+  await h.run('loadAuthAudit(2)');
+  assert.equal(h.calls[1].url,'/api/auth/audit?page=2&page_size=10');
+});
+
+test('Chat timestamps show full date and HH:mm:ss for each bubble',()=>{
+  const h=harness();
+  assert.match(html,/id="chatbox"/);
+  assert.match(html,/Lịch sử chat chỉ lưu trong ngày/);
+  assert.match(css,/\.msg-time/);
+  const user=h.run("addMsg('user','Xác nhận','',false,'2026-10-13T09:03:49+07:00')");
+  const assistant=h.run("addMsg('assistant','Đã xử lý','',false,'2026-10-13T09:03:50+07:00')");
+  assert.equal(user.time.textContent,'13/10/2026 09:03:49 +07:00');
+  assert.equal(assistant.time.textContent,'13/10/2026 09:03:50 +07:00');
+  assert.equal(user.time.dateTime,'2026-10-13T09:03:49+07:00');
+});

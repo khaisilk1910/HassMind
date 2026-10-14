@@ -1,3 +1,7 @@
+> **Mới trong v1.5.9 (Security):** Telegram deny-by-default, kiểm tra thành viên group + tuổi tin nhắn; Host/Origin guard, giới hạn request/webhook, chống nghẽn Argon2 và ghi secret an toàn. Khi dùng tên miền HTTPS, thêm `ADMIN_ALLOWED_HOSTS=ten-mien-cua-ban` trong `.env`. Xem [CHANGELOG_V1.5.9.md](CHANGELOG_V1.5.9.md).
+
+> **Đã cập nhật giao diện trong v1.5.8:** Web Admin được thiết kế lại theo phong cách Aurora với biểu tượng điều hướng, card/status dễ phân biệt, hiệu ứng nhẹ, hướng dẫn thu gọn và Settings chia ba nhóm (Tài khoản & API / Phiên & bảo mật / Nhật ký bảo mật). Các API và cơ chế xóa chat theo ngày của v1.5.7 được giữ nguyên. Xem [CHANGELOG_V1.5.8.md](CHANGELOG_V1.5.8.md).
+
 ## Mới trong v1.5.6 — ghi nhớ hội thoại theo mọi chủ đề
 
 - Trong **cùng một phiên** Web hoặc Zalo, HassMind dùng lịch sử chat cho các câu nối tiếp thuộc **mọi chủ đề**: Home Assistant, Scheduler/Event, Knowledge, giải thích, văn bản, tra cứu... Không chỉ giới hạn ở Device.
@@ -580,7 +584,9 @@ và `.env`:
 TELEGRAM_ALLOWED_CHAT_IDS=123456789,987654321
 ```
 
-Nếu allowlist để trống, gateway nhận mọi chat tới bot. Không nên để trống khi dùng thực tế.
+**Từ v1.5.9: để trống `TELEGRAM_ALLOWED_CHAT_IDS` sẽ TỪ CHỐI mọi chat.** Cấu hình chat ID chính xác, sau đó restart bot hoặc lưu ở Web Admin → Integrations → Telegram.
+
+Với group/supergroup, bắt buộc đặt cả `TELEGRAM_ALLOWED_USER_IDS` cho người được phép gửi lệnh; ví dụ `TELEGRAM_ALLOWED_USER_IDS=123456789`. Tin nhắn quá 300 giây sẽ bị bỏ qua theo mặc định để tránh chạy lệnh cũ sau khi bot khởi động lại.
 
 ## 14. Backup
 

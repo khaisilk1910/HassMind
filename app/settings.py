@@ -1,4 +1,6 @@
 import os
+import tempfile
+import re
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -74,6 +76,9 @@ class Settings(BaseSettings):
     admin_session_idle_minutes: int = 30
     admin_cookie_secure: bool = False
     admin_allowed_networks: str = "127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    # Additional public/private domain names used by your reverse proxy.
+    admin_allowed_hosts: str = ""
+    max_request_body_bytes: int = Field(default=2097152, ge=65536, le=16777216)
     login_max_failures: int = 5
     login_lock_minutes: int = 15
     password_min_length: int = 14
@@ -108,6 +113,8 @@ class Settings(BaseSettings):
     telegram_bot_token_file: str = "/run/secrets/telegram_bot_token"
     telegram_bot_token: str = ""
     telegram_allowed_chat_ids: str = ""
+    telegram_allowed_user_ids: str = ""
+    telegram_max_message_age_seconds: int = Field(default=300, ge=30, le=3600)
 
     knowledge_dir: str = "/knowledge"
     knowledge_monitor_enabled: bool = True
@@ -182,27 +189,31 @@ class Settings(BaseSettings):
         return self._read_optional(str(self._runtime_secret_path(name)))
 
     def write_runtime_secret(self, name: str, value: str) -> Path:
+        # Never use a predictable .tmp name: concurrent credential rotations or
+        # a symlink already present in the data volume must not redirect writes.
+        if not re.fullmatch(r"[a-z][a-z0-9_-]{0,100}", name):
+            raise ValueError("Invalid runtime secret name")
         value = value.strip()
         if not value:
             raise ValueError("Secret value must not be empty")
         root = Path(self.runtime_secret_dir)
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(root, 0o700)
+        target = root / name
+        temp_name = None
         try:
-            os.chmod(root, 0o700)
-        except OSError:
-            pass
-        target = self._runtime_secret_path(name)
-        tmp = target.with_suffix(".tmp")
-        tmp.write_text(value, encoding="utf-8")
-        try:
-            os.chmod(tmp, 0o600)
-        except OSError:
-            pass
-        os.replace(tmp, target)
-        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=root,
+                                             prefix=".secret-", delete=False) as temp:
+                temp_name = temp.name
+                os.fchmod(temp.fileno(), 0o600)
+                temp.write(value)
+                temp.flush()
+                os.fsync(temp.fileno())
+            os.replace(temp_name, target)
             os.chmod(target, 0o600)
-        except OSError:
-            pass
+        finally:
+            if temp_name is not None:
+                Path(temp_name).unlink(missing_ok=True)
         return target
 
     def read_ha_token(self) -> str:
@@ -309,6 +320,10 @@ class Settings(BaseSettings):
     @property
     def telegram_allowed_ids(self) -> set[str]:
         return {x.strip() for x in self.telegram_allowed_chat_ids.split(",") if x.strip()}
+
+    @property
+    def telegram_allowed_users(self) -> set[str]:
+        return {x.strip() for x in self.telegram_allowed_user_ids.split(",") if x.strip()}
 
     @property
     def zalo_allowed_thread_ids(self) -> set[str]:

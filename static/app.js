@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION='1.5.3';
+const APP_VERSION='1.5.9';
 const $=id=>document.getElementById(id);
 function makeSessionId(){if(globalThis.crypto&&typeof globalThis.crypto.randomUUID==='function')return globalThis.crypto.randomUUID();return 'web-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,12)}
 const uiState={sessionId:localStorage.getItem('hassmind_session')||makeSessionId(),activeTab:'overview',csrf:'',user:null,passwordMinLength:14};
@@ -118,7 +118,7 @@ async function initAuth(){
 }
 async function logout(){try{await api('/api/auth/logout',{method:'POST',body:'{}'})}catch{}location.replace('/login')}
 async function health(){const pill=$('healthPill');try{const r=await fetch('/health',{cache:'no-store'});const j=await r.json();pill.className='health-pill '+(j.ok?'ok':'bad');$('healthText').textContent=j.ok?`HassMind ${APP_VERSION} · online`:'Không khỏe'}catch{pill.className='health-pill bad';$('healthText').textContent='offline'}}
-function metric(label,value,sub=''){return `<div class="card metric span-3"><div class="metric-label">${esc(label)}</div><div class="metric-value">${esc(value)}</div>${sub?`<div class="metric-sub">${esc(sub)}</div>`:''}</div>`}
+function metric(label,value,sub=''){const status=String(value).toLowerCase();const tone=['connected','ready','yes','online'].includes(status)?' metric-positive':['disconnected','missing','no','offline'].includes(status)?' metric-negative':'';return `<div class="card metric span-3${tone}"><div class="metric-label">${esc(label)}</div><div class="metric-value">${esc(value)}</div>${sub?`<div class="metric-sub">${esc(sub)}</div>`:''}</div>`}
 
 async function loadOverview(){const box=$('overviewMetrics');try{const [s,d,skills]=await Promise.all([api('/api/status'),api('/api/diagnostics'),api('/api/skills?include_disabled=true')]);box.innerHTML=[metric('HassMind',s.version,`uptime ${fmtDuration(s.uptime_seconds)}`),metric('Home Assistant',s.ha_connected?'Connected':'Disconnected',s.ha_version||s.ha_error||''),metric('LLM model',s.model||'—'),metric('Logging',s.log_level||'—',d.logging?.path||''),metric('Database',d.database?.exists?'Ready':'Missing',`${d.database?.size_bytes||0} bytes`),metric('DB writable',d.database?.parent_writable?'Yes':'No',d.database?.path||''),metric('Background tasks',d.runtime?.background_tasks?.length||0),metric('Log buffer',d.logging?.ring_size||0,`include_content=${d.logging?.include_content}`)].join('');$('diagBox').textContent=JSON.stringify(d,null,2);const rows=skills||[],enabled=rows.filter(x=>x.enabled&&x.valid).length;$('skillsBox').innerHTML=rows.slice(0,6).map(x=>`<div class="item"><div class="item-head"><strong>${esc(x.name)}</strong><span class="badge ${x.enabled&&x.valid?'ok':'warn'}">${x.enabled&&x.valid?'enabled':'inactive'}</span></div><div class="small-text muted mt-10">${esc(x.description||'')}</div></div>`).join('')+(rows.length>6?`<div class="empty">${enabled}/${rows.length} skill đang hoạt động · mở Skills để quản lý toàn bộ.</div>`:'')||'<div class="empty">Không có skill.</div>'}catch(e){box.innerHTML=`<div class="card card-pad span-12">${errorHtml(e)}</div>`;$('diagBox').textContent=e.message}}
 
@@ -207,21 +207,56 @@ async function loadSkillVersions(name){skillUI.history=name;$('skillHistoryTitle
 async function rollbackSkillUI(name,version){if(!confirm(`Rollback ${name} về nội dung v${version}? HassMind sẽ tạo một version mới từ snapshot này.`))return;try{const r=await api('/api/skills/'+encodeURIComponent(name)+'/rollback',{method:'POST',body:JSON.stringify({version:Number(version)})});toast(`Đã rollback ${name}; version hiện tại là v${r.version}`);await loadSkills();await loadSkillVersions(name);if(skillUI.editing===name)await editSkill(name)}catch(e){toast(e.message,true)}}
 function clearChatEmpty(){const e=$('chatEmpty');if(e)e.remove()}
 async function restoreChatHistory(){
-  // The backend owns conversational context. A browser reload does NOT start a
-  // new conversation; only the explicit "Phiên mới" button changes session_id.
+  // Only today's messages are returned; stored timestamps come from SQLite.
   const sid=uiState.sessionId;
   try{
     const history=await api('/api/messages/'+encodeURIComponent(sid));
-    if(sid!==uiState.sessionId)return; // New session opened while loading.
+    if(sid!==uiState.sessionId)return;
     const chat=$('chatbox');
-    if(!chat||chat.querySelector('.msg-row'))return; // Do not overwrite live chat.
+    if(!chat||chat.querySelector('.msg-row'))return;
     for(const row of (Array.isArray(history)?history:[])){
-      if(row&&(row.role==='user'||row.role==='assistant'))addMsg(row.role,String(row.content||''));
+      if(row&&(row.role==='user'||row.role==='assistant'))addMsg(row.role,String(row.content||''),'',false,row.created_at);
     }
   }catch(e){console.warn('Could not restore chat history',e.message)}
 }
-function addMsg(role,text,meta='',isError=false){clearChatEmpty();const row=document.createElement('div');row.className='msg-row '+role;const bubble=document.createElement('div');bubble.className='msg'+(isError?' error':'');const body=document.createElement('div');renderChatText(body,text,role==='assistant'&&!isError);bubble.appendChild(body);if(meta){const m=document.createElement('div');m.className='msg-meta mono';m.textContent=meta;bubble.appendChild(m)}row.appendChild(bubble);$('chatbox').appendChild(row);$('chatbox').scrollTop=$('chatbox').scrollHeight;return {row,bubble,body}}
-async function sendChat(){const el=$('chatinput'),text=el.value.trim();if(!text)return;el.value='';addMsg('user',text);const pending=addMsg('assistant','Đang xử lý…');$('sendBtn').disabled=true;try{const j=await api('/api/chat',{method:'POST',body:JSON.stringify({session_id:uiState.sessionId,message:text})});renderChatText(pending.body,j.answer,true);const meta=[];if(j.engine)meta.push(j.engine==='logic'?'⚙ logic':j.engine==='ai+logic'?'🤖 AI → ⚙ Logic':'🤖 AI');if(j.request_id)meta.push('request: '+j.request_id);if(meta.length){const m=document.createElement('div');m.className='msg-meta mono';m.textContent=meta.join(' · ');pending.bubble.appendChild(m)}}catch(e){pending.bubble.classList.add('error');const networkError=e instanceof TypeError && /Failed to fetch|NetworkError|Load failed/i.test(e.message);const hint=networkError?'Không kết nối được API HassMind. Kiểm tra container, reverse proxy và mạng; xem log server theo thời điểm gửi.':('ERROR: '+e.message);renderChatText(pending.body,hint,false);if(networkError && !el.value.trim())el.value=text;if(e.requestId){const m=document.createElement('div');m.className='msg-meta mono';m.textContent='Request ID: '+e.requestId;pending.bubble.appendChild(m)}reportClientError('chat_error',e.message,e.stack||'',{request_id:e.requestId||''})}finally{$('sendBtn').disabled=false;el.focus()}}
+function localChatTimestamp(){
+  const date=new Date(),offset=-date.getTimezoneOffset(),sign=offset>=0?'+':'-';
+  const pad=n=>String(Math.abs(n)).padStart(2,'0');
+  return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}${sign}${pad(Math.floor(Math.abs(offset)/60))}:${pad(offset%60)}`;
+}
+function addMsg(role,text,meta='',isError=false,createdAt=localChatTimestamp()){
+  clearChatEmpty();const row=document.createElement('div');row.className='msg-row '+role;
+  const bubble=document.createElement('div');bubble.className='msg'+(isError?' error':'');
+  const body=document.createElement('div');renderChatText(body,text,role==='assistant'&&!isError);bubble.appendChild(body);
+  if(meta){const m=document.createElement('div');m.className='msg-meta mono';m.textContent=meta;bubble.appendChild(m)}
+  const time=document.createElement('time');time.className='msg-time mono';time.dateTime=createdAt||'';
+  time.textContent=fmtTime(createdAt||localChatTimestamp());bubble.appendChild(time);
+  row.appendChild(bubble);$('chatbox').appendChild(row);$('chatbox').scrollTop=$('chatbox').scrollHeight;
+  return {row,bubble,body,time};
+}
+async function sendChat(){
+  const el=$('chatinput'),text=el.value.trim();if(!text)return;
+  el.value='';addMsg('user',text);
+  const pending=addMsg('assistant','Đang xử lý…');$('sendBtn').disabled=true;
+  try{
+    const j=await api('/api/chat',{method:'POST',body:JSON.stringify({session_id:uiState.sessionId,message:text})});
+    renderChatText(pending.body,j.answer,true);
+    const responseTime=localChatTimestamp();pending.time.dateTime=responseTime;pending.time.textContent=fmtTime(responseTime);
+    const meta=[];
+    if(j.engine)meta.push(j.engine==='logic'?'⚙ logic':j.engine==='ai+logic'?'🤖 AI → ⚙ Logic':'🤖 AI');
+    if(j.request_id)meta.push('request: '+j.request_id);
+    if(meta.length){const m=document.createElement('div');m.className='msg-meta mono';m.textContent=meta.join(' · ');pending.bubble.insertBefore(m,pending.time)}
+  }catch(e){
+    pending.bubble.classList.add('error');
+    const responseTime=localChatTimestamp();pending.time.dateTime=responseTime;pending.time.textContent=fmtTime(responseTime);
+    const networkError=e instanceof TypeError && /Failed to fetch|NetworkError|Load failed/i.test(e.message);
+    const hint=networkError?'Không kết nối được API HassMind. Kiểm tra container, reverse proxy và mạng; xem log server theo thời điểm gửi.':('ERROR: '+e.message);
+    renderChatText(pending.body,hint,false);
+    if(networkError && !el.value.trim())el.value=text;
+    if(e.requestId){const m=document.createElement('div');m.className='msg-meta mono';m.textContent='Request ID: '+e.requestId;pending.bubble.insertBefore(m,pending.time)}
+    reportClientError('chat_error',e.message,e.stack||'',{request_id:e.requestId||''});
+  }finally{$('sendBtn').disabled=false;el.focus()}
+}
 function newSession(){uiState.sessionId=makeSessionId();localStorage.setItem('hassmind_session',uiState.sessionId);$('session').textContent='session: '+uiState.sessionId;$('chatbox').innerHTML='<div class="chat-empty" id="chatEmpty"><div><strong>Phiên mới</strong><div class="small-text mt-10">Session đã được tạo lại.</div></div></div>';toast('Đã tạo phiên mới')}
 
 function integrationCard(name,x){
@@ -540,7 +575,18 @@ async function importKnowledgeDevice(){
 
 function kvRows(entries){return entries.map(([k,v])=>`<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}
 async function loadSessions(){const box=$('sessionsBox');try{const rows=await api('/api/auth/sessions');box.innerHTML=rows.map(x=>`<div class="item"><div class="item-head"><strong>${x.current?'Phiên hiện tại':'Phiên khác'}</strong><span class="badge ${x.current?'ok':'info'}">${x.current?'current':'active'}</span></div><div class="small-text muted mt-10">IP: ${esc(x.ip||'—')}</div><div class="small-text muted">Last seen: ${esc(fmtTime(x.last_seen_at))}</div><div class="small-text muted">Expires: ${esc(fmtTime(x.expires_at))}</div><div class="small-text muted">${esc(x.user_agent||'')}</div></div>`).join('')||'<div class="empty">Không có phiên.</div>'}catch(e){box.innerHTML=errorHtml(e)}}
-async function loadAuthAudit(){const box=$('authAuditBox');try{const rows=await api('/api/auth/audit?limit=50');box.innerHTML=rows.map(x=>`<div class="item"><div class="item-head"><strong>${esc(x.event)}</strong><span class="badge ${x.success?'ok':'bad'}">${x.success?'success':'failed'}</span></div><div class="small-text muted mt-10">${esc(fmtTime(x.created_at))} · user=${esc(x.username||'—')} · IP=${esc(x.ip||'—')}</div>${x.details?`<div class="small-text muted">${esc(x.details)}</div>`:''}</div>`).join('')||'<div class="empty">Chưa có sự kiện bảo mật.</div>'}catch(e){box.innerHTML=errorHtml(e)}}
+let authAuditPage=1;
+async function loadAuthAudit(page=authAuditPage){
+  const box=$('authAuditBox'),pager=$('authAuditPagination'),count=$('authAuditCount');
+  const pageSize=Number($('authAuditPageSize')?.value||20);
+  try{
+    const data=await api(`/api/auth/audit?page=${Math.max(1,Number(page)||1)}&page_size=${pageSize}`);
+    const p=normalizePagePayload(data,page);authAuditPage=p.page;
+    box.innerHTML=p.items.map(x=>`<div class="item"><div class="item-head"><strong>${esc(x.event)}</strong><span class="badge ${x.success?'ok':'bad'}">${x.success?'success':'failed'}</span></div><div class="small-text muted mt-10">${esc(fmtTime(x.created_at))} · user=${esc(x.username||'—')} · IP=${esc(x.ip||'—')}</div>${x.details?`<div class="small-text muted">${esc(x.details)}</div>`:''}</div>`).join('')||'<div class="empty">Chưa có sự kiện bảo mật.</div>';
+    count.textContent=p.total+' bản ghi · '+p.page_size+' dòng/trang';
+    pager.innerHTML=paginationHtml('auth-audit',p,'sự kiện');box.scrollTop=0;
+  }catch(e){box.innerHTML=errorHtml(e);count.textContent='';pager.innerHTML=''}
+}
 function secretSourceLabel(source){return ({runtime_file:'Runtime file',docker_secret:'Docker secret (bootstrap)',environment:'Environment (bootstrap)',missing:'Missing'})[source]||source||'—'}
 async function loadSettings(){try{const s=await api('/api/settings/security');$('apiTokenBadge').className='badge '+(s.api_token.configured?'ok':'bad');$('apiTokenBadge').textContent=s.api_token.configured?'Configured':'Missing';$('apiTokenInfo').innerHTML=kvRows([['Nguồn',secretSourceLabel(s.api_token.source)],['Fingerprint',s.api_token.fingerprint||'—'],['Trạng thái',s.api_token.configured?'Đã cấu hình':'Chưa cấu hình']]);$('adminInfo').innerHTML=kvRows([['Username',s.admin.username],['Recovery',s.admin.recovery_enabled?'Đã cấu hình':'Chưa cấu hình'],['Session TTL',s.admin.session_ttl_minutes+' phút'],['Idle timeout',s.admin.session_idle_minutes+' phút'],['Password min',s.admin.password_min_length+' ký tự'],['Password storage',s.admin.password_storage==='argon2id_hash_only'?'Argon2id hash only':s.admin.password_storage||'—']]);uiState.passwordMinLength=Number(s.admin.password_min_length||14);$('newAdminPassword').minLength=uiState.passwordMinLength;$('confirmAdminPassword').minLength=uiState.passwordMinLength;const policyHint=$('passwordPolicyHint');if(policyHint)policyHint.textContent=`Tối thiểu ${uiState.passwordMinLength} ký tự. Nếu dưới 20 ký tự phải có ít nhất 3 nhóm: chữ thường, chữ hoa, số, ký tự đặc biệt. Mật khẩu không được chứa username. Đổi mật khẩu sẽ thu hồi các phiên khác.`;$('recoveryBadge').className='badge '+(s.admin.recovery_enabled?'ok':'bad');$('recoveryBadge').textContent=s.admin.recovery_enabled?'Configured':'Missing';$('recoveryInfo').innerHTML=kvRows([['Trạng thái',s.admin.recovery_enabled?'Đã cấu hình':'Chưa cấu hình'],['Nguồn',secretSourceLabel(s.admin.recovery_source)],['Runtime file',s.admin.recovery_runtime_file||'/data/secrets/admin_recovery_key'],['Cách dùng','Trang Login → Quên mật khẩu?']]);$('newUsername').value=s.admin.username;$('securityInfo').innerHTML=kvRows([['Cookie Secure',String(s.admin.cookie_secure)],['Allowed networks',s.admin.allowed_networks.join(', ')||'Không giới hạn'],['Log secret redaction',String(s.logging.secret_redaction)],['Log content',String(s.logging.content_logging)],['Scrub old logs',String(s.logging.scrub_existing_logs_on_start)],['Scrub old audit',String(s.logging.scrub_existing_audit_on_start)],['Log file',s.logging.file]]);const w=$('cookieWarning');if(!s.admin.cookie_secure){w.classList.remove('hidden');w.textContent='Bạn đang dùng ADMIN_COOKIE_SECURE=false để hỗ trợ HTTP LAN. Khi chuyển sang HTTPS/reverse proxy, hãy bật true để cookie chỉ truyền qua TLS.'}else{w.classList.add('hidden')}await Promise.all([loadSessions(),loadAuthAudit()])}catch(e){toast('Không tải được Settings: '+e.message,true)}}
 async function saveApiToken(generate=false){const current=$('tokenCurrentPassword').value;const token=$('newApiToken').value.trim();if(!current){toast('Nhập mật khẩu admin hiện tại.',true);return}if(!generate&&token.length<32){toast('API token phải có ít nhất 32 ký tự.',true);return}try{const j=await api('/api/settings/api-token',{method:'POST',body:JSON.stringify({current_password:current,token,generate})});$('tokenCurrentPassword').value='';$('newApiToken').value='';if(j.token){$('generatedTokenBox').classList.remove('hidden');$('generatedToken').value=j.token}else{$('generatedTokenBox').classList.add('hidden');$('generatedToken').value=''}toast('Đã cập nhật HassMind API token');loadSettings()}catch(e){toast(e.message,true)}}
@@ -550,11 +596,37 @@ async function changePasswordSubmit(){const current=$('currentPassword').value,n
 async function revokeOtherSessions(){if(!confirm('Đăng xuất tất cả phiên khác?'))return;try{const j=await api('/api/auth/sessions/revoke-others',{method:'POST',body:'{}'});toast(`Đã thu hồi ${j.revoked} phiên`);loadSessions()}catch(e){toast(e.message,true)}}
 
 function clearOneTimeSecrets(){const token=$('generatedToken'),recovery=$('generatedRecoveryKey');if(token)token.value='';if(recovery)recovery.value='';$('generatedTokenBox')?.classList.add('hidden');$('generatedRecoveryBox')?.classList.add('hidden');$('tokenCurrentPassword').value='';$('newApiToken').value='';$('recoveryCurrentPassword').value=''}
-function setTab(id){if(uiState.activeTab==='settings'&&id!=='settings')clearOneTimeSecrets();uiState.activeTab=id;document.querySelectorAll('.panel').forEach(x=>x.classList.toggle('active',x.id===id));document.querySelectorAll('.nav-btn').forEach(x=>x.classList.toggle('active',x.dataset.tab===id));const loaders={overview:loadOverview,integrations:loadIntegrations,logs:loadLogs,audit:loadAudit,events:loadEvents,approvals:loadApprovals,jobs:loadJobs,rules:loadRules,knowledge:loadKnowledge,skills:loadSkills,settings:loadSettings};if(loaders[id])loaders[id]()}
+function setTab(id){if(uiState.activeTab==='settings'&&id!=='settings')clearOneTimeSecrets();uiState.activeTab=id;document.querySelectorAll('.panel').forEach(x=>x.classList.toggle('active',x.id===id));document.querySelectorAll('.nav-btn').forEach(x=>{const active=x.dataset.tab===id;x.classList.toggle('active',active);if(active)x.setAttribute('aria-current','page');else x.removeAttribute('aria-current')});const current=document.querySelector(`.nav-btn[data-tab="${id}"]`);if(current&&$('currentSection'))$('currentSection').textContent=current.textContent.trim();const loaders={overview:loadOverview,integrations:loadIntegrations,logs:loadLogs,audit:loadAudit,events:loadEvents,approvals:loadApprovals,jobs:loadJobs,rules:loadRules,knowledge:loadKnowledge,skills:loadSkills,settings:loadSettings};if(loaders[id])loaders[id]()}
+// Progressive enhancement: reduce instructional clutter while keeping every hint reachable.
+function initAdminPresentation(){
+  document.querySelectorAll('.panel > .help-box').forEach(help=>{
+    const details=document.createElement('details');details.className='guide-accordion';
+    const summary=document.createElement('summary');
+    summary.innerHTML='<span class="guide-symbol" aria-hidden="true">?</span><span>Hướng dẫn nhanh</span><span class="guide-optional"> · Mục đích, cách dùng và ví dụ</span>';
+    help.before(details);details.appendChild(summary);details.appendChild(help);
+  });
+  document.querySelectorAll('.page-head').forEach(head=>{
+    const title=head.querySelector('.page-title');if(!title)return;
+    const eyebrow=document.createElement('div');eyebrow.className='page-eyebrow';eyebrow.textContent='HassMind / Admin Console';
+    title.before(eyebrow);
+  });
+  const overview=document.querySelector('.nav-btn[data-tab="overview"]');
+  if(overview)overview.setAttribute('aria-current','page');
+}
+// Settings categories provide direct access to audit events without long scrolling.
+function setSettingsView(view){
+  const selected=['access','security','audit'].includes(view)?view:'access';
+  document.querySelectorAll('[data-settings-panel]').forEach(panel=>{panel.hidden=panel.dataset.settingsPanel!==selected});
+  document.querySelectorAll('[data-settings-view]').forEach(button=>{
+    const active=button.dataset.settingsView===selected;
+    button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));
+  });
+}
 function bindEvents(){
+  document.querySelectorAll('[data-settings-view]').forEach(button=>button.addEventListener('click',()=>setSettingsView(button.dataset.settingsView)));
   document.querySelectorAll('.nav-btn').forEach(b=>b.addEventListener('click',()=>setTab(b.dataset.tab)));
   $('logoutBtn').addEventListener('click',logout);$('sendBtn').addEventListener('click',sendChat);$('chatinput').addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();sendChat()}});
-  ['logLevel','logLimit'].forEach(id=>$(id).addEventListener('change',loadLogs));$('auditLimit').addEventListener('change',loadAudit);['logComponent','logQuery'].forEach(id=>$(id).addEventListener('keydown',e=>{if(e.key==='Enter')loadLogs()}));
+  ['logLevel','logLimit'].forEach(id=>$(id).addEventListener('change',loadLogs));$('auditLimit').addEventListener('change',loadAudit);$('authAuditPageSize').addEventListener('change',()=>loadAuthAudit(1));['logComponent','logQuery'].forEach(id=>$(id).addEventListener('keydown',e=>{if(e.key==='Enter')loadLogs()}));
   $('jobForm').addEventListener('submit',e=>{e.preventDefault();saveJob()});$('ruleForm').addEventListener('submit',e=>{e.preventDefault();saveRule()});$('approvalNotifyForm').addEventListener('submit',e=>{e.preventDefault();saveApprovalNotification()});
   $('skillForm').addEventListener('submit',e=>{e.preventDefault();saveSkill()});$('skillSearch').addEventListener('input',renderSkillsManage);$('skillStatusFilter').addEventListener('change',renderSkillsManage);$('skillDryRunSelect').addEventListener('change',()=>{updateSkillDryRunMeta();fillSkillDryRunExample(false)});$('skillPromptSearch').addEventListener('input',renderSkillPromptExamples);renderSkillPromptExamples();
   $('jobtype').addEventListener('change',syncJobScheduleHint);syncJobScheduleHint();
@@ -570,7 +642,17 @@ function bindEvents(){
     const customForm=e.target.closest('[data-custom-integration-form]');if(customForm){e.preventDefault();saveCustomIntegration(customForm.dataset.customIntegrationForm,customForm);return}
     const form=e.target.closest('[data-integration-form]');if(!form)return;e.preventDefault();saveIntegration(form.dataset.integrationForm,form)
   });
-  document.addEventListener('click',e=>{const log=e.target.closest('.log-row');if(log){toggleLogDetail(log.dataset.logIndex);return}const b=e.target.closest('[data-action]');if(!b||b.disabled)return;const a=b.dataset.action,id=b.dataset.id;const actions={'overview-refresh':loadOverview,'skills-open':()=>setTab('skills'),'skills-refresh':loadSkills,'skill-new':newSkill,'skill-validate':validateSkillDraft,'new-session':newSession,'integrations-refresh':loadIntegrations,'integration-add':openIntegrationAddPanel,'logs-refresh':loadLogs,'logs-export':exportLogs,'audit-refresh':loadAudit,'events-refresh':loadEvents,'approvals-refresh':loadApprovals,'jobs-refresh':loadJobs,'rules-refresh':loadRules,'knowledge-refresh':loadKnowledge,'knowledge-devices-open':openKnowledgeDevices,'knowledge-devices-refresh':loadKnowledgeDevices,'knowledge-scan':scanKnowledge,'knowledge-reindex':reindexKnowledge,'knowledge-search':searchKnowledge,'settings-refresh':loadSettings,'sessions-refresh':loadSessions,'sessions-revoke-others':revokeOtherSessions,'auth-audit-refresh':loadAuthAudit};if(actions[a]){actions[a]();return}if(a==='skill-edit'){editSkill(id);return}if(a==='skill-edit-cancel'){resetSkillForm();return}if(a==='skill-test'){testSkillUI(id);return}if(a==='skill-dry-run-open'){openSkillDryRun(id);return}if(a==='skill-dry-run-example'){fillSkillDryRunExample(true);return}if(a==='skill-dry-run'){runSkillDryRun();return}if(a==='chat-use-skill-example'){useChatSkillExample(id);return}if(a==='skill-versions'){loadSkillVersions(id);return}if(a==='skill-toggle'){toggleSkillUI(id,b.dataset.enabled==='1');return}if(a==='skill-delete'){deleteSkillUI(id);return}if(a==='skill-rollback'){rollbackSkillUI(id,Number(b.dataset.version));return}if(a==='knowledge-device-select'){selectKnowledgeDevice(id);return}if(a==='knowledge-device-page'){deviceUI.page=Math.max(1,Number(b.dataset.page)||1);renderDeviceBrowser();return}if(a==='knowledge-review'){if(!knowledgeUI.busy.has('proposal'))reviewKnowledgeProposal(id);return}if(['knowledge-dry-run','knowledge-approve','knowledge-reject','knowledge-rollback'].includes(a)){knowledgeProposalAction(a.slice('knowledge-'.length),id);return}if(a==='approval-approve')decideApproval(id,true);if(a==='approval-reject')decideApproval(id,false);if(a==='jobs-page')loadJobs(Number(b.dataset.page));if(a==='rules-page')loadRules(Number(b.dataset.page));if(a==='job-weekday-preset'){applyJobWeekdayPreset(b.dataset.group,b.dataset.preset);return}if(a==='job-edit')editJob(Number(id));if(a==='job-edit-cancel')resetJobForm();if(a==='job-toggle')toggleJob(Number(id),b.dataset.enabled==='1');if(a==='job-delete')deleteJob(Number(id));if(a==='rule-edit')editRule(Number(id));if(a==='rule-edit-cancel')resetRuleForm();if(a==='rule-toggle')toggleRule(Number(id),b.dataset.enabled==='1');if(a==='rule-delete')deleteRule(Number(id));if(a==='integration-reset')resetIntegration(id);if(a==='integration-delete-custom')deleteCustomIntegration(id);if(a==='integration-add-cancel'){const panel=$('integrationAddPanel');if(panel)panel.open=false}});
+  document.addEventListener('click',e=>{const log=e.target.closest('.log-row');if(log){toggleLogDetail(log.dataset.logIndex);return}const b=e.target.closest('[data-action]');if(!b||b.disabled)return;const a=b.dataset.action,id=b.dataset.id;const actions={'overview-refresh':loadOverview,'skills-open':()=>setTab('skills'),'skills-refresh':loadSkills,'skill-new':newSkill,'skill-validate':validateSkillDraft,'new-session':newSession,'integrations-refresh':loadIntegrations,'integration-add':openIntegrationAddPanel,'logs-refresh':loadLogs,'logs-export':exportLogs,'audit-refresh':loadAudit,'events-refresh':loadEvents,'approvals-refresh':loadApprovals,'jobs-refresh':loadJobs,'rules-refresh':loadRules,'knowledge-refresh':loadKnowledge,'knowledge-devices-open':openKnowledgeDevices,'knowledge-devices-refresh':loadKnowledgeDevices,'knowledge-scan':scanKnowledge,'knowledge-reindex':reindexKnowledge,'knowledge-search':searchKnowledge,'settings-refresh':loadSettings,'sessions-refresh':loadSessions,'sessions-revoke-others':revokeOtherSessions,'auth-audit-refresh':loadAuthAudit};if(actions[a]){actions[a]();return}if(a==='skill-edit'){editSkill(id);return}if(a==='skill-edit-cancel'){resetSkillForm();return}if(a==='skill-test'){testSkillUI(id);return}if(a==='skill-dry-run-open'){openSkillDryRun(id);return}if(a==='skill-dry-run-example'){fillSkillDryRunExample(true);return}if(a==='skill-dry-run'){runSkillDryRun();return}if(a==='chat-use-skill-example'){useChatSkillExample(id);return}if(a==='skill-versions'){loadSkillVersions(id);return}if(a==='skill-toggle'){toggleSkillUI(id,b.dataset.enabled==='1');return}if(a==='skill-delete'){deleteSkillUI(id);return}if(a==='skill-rollback'){rollbackSkillUI(id,Number(b.dataset.version));return}if(a==='knowledge-device-select'){selectKnowledgeDevice(id);return}if(a==='knowledge-device-page'){deviceUI.page=Math.max(1,Number(b.dataset.page)||1);renderDeviceBrowser();return}if(a==='knowledge-review'){if(!knowledgeUI.busy.has('proposal'))reviewKnowledgeProposal(id);return}if(['knowledge-dry-run','knowledge-approve','knowledge-reject','knowledge-rollback'].includes(a)){knowledgeProposalAction(a.slice('knowledge-'.length),id);return}if(a==='approval-approve')decideApproval(id,true);if(a==='approval-reject')decideApproval(id,false);if(a==='auth-audit-page'){loadAuthAudit(Number(b.dataset.page));return}if(a==='jobs-page')loadJobs(Number(b.dataset.page));if(a==='rules-page')loadRules(Number(b.dataset.page));if(a==='job-weekday-preset'){applyJobWeekdayPreset(b.dataset.group,b.dataset.preset);return}if(a==='job-edit')editJob(Number(id));if(a==='job-edit-cancel')resetJobForm();if(a==='job-toggle')toggleJob(Number(id),b.dataset.enabled==='1');if(a==='job-delete')deleteJob(Number(id));if(a==='rule-edit')editRule(Number(id));if(a==='rule-edit-cancel')resetRuleForm();if(a==='rule-toggle')toggleRule(Number(id),b.dataset.enabled==='1');if(a==='rule-delete')deleteRule(Number(id));if(a==='integration-reset')resetIntegration(id);if(a==='integration-delete-custom')deleteCustomIntegration(id);if(a==='integration-add-cancel'){const panel=$('integrationAddPanel');if(panel)panel.open=false}});
 }
-async function start(){const ok=await initAuth();if(!ok)return;bindEvents();restoreChatHistory();health();loadOverview();setInterval(health,30000);setInterval(()=>{if(uiState.activeTab==='logs'&&$('logAuto').checked)loadLogs()},5000)}
+async function start(){
+  const ok=await initAuth();if(!ok)return;
+  initAdminPresentation();bindEvents();restoreChatHistory();health();loadOverview();setInterval(health,30000);
+  setInterval(()=>{if(uiState.activeTab==='logs'&&$('logAuto').checked)loadLogs()},5000);
+  // Also clear the visible chat when a long-lived browser tab crosses midnight.
+  let chatDay=new Date().toDateString();
+  setInterval(()=>{const today=new Date().toDateString();if(today===chatDay)return;chatDay=today;
+    $('chatbox').innerHTML='<div class="chat-empty" id="chatEmpty"><div><strong>Ngày mới</strong><div class="small-text mt-10">Lịch sử chat ngày trước đã hết hạn.</div></div></div>';
+    restoreChatHistory();
+  },30000);
+}
 start().catch(e=>{toast(e.message||String(e),true);reportClientError('startup_error',e.message||String(e),e.stack||'')});

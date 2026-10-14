@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .settings import settings
-from .time_utils import now_iso, timezone_name, to_local_iso
+from .time_utils import now as local_now, now_iso, timezone_name, to_local_iso
 from .observability import exception, get_logger, info, redact
 
 logger = get_logger("database")
@@ -425,6 +425,28 @@ def init_db():
     info(logger, "database_init_completed", db_path=settings.db_path)
 
 
+def chat_history_cutoff() -> str:
+    """Local midnight today. Only today's messages are retained (not a rolling 24h)."""
+    return local_now().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+
+def cleanup_chat_history() -> int:
+    """Physically remove previous-day messages across chat transports."""
+    with conn() as c:
+        result = c.execute(
+            "DELETE FROM messages WHERE julianday(created_at) < julianday(?)",
+            (chat_history_cutoff(),),
+        )
+        deleted = result.rowcount
+        # Verified device focus belongs to the old conversation, too.
+        c.execute("DELETE FROM session_device_focus WHERE updated_at < ?", (
+            int(local_now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()),
+        ))
+    if deleted:
+        info(logger, "chat_history_purged", messages_deleted=deleted, timezone=timezone_name())
+    return deleted
+
+
 def add_message(session_id: str, role: str, content: str, source: str = "web"):
     with conn() as c:
         c.execute("INSERT INTO messages(session_id,role,content,source,created_at) VALUES(?,?,?,?,?)",
@@ -439,8 +461,9 @@ def replace_last_assistant_message(session_id: str, content: str, source: str = 
     """
     with conn() as c:
         row = c.execute(
-            "SELECT id FROM messages WHERE session_id=? AND role='assistant' AND source=? ORDER BY id DESC LIMIT 1",
-            (session_id, source),
+            "SELECT id FROM messages WHERE session_id=? AND role='assistant' AND source=? "
+            "AND julianday(created_at)>=julianday(?) ORDER BY id DESC LIMIT 1",
+            (session_id, source, chat_history_cutoff()),
         ).fetchone()
         if not row:
             return False
@@ -448,20 +471,27 @@ def replace_last_assistant_message(session_id: str, content: str, source: str = 
         return True
 
 
-def get_messages(session_id: str, limit: int = 30, source: str | None = None) -> list[dict[str, str]]:
-    """Recent messages; source must be supplied for interactive channel isolation."""
+def get_messages(
+    session_id: str, limit: int = 30, source: str | None = None, *,
+    include_created_at: bool = False,
+) -> list[dict[str, str]]:
+    """Today's messages only; optional timestamps for Web UI, not agent prompts."""
+    columns = "role,content,created_at" if include_created_at else "role,content"
+    cutoff = chat_history_cutoff()
     with conn() as c:
         if source is None:
             rows = c.execute(
-                "SELECT role,content FROM messages WHERE session_id=? ORDER BY id DESC LIMIT ?",
-                (session_id, limit),
+                f"SELECT {columns} FROM messages WHERE session_id=? "
+                "AND julianday(created_at)>=julianday(?) ORDER BY id DESC LIMIT ?",
+                (session_id, cutoff, limit),
             ).fetchall()
         else:
             rows = c.execute(
-                "SELECT role,content FROM messages WHERE session_id=? AND source=? ORDER BY id DESC LIMIT ?",
-                (session_id, source, limit),
+                f"SELECT {columns} FROM messages WHERE session_id=? AND source=? "
+                "AND julianday(created_at)>=julianday(?) ORDER BY id DESC LIMIT ?",
+                (session_id, source, cutoff, limit),
             ).fetchall()
-    return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+    return [dict(r) for r in reversed(rows)]
 
 
 def get_older_session_messages(session_id: str, source: str, *, skip: int, limit: int) -> list[dict[str, str]]:
@@ -471,8 +501,9 @@ def get_older_session_messages(session_id: str, source: str, *, skip: int, limit
     with conn() as c:
         rows = c.execute(
             "SELECT role,substr(content,1,4000) AS content FROM messages "
-            "WHERE session_id=? AND source=? ORDER BY id DESC LIMIT ? OFFSET ?",
-            (session_id, source, max(0, limit), max(0, skip)),
+            "WHERE session_id=? AND source=? AND julianday(created_at)>=julianday(?) "
+            "ORDER BY id DESC LIMIT ? OFFSET ?",
+            (session_id, source, chat_history_cutoff(), max(0, limit), max(0, skip)),
         ).fetchall()
     return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
 
@@ -500,7 +531,8 @@ def read_session_device_focus(session_id: str, source: str, ttl_minutes: int = 6
             "SELECT device_id,updated_at FROM session_device_focus WHERE session_id=? AND source=?",
             (session_id, source),
         ).fetchone()
-    if not row or int(row["updated_at"]) < time.time() - max(1, ttl_minutes) * 60:
+    today_start = local_now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    if not row or int(row["updated_at"]) < max(today_start, time.time() - max(1, ttl_minutes) * 60):
         return ""
     return str(row["device_id"] or "")
 

@@ -3,6 +3,8 @@ import ipaddress
 import re
 import secrets
 import threading
+import weakref
+from contextlib import contextmanager
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from typing import Any
@@ -22,6 +24,34 @@ _password_hasher = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=2,
 _dummy_password_hash = _password_hasher.hash("HassMindDummyPasswordTimingOnly-DoNotUse")
 _rate_lock = threading.Lock()
 _rate_events: dict[str, deque[float]] = defaultdict(deque)
+# Bound both Argon2 workload and the in-memory failure bookkeeping. Without
+# admission control many concurrent bad logins can exhaust worker threads/CPU.
+_auth_global_slots = threading.BoundedSemaphore(6)
+_auth_slots_lock = threading.Lock()
+_auth_ip_slots: weakref.WeakValueDictionary[str, threading.BoundedSemaphore] = weakref.WeakValueDictionary()
+_RATE_MAX_KEYS = 10000
+
+
+@contextmanager
+def _auth_slot(ip: str):
+    if not _auth_global_slots.acquire(blocking=False):
+        raise HTTPException(429, "Máy chủ đang xử lý nhiều yêu cầu xác thực. Hãy thử lại sau.")
+    local_slot = None
+    acquired = False
+    try:
+        with _auth_slots_lock:
+            # A bounded list, protected against untrusted client IP churn.
+            if ip not in _auth_ip_slots and len(_auth_ip_slots) >= 2048:
+                raise HTTPException(429, "Quá nhiều yêu cầu xác thực. Hãy thử lại sau.")
+            local_slot = _auth_ip_slots.setdefault(ip, threading.BoundedSemaphore(2))
+        acquired = local_slot.acquire(blocking=False)
+        if not acquired:
+            raise HTTPException(429, "Quá nhiều yêu cầu xác thực đồng thời. Hãy thử lại sau.")
+        yield
+    finally:
+        if acquired:
+            local_slot.release()
+        _auth_global_slots.release()
 
 
 def _now() -> datetime:
@@ -68,14 +98,33 @@ def verify_password(hash_value: str, password: str) -> bool:
         return False
 
 
+def _purge_rate_keys(now: float, window_seconds: int) -> None:
+    # Keep entries only within the longest relevant auth window; cap the scan
+    # to an occasional maintenance pass rather than each incoming request.
+    if len(_rate_events) < _RATE_MAX_KEYS:
+        return
+    cutoff = now - max(window_seconds, settings.login_lock_minutes * 60)
+    for name, events in list(_rate_events.items()):
+        while events and events[0] <= cutoff:
+            events.popleft()
+        if not events:
+            _rate_events.pop(name, None)
+
+
 def _rate_limited(key: str, max_events: int, window_seconds: int) -> bool:
     import time
 
     now = time.monotonic()
     with _rate_lock:
-        q = _rate_events[key]
+        _purge_rate_keys(now, window_seconds)
+        q = _rate_events.get(key)
+        if q is None:
+            return len(_rate_events) >= _RATE_MAX_KEYS
         while q and q[0] <= now - window_seconds:
             q.popleft()
+        if not q:
+            _rate_events.pop(key, None)
+            return len(_rate_events) >= _RATE_MAX_KEYS
         return len(q) >= max_events
 
 
@@ -83,7 +132,8 @@ def _record_rate_failure(key: str) -> None:
     import time
 
     with _rate_lock:
-        _rate_events[key].append(time.monotonic())
+        if key in _rate_events or len(_rate_events) < _RATE_MAX_KEYS:
+            _rate_events[key].append(time.monotonic())
 
 
 def _clear_rate_failures(key: str) -> None:
@@ -147,6 +197,11 @@ def _audit(event: str, *, username: str = "", user_id: int | None = None, ip: st
 
 
 def login(username: str, password: str, request: Request) -> tuple[dict[str, Any], str, str]:
+    with _auth_slot(client_ip(request)):
+        return _login_impl(username, password, request)
+
+
+def _login_impl(username: str, password: str, request: Request) -> tuple[dict[str, Any], str, str]:
     username = _clean_username(username)
     ip = client_ip(request)
     user_rate_key = f"login:{ip}:{username.lower()}"
@@ -325,6 +380,11 @@ def change_username(user_id: int, current_password: str, new_username: str, requ
 
 
 def reset_password(username: str, recovery_key: str, new_password: str, request: Request) -> None:
+    with _auth_slot(client_ip(request)):
+        return _reset_password_impl(username, recovery_key, new_password, request)
+
+
+def _reset_password_impl(username: str, recovery_key: str, new_password: str, request: Request) -> None:
     ip = client_ip(request)
     rate_key = f"reset:{ip}"
     if _rate_limited(rate_key, 5, settings.login_lock_minutes * 60):
@@ -406,6 +466,23 @@ def list_auth_audit(limit: int = 50) -> list[dict[str, Any]]:
             (limit,),
         ).fetchall()
     return [dict(r) for r in rows]
+
+def list_auth_audit_page(page: int = 1, page_size: int = 20) -> dict[str, Any]:
+    """Server-side paging avoids downloading thousands of security events."""
+    page_size = max(1, min(int(page_size), 200))
+    page = max(1, int(page))
+    with conn() as c:
+        total = c.execute("SELECT COUNT(*) FROM auth_audit").fetchone()[0]
+        pages = max(1, (total + page_size - 1) // page_size)
+        page = min(page, pages)
+        rows = c.execute(
+            "SELECT event,username,ip,success,details,created_at "
+            "FROM auth_audit ORDER BY id DESC LIMIT ? OFFSET ?",
+            (page_size, (page - 1) * page_size),
+        ).fetchall()
+    return {"items": [dict(r) for r in rows], "page": page,
+            "page_size": page_size, "total": total, "pages": pages}
+
 
 def cleanup_sessions() -> None:
     now = _now()

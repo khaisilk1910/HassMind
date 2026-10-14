@@ -7,6 +7,7 @@ import platform
 import secrets
 import sys
 import uuid
+from datetime import datetime, time as dt_time, timedelta, timezone
 from contextlib import asynccontextmanager
 from pathlib import Path
 from time import perf_counter
@@ -30,6 +31,7 @@ from .auth import (
     ensure_bootstrap_admin,
     list_sessions,
     list_auth_audit,
+    list_auth_audit_page,
     login as admin_login,
     logout as admin_logout,
     reset_password,
@@ -39,9 +41,10 @@ from .auth import (
     session_from_request,
     require_session,
 )
-from .db import add_event, conn, get_messages, init_db, list_approvals, list_event_rules, list_event_rules_page, list_jobs, list_jobs_page, normalize_stored_timestamps, recent_events, recent_tool_audit, scrub_sensitive_audit_history
+from .db import add_event, cleanup_chat_history, conn, get_messages, init_db, list_approvals, list_event_rules, list_event_rules_page, list_jobs, list_jobs_page, normalize_stored_timestamps, recent_events, recent_tool_audit, scrub_sensitive_audit_history
 from .event_engine import handle_state_event, set_rule_enabled, update_event_rule
 from .error_memory import list_recent_issues
+from .http_security import permitted_host, permitted_origin, admit_webhook_request
 from .ha import HomeAssistantClient
 from .ha_integrations import HAIntegrationBridge
 from .integration_config import integration_config_view, load_runtime_integration_overrides, reset_integration_config, save_integration_config
@@ -69,7 +72,7 @@ from . import knowledge_governance as knowledge
 from . import device_catalog
 from .scheduler import scheduler_loop, set_job_enabled, update_job
 from .settings import settings
-from .time_utils import configure_process_timezone, timezone_name
+from .time_utils import configure_process_timezone, local_tz, now as local_now, timezone_name
 from .skills import (
     create_skill, delete_skill, list_skill_versions, list_skills, read_skill,
     rollback_skill, set_skill_enabled, test_skill, update_skill, validate_skill_content, compose_skill,
@@ -80,7 +83,7 @@ from .tools import ToolRuntime
 os.umask(0o077)
 configure_process_timezone()
 
-APP_VERSION = "1.5.6"
+APP_VERSION = "1.5.9"
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 setup_logging()
@@ -467,6 +470,24 @@ async def _sync_zalo_webhook_registration_task() -> None:
         info(logger, "zalo_webhook_registration_task_stopped")
 
 
+async def chat_history_cleanup_loop(stop: asyncio.Event) -> None:
+    """Purge at the next midnight in the configured application timezone."""
+    while not stop.is_set():
+        run_day = local_now().date()
+        try:
+            await asyncio.to_thread(cleanup_chat_history)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            exception(logger, "chat_history_cleanup_failed")
+        midnight = datetime.combine(run_day + timedelta(days=1), dt_time.min, tzinfo=local_tz())
+        delay = max(1, (midnight.astimezone(timezone.utc) - local_now().astimezone(timezone.utc)).total_seconds())
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=delay)
+        except asyncio.TimeoutError:
+            pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global ha, agent, tasks, integrations
@@ -491,6 +512,7 @@ async def lifespan(app: FastAPI):
         init_db()
         await asyncio.to_thread(knowledge.recover_interrupted)
         await asyncio.to_thread(normalize_stored_timestamps)
+        await asyncio.to_thread(cleanup_chat_history)
         load_runtime_integration_overrides()
         scrub_sensitive_audit_history()
         ensure_bootstrap_admin()
@@ -508,6 +530,7 @@ async def lifespan(app: FastAPI):
         tasks = [
             asyncio.create_task(ha.listen_events(event_callback, stop_event), name="ha-events"),
             asyncio.create_task(scheduler_loop(stop_event, run_prompt), name="scheduler"),
+            asyncio.create_task(chat_history_cleanup_loop(stop_event), name="chat-history-cleanup"),
             asyncio.create_task(telegram_supervisor(stop_event, lambda sid, text, src: agent.chat(sid, text, src)), name="telegram-supervisor"),
             asyncio.create_task(knowledge.monitor_loop(stop_event, ha, integrations), name="knowledge-monitor"),
         ]
@@ -565,33 +588,50 @@ async def request_observability(request: Request, call_next):
     path = request.url.path
     admin_surface = path == "/" or path == "/login" or path == "/favicon.svg" or path.startswith("/static/") or path.startswith("/api/")
     with log_context(request_id=request_id, source="http", component="api"):
-        if admin_surface and not client_ip_allowed(request):
+        body_limit = (16384 if path in {"/api/auth/login", "/api/auth/reset-password"}
+                      else 131072 if path.startswith("/webhooks/zalo/")
+                      else 65536 if path == "/api/chat"
+                      else 12582912 if path == "/api/knowledge/proposals"
+                      else settings.max_request_body_bytes)
+        content_length = request.headers.get("content-length")
+        invalid_length = False
+        if content_length is not None:
+            try:
+                invalid_length = int(content_length) < 0 or int(content_length) > body_limit
+            except ValueError:
+                invalid_length = True
+        if invalid_length:
+            response = JSONResponse(status_code=413, content={"detail": "Request body too large"})
+        elif admin_surface and not permitted_host(request.headers.get("host", "")):
+            warning(logger, "admin_host_denied", client_ip=remote_ip)
+            response = JSONResponse(status_code=400, content={"detail": "Untrusted Host header"})
+        elif admin_surface and request.method.upper() not in SAFE_METHODS and not permitted_origin(
+            request.headers.get("host", ""), request.headers.get("origin"), request.headers.get("sec-fetch-site")
+        ):
+            warning(logger, "admin_origin_denied", client_ip=remote_ip)
+            response = JSONResponse(status_code=403, content={"detail": "Cross-origin action is not allowed"})
+        elif admin_surface and not client_ip_allowed(request):
             warning(logger, "admin_network_denied", client_ip=remote_ip, path=path)
             response = JSONResponse(status_code=403, content={"detail": "Access from this network is not allowed", "request_id": request_id})
         else:
-            info(
-                logger,
-                "http_request_started",
-                method=request.method,
-                url=safe_url,
-                query_keys=query_keys,
-                client_ip=remote_ip,
-                user_agent=(request.headers.get("user-agent") or "")[:500],
-                component="api",
-            )
-            try:
-                response = await call_next(request)
-            except Exception:
-                exception(
-                    logger,
-                    "http_request_unhandled_exception",
-                    message="Unhandled exception while processing HTTP request",
-                    method=request.method,
-                    url=safe_url,
-                    client_ip=remote_ip,
-                    duration_ms=round((perf_counter() - started) * 1000, 2),
-                )
-                raise
+            # Verify actual streamed bytes as well as Content-Length; chunked
+            # transfer encoding must not bypass the request-size guard.
+            if request.method.upper() not in SAFE_METHODS:
+                parts = []
+                actual = 0
+                async for chunk in request.stream():
+                    actual += len(chunk)
+                    if actual > body_limit:
+                        response = JSONResponse(status_code=413, content={"detail": "Request body too large"})
+                        break
+                    parts.append(chunk)
+                else:
+                    request._body = b"".join(parts)
+                    response = None
+            else:
+                response = None
+            if response is None:
+                response = await _dispatch_observed_request(request, call_next, started, safe_url, query_keys, remote_ip, logger)
         response.headers["X-Request-ID"] = request_id
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
@@ -616,6 +656,32 @@ async def request_observability(request: Request, call_next):
             component="api",
         )
         return response
+
+
+async def _dispatch_observed_request(request, call_next, started, safe_url, query_keys, remote_ip, logger):
+    info(
+        logger,
+        "http_request_started",
+        method=request.method,
+        url=safe_url,
+        query_keys=query_keys,
+        client_ip=remote_ip,
+        user_agent=(request.headers.get("user-agent") or "")[:500],
+        component="api",
+    )
+    try:
+        return await call_next(request)
+    except Exception:
+        exception(
+            logger,
+            "http_request_unhandled_exception",
+            message="Unhandled exception while processing HTTP request",
+            method=request.method,
+            url=safe_url,
+            client_ip=remote_ip,
+            duration_ms=round((perf_counter() - started) * 1000, 2),
+        )
+        raise
 
 
 @app.exception_handler(Exception)
@@ -799,7 +865,7 @@ async def health():
 
 @app.post("/api/auth/login")
 async def auth_login(body: LoginIn, request: Request):
-    user, raw_session, raw_csrf = admin_login(body.username, body.password, request)
+    user, raw_session, raw_csrf = await asyncio.to_thread(admin_login, body.username, body.password, request)
     response = JSONResponse({"ok": True, "user": user, "csrf_token": raw_csrf})
     max_age = settings.admin_session_ttl_minutes * 60
     response.set_cookie(
@@ -855,20 +921,20 @@ async def auth_me(request: Request):
 @app.post("/api/auth/change-password", dependencies=[Depends(require_admin)])
 async def auth_change_password(body: PasswordChangeIn, request: Request):
     session = request.state.admin_session
-    change_password(session["user_id"], body.current_password, body.new_password, request)
+    await asyncio.to_thread(change_password, session["user_id"], body.current_password, body.new_password, request)
     return {"ok": True}
 
 
 @app.post("/api/auth/change-username", dependencies=[Depends(require_admin)])
 async def auth_change_username(body: UsernameChangeIn, request: Request):
     session = request.state.admin_session
-    username = change_username(session["user_id"], body.current_password, body.new_username, request)
+    username = await asyncio.to_thread(change_username, session["user_id"], body.current_password, body.new_username, request)
     return {"ok": True, "username": username}
 
 
 @app.post("/api/auth/reset-password")
 async def auth_reset_password(body: PasswordResetIn, request: Request):
-    reset_password(body.username, body.recovery_key, body.new_password, request)
+    await asyncio.to_thread(reset_password, body.username, body.recovery_key, body.new_password, request)
     return {"ok": True}
 
 
@@ -885,8 +951,15 @@ async def auth_revoke_sessions(request: Request):
 
 
 @app.get("/api/auth/audit", dependencies=[Depends(require_admin)])
-async def auth_audit(limit: int = 50):
-    return list_auth_audit(limit)
+async def auth_audit(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200),
+    limit: int | None = Query(default=None, ge=1, le=200),
+):
+    # Preserve the older array response when an existing client uses ?limit=.
+    if limit is not None:
+        return list_auth_audit(limit)
+    return list_auth_audit_page(page, page_size)
 
 
 @app.get("/api/settings/security", dependencies=[Depends(require_admin)])
@@ -1247,7 +1320,7 @@ async def integration_status():
 
 
 @app.post("/webhooks/zalo/{secret}")
-async def zalo_webhook(secret: str, payload: dict[str, Any]):
+async def zalo_webhook(secret: str, payload: dict[str, Any], request: Request):
     if not settings.zalo_enabled or not settings.zalo_webhook_enabled:
         raise HTTPException(404, "Webhook disabled")
     expected = settings.read_zalo_webhook_secret()
@@ -1255,7 +1328,11 @@ async def zalo_webhook(secret: str, payload: dict[str, Any]):
         warning(logger, "zalo_webhook_auth_failed")
         raise HTTPException(404, "Webhook not found")
 
-    thread_id = str(payload.get("threadId") or payload.get("thread_id") or "")
+    if not admit_webhook_request(client_ip(request)):
+        raise HTTPException(429, "Webhook rate limit exceeded")
+    if len([t for t in webhook_tasks if t.get_name().startswith("zalo:") and not t.done()]) >= 16:
+        raise HTTPException(429, "Too many pending webhook replies")
+    thread_id = str(payload.get("threadId") or payload.get("thread_id") or "")[:255]
     add_event("zalo_message", thread_id or None, payload)
 
     text = _extract_zalo_text(payload)
@@ -1297,7 +1374,7 @@ async def chat(body: ChatIn):
 
 @app.get("/api/messages/{session_id}", dependencies=[Depends(require_access)])
 async def messages(session_id: str):
-    return get_messages(session_id, 100, source="web")
+    return get_messages(session_id, 100, source="web", include_created_at=True)
 
 
 @app.get("/api/events", dependencies=[Depends(require_access)])
@@ -1787,4 +1864,6 @@ if __name__ == "__main__":
         access_log=False,
         log_config=None,
         server_header=False,
+        # Never let spoofed X-Forwarded-For change the client IP used by ACLs.
+        proxy_headers=False,
     )

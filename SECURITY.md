@@ -143,3 +143,16 @@ Container không mount Docker socket, không chạy privileged và không cần 
 - Không expose port 8090 ra Internet; dùng VPN/HTTPS reverse proxy nếu truy cập từ xa.
 - Khi dùng HTTPS, bật `ADMIN_COOKIE_SECURE=true`.
 - Xoay HA token/LLM key/API token nếu nghi ngờ từng bị ghi vào log cũ.
+
+
+## HassMind v1.5.9 — hardening bổ sung
+
+- **Telegram (ưu tiên khẩn):** `TELEGRAM_ALLOWED_CHAT_IDS` để trống giờ từ chối tất cả tin nhắn, thay vì chấp nhận bất kỳ người nhắn bot. Trong chat riêng, `from.id` phải trùng `chat.id`. Group/supergroup phải đồng thời có Chat ID và `TELEGRAM_ALLOWED_USER_IDS`; tin từ bot, anonymous admin/sender_chat và kênh không được cho phép. Tin nhắn thiếu timestamp hoặc cũ hơn `TELEGRAM_MAX_MESSAGE_AGE_SECONDS` (mặc định 300) bị bỏ qua để chống phát lại lệnh cũ. Cấu hình trong Web Admin → Integrations → Telegram hoặc `.env`.
+- **Host/DNS rebinding:** Giao diện admin mặc định chỉ nhận IP private/loopback, `localhost`, hostname nội bộ một nhãn, `.local` và `.home.arpa`. Với DNS/FQDN khác đi qua HTTPS reverse proxy, **bắt buộc** khai báo `ADMIN_ALLOWED_HOSTS=dashboard.example.net` (danh sách hostname phân tách bằng dấu phẩy, không kèm scheme/port). Không dùng wildcard. Các request không hợp lệ bị 400 trước xử lý.
+- **Origin:** Request thay đổi trạng thái từ browser bị từ chối nếu `Origin` không khớp host (và port khi khai báo) hoặc `Sec-Fetch-Site=cross-site`. Không bắt buộc Origin cho script/API client không phải trình duyệt; xác thực API token / session+CSRF vẫn bắt buộc.
+- **Proxy / IP spoof:** Lệnh khởi chạy tích hợp `python -m app.main` dùng `uvicorn.run(proxy_headers=False)` nên không tin giá trị `X-Forwarded-For` do client đặt. Nếu chạy uvicorn thủ công, cũng phải thêm `--no-proxy-headers`. Kiểm tra ACL/VPN tại proxy; `ADMIN_ALLOWED_NETWORKS` luôn đối chiếu IP kết nối TCP, là IP của proxy nếu đứng sau proxy.
+- **Request body:** kiểm tra cả `Content-Length` và số byte stream thực tế. Login/reset tối đa 16 KiB, chat 64 KiB, Zalo webhook 128 KiB, Knowledge proposal 12 MiB, các API khác mặc định 2 MiB (`MAX_REQUEST_BODY_BYTES`). Request quá lớn trả 413. Webhook hợp lệ tối đa 120 request/phút/IP và 16 reply tasks đang chạy.
+- **Anti-DoS xác thực:** chuyển Argon2 login/reset/password-change ra thread thay vì chặn event loop; toàn bộ login/reset đồng thời tối đa 6, mỗi IP 2; các key rate-limit được dọn dẹp/giới hạn bộ nhớ. Không thay thế rate-limit biên mạng của reverse proxy/firewall.
+- **Secret filesystem:** thay `.tmp` cố định bằng file tạm ngẫu nhiên trong cùng thư mục, mode 0600, fsync và atomic rename; chặn tên secret có path traversal, không ghi đè qua symlink.
+
+**Sau nâng cấp:** Xem lại Telegram Allowed Chat IDs và Allowed User IDs, kiểm tra tên miền admin ở `ADMIN_ALLOWED_HOSTS`, bật HTTPS + `ADMIN_COOKIE_SECURE=true`, giới hạn Internet vào dịch vụ qua firewall/VPN và xoay các credential từng có khả năng bị lộ. Đây là hardening trên mã nguồn, không phải chứng chỉ audit/kiểm thử xâm nhập production.
