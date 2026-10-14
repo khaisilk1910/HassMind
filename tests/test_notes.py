@@ -95,7 +95,9 @@ def test_tags_search_accents_and_list(note_db):
     assert notes.search_notes('bao duong dieu hoa')[0]['id'] == one['id']
     assert notes.search_notes('baoTri')[0]['id'] == one['id']
     listed = notes.respond_to_note_command('Liệt kê ghi chú')
-    assert len(listed['notes']) == 2
+    assert listed['mode'] == 'list'
+    assert listed['total'] == 2
+    assert listed['notes'] == []
     assert notes.respond_to_note_command('Xem ghi chú #'+two['id'])['notes'][0]['id'] == two['id']
 
 
@@ -143,7 +145,8 @@ def test_precise_vietnamese_note_search_does_not_return_unrelated_photos(note_db
     assert [x['id'] for x in notes.respond_to_note_command('tìm ghi chú thuốc giảm đau')['notes']] == [pain['id']]
     assert [x['id'] for x in notes.respond_to_note_command('tìm ghi chú nhà thờ tổ')['notes']] == [church['id']]
     assert {x['id'] for x in notes.respond_to_note_command('tìm ghi chú thuốc')['notes']} == {pain['id'], sleep['id']}
-    assert {x['id'] for x in notes.respond_to_note_command('danh sách ghi chú')['notes']} == {pain['id'], sleep['id'], church['id']}
+    assert notes.respond_to_note_command('danh sach ghi chu')['total'] == 3
+    assert notes.respond_to_note_command('danh sach ghi chu')['notes'] == []
     assert notes.respond_to_note_command('tìm ghi chú thuốc cảm lạnh')['notes'] == []
 
 

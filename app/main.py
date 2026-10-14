@@ -85,7 +85,7 @@ from .tools import ToolRuntime
 os.umask(0o077)
 configure_process_timezone()
 
-APP_VERSION = "1.5.18"
+APP_VERSION = "1.5.19"
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 setup_logging()
@@ -587,7 +587,11 @@ async def _process_zalo_message(payload: dict[str, Any]) -> None:
                     # Multi-photo notes use the stored original files, never a collage.
                     # The companion handles the caption according to zca-js limits.
                     is_retrieval = (command is None or command[0] in ('show', 'search', 'list'))
-                    if is_retrieval and any(n.get('images') for n in note_result['notes']):
+                    if note_result.get('mode') == 'list':
+                        # Catalogue replies never send attachments, even when
+                        # the underlying notes contain photos.
+                        await send_text(note_result['answer'])
+                    elif is_retrieval and any(n.get('images') for n in note_result['notes']):
                         text_only_notes = [n for n in note_result['notes'] if not n.get('images')]
                         if text_only_notes:
                             await send_text('\n\n---\n\n'.join(notes.note_response(n) for n in text_only_notes))

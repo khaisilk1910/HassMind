@@ -125,6 +125,36 @@ def list_notes(limit: int = 50, offset: int = 0) -> dict:
         return {'total': total, 'items': [_serialize(c, row) for row in rows]}
 
 
+
+def list_note_summaries() -> list[dict]:
+    """All saved notes with per-note attachment counts, without loading photos.
+
+    This is deliberately distinct from the rich note retrieval used by search
+    and show: listing a catalogue must never include image URLs or note bodies.
+    """
+    with conn() as c:
+        rows = c.execute('''
+            SELECT n.id, n.title, n.pinned, COUNT(i.id) AS image_count
+            FROM notes AS n LEFT JOIN note_images AS i ON i.note_id=n.id
+            GROUP BY n.id
+            ORDER BY n.pinned DESC, n.updated_at DESC, n.id DESC
+        ''').fetchall()
+        return [dict(row) for row in rows]
+
+
+def note_list_response(items: list[dict]) -> str:
+    """Compact textual index for Zalo and Web Chat; NEVER embed note media."""
+    if not items:
+        return '📚 Chưa có ghi chú nào được lưu.'
+    lines = [f'📚 **Danh sách ghi chú ({len(items)}):**']
+    for number, item in enumerate(items, 1):
+        count = int(item['image_count'])
+        photo_label = f' · 📷 {count} ảnh' if count else ''
+        lines.append(f'{number}. **{item["title"]}**{photo_label}\n   Mã: `{item["id"]}`')
+    lines.append('\n🔎 Xem chi tiết: `Xem ghi chú #MÃ` hoặc `Tìm ghi chú ...`')
+    return '\n\n'.join(lines)
+
+
 def _words(value: str) -> list[str]:
     """Accented Vietnamese is folded, then matched on complete word boundaries.
 
@@ -352,7 +382,12 @@ _SEARCH = re.compile(r'^\s*(?:tìm(?:\s+lại)?\s+ghi\s+chú|tra\s+(?:cứu\s+)?
 # Apply this only to retrieval intentions; do not reinterpret "ghi chu: ..."
 # as a create command and do not mutate the stored original content.
 _SEARCH_PLAIN = re.compile(r'^\s*(?:tim(?:\s+lai)?\s+ghi\s+chu|tra(?:\s+cuu)?\s+ghi\s+chu|xem(?:\s+lai)?\s+ghi\s+chu|cho\s+(?:toi|minh)\s+xem\s+ghi\s+chu)\s*[:：,\-]?\s*(.*)$', re.I | re.S)
-_LIST_PLAIN = re.compile(r'^\s*(?:danh\s+sach|liet\s+ke|tat\s+ca|toan\s+bo|xem\s+tat\s+ca)\s+(?:cac\s+)?ghi\s+chu\s*[?!.]*\s*$', re.I)
+_LIST_PLAIN = re.compile(
+    r'^\s*(?:hay\s+)?(?:cho\s+(?:toi|minh)\s+)?(?:(?:xem|hien\s+thi)\s+)?'
+    r'(?:(?:danh\s+sach|liet\s+ke|tat\s+ca|toan\s+bo)'
+    r'(?:\s+(?:tat\s+ca|toan\s+bo))?|cac)'
+    r'\s+(?:cac\s+)?ghi\s+chu(?:\s+(?:da\s+luu|hien\s+co|cua\s+toi))?'
+    r'\s*[?!.]*\s*$', re.I)
 _LIST = re.compile(r'^\s*(?:danh\s+sách|liệt\s+kê|tất\s+cả|toàn\s+bộ|xem\s+tất\s+cả)\s+(?:các\s+)?ghi\s+chú\s*[?!.]*\s*$', re.I)
 _ID = re.compile(r'^\s*(?:xem|mở|đọc|tìm)\s+ghi\s+chú\s*#?([a-f0-9]{16})\s*[?.!]*$', re.I)
 _EDIT = re.compile(r'^\s*(?:sửa|cập\s+nhật)\s+ghi\s+chú\s*#([a-f0-9]{16})\s*[:：]\s*(.+)$', re.I | re.S)
@@ -377,7 +412,7 @@ def parse_note_command(message: str) -> tuple[str, str] | None:
                 return 'attach', match.group(1).lower() + ':' + (match.group(2) or '').strip()
             return action, match.group(1).lower() + ':' + match.group(2).strip()
     plain = fold(s)
-    if _LIST.fullmatch(s) or _LIST_PLAIN.fullmatch(plain) or plain in ('ghi chu', 'cac ghi chu', 'notes'):
+    if _LIST_PLAIN.fullmatch(plain) or plain in ('ghi chu', 'cac ghi chu', 'notes'):
         return 'list', ''
     m = _ID.match(s)
     if m:
@@ -461,10 +496,16 @@ def respond_to_note_command(message: str, images: list[tuple[bytes, str]] | None
         if action == 'show':
             note = get_note(payload)
             return {'answer': note_response(note) if note else 'Không tìm thấy ghi chú có mã này.', 'notes': [note] if note else []}
-        if action == 'list' or (action == 'search' and not clean_search_query(payload)):
-            found = list_notes(20)['items']
-        else:
-            found = search_notes(clean_search_query(payload), 8)
+        if action == 'list':
+            # Listing is an INDEX, not a retrieval. A rich `notes` response
+            # triggers image rendering on Web and Zalo, so keep it empty.
+            summaries = list_note_summaries()
+            return {'answer': note_list_response(summaries), 'notes': [],
+                    'mode': 'list', 'total': len(summaries)}
+        if action == 'search' and not clean_search_query(payload):
+            return {'answer': 'Hãy nhập từ khóa sau "Tìm ghi chú", hoặc gửi "Danh sách ghi chú".',
+                    'notes': []}
+        found = search_notes(clean_search_query(payload), 8)
         if not found:
             return {'answer': 'Không tìm thấy ghi chú phù hợp. Hãy thử dùng một từ khóa cụ thể hơn hoặc mở mục Ghi chú để tìm kiếm.', 'notes': []}
         # Return original content and original images: never fabricate answers.

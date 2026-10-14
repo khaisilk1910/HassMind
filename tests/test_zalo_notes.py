@@ -617,3 +617,39 @@ async def test_zalo_precise_note_search_only_sends_matching_stored_photo(tmp_pat
     assert len(zalo.sent) == 2
     assert 'Không tìm thấy ghi chú' in zalo.sent[-1]['message']
     assert not zalo.sent[-1].get('_is_image')
+
+
+@pytest.mark.asyncio
+async def test_zalo_listing_sends_all_note_titles_and_counts_but_no_photos(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, 'db_path', str(tmp_path / 'hassmind.db'))
+    monkeypatch.setattr(settings, 'zalo_agent_reply_enabled', True)
+    monkeypatch.setattr(settings, 'zalo_allow_send', True)
+    monkeypatch.setattr(settings, 'zalo_agent_allowed_thread_ids', '123')
+    monkeypatch.setattr(settings, 'zalo_media_base_url', 'http://hassmind:8090')
+    monkeypatch.setattr(settings, 'zalo_webhook_secret', 'secret-for-list-test')
+    monkeypatch.setattr(settings, 'zalo_webhook_secret_file', '')
+    db.init_db()
+    pain = notes.create_note('Pain sample', 'private medicine detail', images=[(photo(), 'pain.png')])
+    sleep = notes.create_note('Sleep sample', 'private prescription detail',
+                              images=[(photo(), 'a.png'), (photo(), 'b.png')])
+    church = notes.create_note('Family building', 'private family detail')
+    handle, zalo = build_chat_handler()
+    await handle({'threadId': '123', 'msgId': 'list-index-1',
+                  'message': 'li\u1ec7t k\u00ea t\u1ea5t c\u1ea3 ghi ch\u00fa'})
+    assert zalo.sent
+    assert all(not s.get('_is_image') and not s.get('_is_images') for s in zalo.sent)
+    all_text = '\n'.join(item['message'] for item in zalo.sent)
+    for note in (pain, sleep, church):
+        assert note['title'] in all_text
+        assert note['content'] not in all_text
+        assert note['id'] in all_text
+    assert '2 \u1ea3nh' in all_text and '1 \u1ea3nh' in all_text
+    assert '/media/zalo-note-images/' not in all_text
+    assert len(zalo.sent) <= 3
+
+    await handle({'threadId': '123', 'msgId': 'find-one-2',
+                  'message': 't\u00ecm ghi ch\u00fa Sleep sample'})
+    images = [item for item in zalo.sent if item.get('_is_image') or item.get('_is_images')]
+    assert len(images) == 1
+    assert images[0]['_is_images'] is True
+    assert len(images[0]['image_urls']) == 2
