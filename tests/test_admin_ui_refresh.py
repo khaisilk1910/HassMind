@@ -40,3 +40,12 @@ def test_visual_assets_and_reduced_motion_are_versioned():
     assert '.guide-accordion' in CSS
     assert '.settings-switcher' in CSS
     assert '.auth-audit-scroll' in CSS
+
+
+def test_settings_security_cards_span_six_tracks_and_stack_on_narrow_viewports():
+    """Regression: single-track security cards rendered as unreadably thin strips."""
+    assert '.settings-security-grid>.card {min-width:0;grid-column:span 6}' in CSS
+    assert '.settings-security-grid>.card{grid-column:span 12}' in CSS
+    assert '.settings-stack>.card,.settings-security-grid>.card {min-width:0;grid-column:auto}' not in CSS
+    assert '.settings-security-grid .kv{grid-template-columns:1fr}' in CSS
+    assert '.settings-security-grid .item .small-text,.settings-security-grid .security-note {overflow-wrap:anywhere}' in CSS

@@ -1,4 +1,4 @@
-/* HassMind 1.5.8 · Aurora Admin UI. Presentation only; no server dependencies. */
+/* HassMind 1.5.10 · Aurora Admin UI. Presentation only; no server dependencies. */
 :root {
   --bg: #080f1d;
   --surface: #101d2d;
@@ -264,8 +264,13 @@ tr.log-row:hover {background:#1c344b}
 .settings-category:not([hidden]) {animation:panelEnter .26s ease-out both}
 .settings-access-grid {display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:17px;align-items:start}
 .settings-stack {display:grid;gap:17px;align-content:start;min-width:0}
-.settings-stack>.card,.settings-security-grid>.card {min-width:0;grid-column:auto}
+/* Each security card must occupy six of the 12 grid tracks on desktop.
+   A prior `grid-column:auto` collapsed these cards to a single ~1/12-width track. */
+.settings-stack>.card {min-width:0;grid-column:auto}
 .settings-security-grid {align-items:start}
+.settings-security-grid>.card {min-width:0;grid-column:span 6}
+.settings-security-grid .kv {grid-template-columns:minmax(0,170px) minmax(0,1fr)}
+.settings-security-grid .item .small-text,.settings-security-grid .security-note {overflow-wrap:anywhere}
 #settingsAudit>.card {width:100%}
 @media(max-width:1100px){.settings-access-grid {grid-template-columns:1fr}.settings-switcher{gap:9px}.settings-switch{padding:12px;gap:8px}.settings-switch-number{width:30px;height:30px}.settings-security-grid>.card{grid-column:span 12}}
-@media(max-width:700px){.settings-switcher{grid-template-columns:1fr;gap:9px}.settings-switch{padding:12px 14px}.settings-switch-number{width:34px;height:34px}}
+@media(max-width:700px){.settings-switcher{grid-template-columns:1fr;gap:9px}.settings-switch{padding:12px 14px}.settings-switch-number{width:34px;height:34px}.settings-security-grid .kv{grid-template-columns:1fr}}

@@ -1,7 +1,7 @@
 {
-  "version": "1.5.9",
-  "baseline": "HassMind-v1.5.8-modern-admin-ui.zip",
-  "release_type": "security_hardening",
+  "version": "1.5.10",
+  "baseline": "HassMind-v1.5.9-security-hardened.zip",
+  "release_type": "ui_layout_bugfix",
   "security_fixes": [
     "telegram_fail_closed_chat_and_sender_authorization",
     "telegram_message_age_bound",
@@ -12,17 +12,23 @@
     "atomic_secret_write_random_private_tempfile"
   ],
   "qa": {
-    "python_passed": 243,
-    "python_skipped": 1,
-    "python_subtests_passed": 12,
+    "python_targeted_passed": 15,
+    "python_targeted_skipped": 1,
     "javascript_passed": 35,
-    "http_smoke_passed": 11,
-    "python_collection_blocked_modules_missing_openai": [
-      "tests/test_conditional_scheduler_notify.py",
-      "tests/test_knowledge_routing.py",
-      "tests/test_skill_dry_run.py"
+    "browser_layout_widths_px": [
+      1600,
+      1440,
+      1200,
+      1100,
+      980,
+      768,
+      390,
+      320
     ],
-    "not_verified": "production integrations, Docker, external dependency CVE inventory, penetration testing"
+    "browser_no_horizontal_overflow": true,
+    "browser_columns_responsive": true,
+    "full_python_suite": "timed_out_in_local_environment",
+    "not_verified": "production Docker/Home Assistant"
   },
   "sha256_files": {
     ".dockerignore": "c94eaab6c6af5cf051bad7332bfb885e2dcdef5756010d1fc8f24a8616925527",
@@ -45,6 +51,7 @@
     "CHANGELOG_V1.4.3.md": "34b5aea98d7c88552834d0b50ada665a0e7c0bd7606b84aa4417cad926fdea55",
     "CHANGELOG_V1.5.0.md": "9cf29d6fe6f592d1d80b398ef815239cf5cd612e7136cca2fbfdeb287d1447e5",
     "CHANGELOG_V1.5.1.md": "c01f35b32161884028bf05464ace49a7472abf8e2715035a923fdb7f590d15e1",
+    "CHANGELOG_V1.5.10.md": "27ee5e5f27993a479f4ff45b0f7d5987ff764efdaa747221d1e5a761b36cfba5",
     "CHANGELOG_V1.5.2.md": "7ff2717346c02497ff746031ad2e3105562abdf1e72a9365278f39addd99e846",
     "CHANGELOG_V1.5.3.md": "3d2a814cb15197bea5c146598a89776e4a618a2b2054022c94b3ed300c06e70a",
     "CHANGELOG_V1.5.4.md": "76103cef3278a81d1e5d22849a330ee4ae26a80c494c27bf60351ae1fdac75f1",
@@ -76,6 +83,7 @@
     "QA_V1.4.3.md": "15b00816b53d5c36bd2d42e27b36b7b20c47c3810e97ed49788716ddf3914b85",
     "QA_V1.5.0.md": "e9b958cf6e319a2b0ae3060f93071e33eb793018af2731813c5f6f4f78bb55fc",
     "QA_V1.5.1.md": "238e42e9fc41368f1b880f3d4471f6aed917ff7509306e888f6bd1dee40dfa64",
+    "QA_V1.5.10.md": "45312a0bcdbc1bae24b66b82e13be4f2fdee3b43fc71afdacf4da493014fefc4",
     "QA_V1.5.2.md": "763b77347915d892a02f17bc7a8e5ae3a3d34681008b4b572736750daf9bf21f",
     "QA_V1.5.3.md": "d53026f933d8a279bdb171aac64a8dfa074e570859b5f6c92aec261ba057ce88",
     "QA_V1.5.4.md": "dd273d03489fe359255b5ec0a1b2fbe2484fd27852bcd518d15368558d248c24",
@@ -94,7 +102,7 @@
     "V1.2.7_FIXES.md": "86f077d733187e494794489da96d5ca5dbfc4acb62b6a35a661d1881a456e058",
     "V1.2.8_FIXES.md": "f2579e56196917b3184e4db886b336a07d1e9a1d074af35ae430fc468c0f6970",
     "V1.2.9_FIXES.md": "9a7b9c8a7b4858619d9c2263376d707d25696cfb3daafd0d7b8d24afe2131ccb",
-    "VERSION": "55c4132c9883c31a2a0d9a5a58d72420a0c98d632907b1fd05565ac2815d5272",
+    "VERSION": "f8870f77108009b2204cef9d4193a35a90e50a0c4decdc034fb255a5c2b59d25",
     "app/__init__.py": "f2b9b1877e179154fbcaee73818ba98a97c3acab368601828ce30420adc4e282",
     "app/agent.py": "80012e1f8dac980d8e7b798b1f397b1f4d604a3332e9ec2799d0ba82626f8c30",
     "app/approvals.py": "9c9f04fa4dd1c29f734579cbe668fbd680fd01223f34bd4bb927dc65f9b7fbe4",
@@ -120,7 +128,7 @@
     "app/intent_parser.py": "5acab32336bc41c138c4ba5bb4d173a9d7bf4383f83846585442eea20dc969a8",
     "app/knowledge_governance.py": "18c11d2921df178b25c46b89fe077e7cf96b749a15c0562d691990e38202c5c7",
     "app/logic_engine.py": "6f5e9515d2adadf018e58808c65d1f715c9cbe047a1e50c84ee8819e48face9b",
-    "app/main.py": "afbd89f7fff7aafb6b4227f8263ba2cbb135140eaf2693426305f0469f3c0c35",
+    "app/main.py": "3d327c54249b4262e65870855bc6a9b485bfb118fed337876139bfa01874899f",
     "app/mcp_client.py": "624b4e9c884802dca63407cd4cd6c84037d6af3edd1125e06d0e504d385d73f1",
     "app/message_format.py": "6130f21fb034e078afadf2ed0449422bf42802693e9a0bba54a7bdd30a82bedc",
     "app/notifications.py": "ccd5fd3f879ab52cb8433cdf22fae36005da315e130ae1c2cfadc706532c902e",
@@ -183,12 +191,12 @@
     "static/app.css": "0c36e3e496ae1dd91e420e211ad321773af8d640f9d827e35def89234ccfde5a",
     "static/app.js": "a03b97c550fc2a5f6942b31b11ff50d27446fce8f4466ffeea448873a9e05a1b",
     "static/favicon.svg": "98e457ed323e4cb5a50e31d4f370bd3d9872fbc601552a0029b82c1ae653eee0",
-    "static/index.html": "839b8d10f93020ce800ef3486c8eed7b7c66c5fd0c90d62dab3ca8820f25f867",
+    "static/index.html": "5ef29ab1ced9b7bc0a980b3de7da1eedb796a762ba8e6477674a3ee0c1d357c0",
     "static/login.css": "b29942e984cc23ca64abc171b01609baaac293e64068ec21f0ce1001db2636e8",
-    "static/login.html": "1037370a0f036a3e7ecf1b52b54ed3d8db21227097c3d86b8a304a4350ddf20b",
+    "static/login.html": "e8f5c78976f83237e24d4edb721c7f8a3740f2f87c96732c1f8b2d8bf0073171",
     "static/login.js": "270f55eb08d80e3bf873b4b50576b78c1b178b77c270c4118010ae4a63eb882e",
-    "static/ui-refresh.css": "3f58b10fea79d163bd3b14f9ddeab9f1023568c25a2b43bf70f6e8181831e8ad",
-    "tests/test_admin_ui_refresh.py": "1637c6b230e753619464bf450b8516b2b08fcc60aaa665414918f27bcc2a222a",
+    "static/ui-refresh.css": "0f655eca385ec3a675b2afbf3388ac79a3141de7cff099b613cb6728b8ee8238",
+    "tests/test_admin_ui_refresh.py": "40f9e8cd7649d3216aa29365b5ea7b1e4edc40a6d547ac1ff3384cef90f033a4",
     "tests/test_advanced_scheduler.py": "a7bbbd6f1134c92aee49eec0ac69e3297ab4b3597ec14e9029847d05e6629dd4",
     "tests/test_ai_device_intent_fallback.py": "923bb064bffea578ba0e21424dcdc432445950eb8a4ef142b319e07be72585ac",
     "tests/test_bedroom_climate_skill.py": "46f2160c451226833817617708801f26bb19b1d33795a33e4b18501c5b2e7ae8",
@@ -222,5 +230,7 @@
     "tests/test_timezone_behavior.py": "921e0da19d0541d314e1e7d5d80549a4d69eaae1e2b5f686445d8bed3cc73fba",
     "tests/test_zalo_transport.py": "50bcb0c27133af282336b4275bb902574143549feb688f622c9415784cdfc242",
     "tests/test_zalo_transport.py.tmp": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-  }
+  },
+  "security_fixes_inherited_from": "v1.5.9",
+  "layout_fix": "settings_security_cards_span_6_of_12_tracks_desktop_and_12_of_12_mobile"
 }
